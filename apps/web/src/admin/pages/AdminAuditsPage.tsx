@@ -18,7 +18,9 @@ import { formatError } from "../../editor/status-utils";
 
 const DEFAULT_PAGE_SIZE = 20;
 const documentActivityActions = [
-  { action: "read", label: "阅读 / 打开" },
+  { action: "read", label: "正文读取" },
+  { action: "view", label: "查看" },
+  { action: "download", label: "下载" },
   { action: "edit", label: "编辑保存" },
   { action: "copy", label: "复制" }
 ] as const;
@@ -98,7 +100,11 @@ function renderActionLabel(value: AdminAuditAction): string {
     case "delete":
       return "删除";
     case "read":
-      return "阅读";
+      return "正文读取";
+    case "view":
+      return "查看";
+    case "download":
+      return "下载";
     case "edit":
       return "编辑保存";
     case "copy":
@@ -334,7 +340,7 @@ export function AdminAuditsPage({ dataGateway }: AdminAuditsPageProps) {
   return (
     <section aria-label="审计日志查询">
       {moduleFilter === "document_activity" && (
-        <dl className="mb-3 grid gap-3 sm:grid-cols-3" aria-label="文档使用统计">
+        <dl className="mb-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-5" aria-label="文档使用统计">
           {documentActivityActions.map(({ action, label }, index) => (
             <div key={action} className="rounded-lg border border-solid border-slate-200 bg-white p-4">
               <dt className="text-sm text-slate-600">{label}</dt>

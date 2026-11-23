@@ -51,6 +51,13 @@ type adminDocumentPageResponse struct {
 	Total    int64 `json:"total"`
 }
 
+type adminDocumentActivityResponse struct {
+	OpenCount     int64 `json:"openCount"`
+	ViewCount     int64 `json:"viewCount"`
+	EditCount     int64 `json:"editCount"`
+	DownloadCount int64 `json:"downloadCount"`
+}
+
 type updateAdminDocumentStatusRequest struct {
 	Status string `json:"status"`
 	Reason string `json:"reason"`
@@ -134,6 +141,37 @@ func (h *adminDocumentHandler) ListDocuments(c *gin.Context) {
 			Total:    payload.Total,
 		},
 	})
+}
+
+// GetActivity 返回后台文档详情中的操作次数。
+func (h *adminDocumentHandler) GetActivity(c *gin.Context) {
+	if h == nil || h.adminDocumentService == nil {
+		response.InternalError(c)
+		return
+	}
+
+	actorUserID, err := middleware.AdminActorUserID(c)
+	if err != nil {
+		response.AdminDocumentErrAdminActorMissing.Write(c)
+		return
+	}
+	documentID := strings.TrimSpace(c.Param("documentId"))
+	if documentID == "" {
+		response.AdminDocumentErrDocumentIDRequired.Write(c)
+		return
+	}
+	logit.SetRequestAttrs(c.Request.Context(),
+		logit.Any("actorUserID", actorUserID),
+		logit.Any("documentId", documentID),
+	)
+
+	activity, err := h.adminDocumentService.GetActivity(c.Request.Context(), actorUserID, documentID)
+	if err != nil {
+		response.FromError(c, err)
+		return
+	}
+	c.Header("Cache-Control", "private, no-store")
+	response.JSON(c, http.StatusOK, adminDocumentActivityResponse(activity))
 }
 
 // UpdateStatus 更新文档状态（active/banned）。

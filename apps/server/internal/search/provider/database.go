@@ -86,12 +86,13 @@ func (p *DatabaseProvider) Search(ctx context.Context, request SearchRequest) (S
 
 	page, pageSize, _ := normalizeDatabaseSearchPagination(request.Page, request.PageSize)
 	rows, total, err := p.visibilityRepo.SearchVisibleDocuments(ctx, repository.SearchVisibleDocumentsParams{
-		ActorUserID:   strings.TrimSpace(request.ActorUserID),
-		SpaceID:       strings.TrimSpace(request.SpaceID),
-		ScopeSpaceIDs: request.ScopeSpaceIDs,
-		Terms:         terms,
-		Limit:         maxDatabaseSearchCandidate,
-		Offset:        0,
+		ActorUserID:         strings.TrimSpace(request.ActorUserID),
+		SpaceID:             strings.TrimSpace(request.SpaceID),
+		ScopeSpaceIDs:       request.ScopeSpaceIDs,
+		CanViewAllDocuments: request.CanViewAllDocuments,
+		Terms:               terms,
+		Limit:               maxDatabaseSearchCandidate,
+		Offset:              0,
 	})
 	if err != nil {
 		return SearchResponse{}, err
@@ -158,6 +159,9 @@ func (p *DatabaseProvider) filterRowsByRole(
 	}
 
 	hasActorIdentity := strings.TrimSpace(request.ActorUserID) != ""
+	if request.CanViewAllDocuments && hasActorIdentity {
+		return rows, nil
+	}
 	isSingleSpaceSearch := strings.TrimSpace(request.SpaceID) != ""
 	scopeSpaceIDSet := make(map[string]struct{}, 0)
 	if !isSingleSpaceSearch {

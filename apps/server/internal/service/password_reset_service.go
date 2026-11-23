@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/lifei6671/plaindoc/apps/server/internal/config"
 	"github.com/lifei6671/plaindoc/apps/server/internal/storage/models"
 	"github.com/lifei6671/plaindoc/apps/server/internal/storage/repository"
 	"github.com/oklog/ulid/v2"
@@ -392,7 +393,7 @@ func (s *PasswordResetService) issueAndSendResetEmail(
 	}
 
 	resetURL := composePasswordResetURL(cfg.AppBaseURL, rawToken)
-	subject := "PlainDoc 密码重置"
+	subject := config.ProductName + " 密码重置"
 	body := buildPasswordResetMailText(input.UserName, resetURL, cfg.PasswordReset.TokenTTLMinutes)
 	if err := s.mailSender.Send(ctx, cfg, MailMessage{
 		To:       []string{input.UserEmail},
@@ -522,7 +523,7 @@ func buildPasswordResetMailText(userName string, resetURL string, tokenTTLMinute
 		tokenTTLMinutes = defaultEmailPasswordResetTokenTTLMinutes
 	}
 	return fmt.Sprintf(
-		"%s，您好：\n\n我们收到了您的密码重置申请。\n请在 %d 分钟内点击以下链接完成重置：\n%s\n\n如果这不是您的操作，请忽略这封邮件。\n\nPlainDoc",
+		"%s，您好：\n\n我们收到了您的密码重置申请。\n请在 %d 分钟内点击以下链接完成重置：\n%s\n\n如果这不是您的操作，请忽略这封邮件。\n\n"+config.ProductName,
 		displayName,
 		tokenTTLMinutes,
 		resetURL,

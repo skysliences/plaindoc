@@ -25,6 +25,7 @@ type VisibilityService struct {
 	spaceRepo    repository.SpaceRepository
 	documentRepo repository.DocumentRepository
 	permissions  repository.DocumentPermissionRepository
+	adminAccess  *AdminAccessService
 }
 
 // NewVisibilityService 创建可见性业务服务。
@@ -32,12 +33,23 @@ func NewVisibilityService(
 	spaceRepo repository.SpaceRepository,
 	documentRepo repository.DocumentRepository,
 	permissions repository.DocumentPermissionRepository,
+	adminAccess *AdminAccessService,
 ) *VisibilityService {
 	return &VisibilityService{
 		spaceRepo:    spaceRepo,
 		documentRepo: documentRepo,
 		permissions:  permissions,
+		adminAccess:  adminAccess,
 	}
+}
+
+// CanReviewAllDocuments 判断是否可以跨空间查看活跃文档。
+func (s *VisibilityService) CanReviewAllDocuments(ctx context.Context, userID string) (bool, error) {
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return false, nil
+	}
+	return s.adminAccess.IsPlatformAdmin(ctx, userID)
 }
 
 // GetSpace 按空间可见性规则返回空间信息。
@@ -125,6 +137,21 @@ func (s *VisibilityService) GetDocument(
 	documentID string,
 	viewerUserID string,
 ) (*models.Document, error) {
+	return s.getDocument(ctx, documentID, viewerUserID, true)
+}
+
+// AuthorizeDocumentAttachmentDownload 保留附件下载的普通阅读权限要求。
+func (s *VisibilityService) AuthorizeDocumentAttachmentDownload(ctx context.Context, documentID, viewerUserID string) error {
+	_, err := s.getDocument(ctx, documentID, viewerUserID, false)
+	return err
+}
+
+func (s *VisibilityService) getDocument(
+	ctx context.Context,
+	documentID string,
+	viewerUserID string,
+	allowAdminReview bool,
+) (*models.Document, error) {
 	if s == nil || s.spaceRepo == nil || s.documentRepo == nil {
 		return nil, errors.New("visibility service dependencies are nil")
 	}
@@ -146,7 +173,16 @@ func (s *VisibilityService) GetDocument(
 		return nil, err
 	}
 	if permission != nil && permission.AccessDenied {
-		return nil, ErrDocumentAccessDenied
+		if !allowAdminReview {
+			return nil, ErrDocumentAccessDenied
+		}
+		canReview, err := s.CanReviewAllDocuments(ctx, trimmedViewerUserID)
+		if err != nil {
+			return nil, err
+		}
+		if !canReview {
+			return nil, ErrDocumentAccessDenied
+		}
 	}
 
 	effectiveVisibility := stricterVisibility(

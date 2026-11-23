@@ -4,6 +4,7 @@ import {
   type AdminAuditListInput,
   type AdminAuditListResult,
   type AdminDocument,
+  type AdminDocumentActivity,
   type AdminDocumentAttachmentDeleteResult,
   type AdminDocumentAttachmentListInput,
   type AdminDocumentAttachmentListResult,
@@ -1956,6 +1957,13 @@ export function createHttpAdapter(options: HttpAdapterOptions): DataGateway {
       const queryText = query.toString();
       const path = queryText ? `/admin/documents?${queryText}` : "/admin/documents";
       return request<AdminDocumentListResult>(path);
+    },
+    async getDocumentActivity(documentId: string) {
+      const targetDocumentID = documentId.trim();
+      if (!targetDocumentID) {
+        throw new Error("文档 ID 不能为空");
+      }
+      return request<AdminDocumentActivity>(`/admin/documents/${encodeURIComponent(targetDocumentID)}/activity`);
     },
     async listDocumentShares(input: AdminDocumentShareListInput = {}) {
       const query = new URLSearchParams();

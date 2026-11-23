@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { DataGateway } from "../../data-access";
+import type { AdminDocument, DataGateway } from "../../data-access";
 import { AdminDocumentsPage } from "./AdminDocumentsPage";
 
 const { confirmMock, promptMock, showToastMock } = vi.hoisted(() => ({
@@ -9,8 +9,9 @@ const { confirmMock, promptMock, showToastMock } = vi.hoisted(() => ({
   showToastMock: vi.fn()
 }));
 
-vi.mock("../components/AdminDialogs", () => {
+vi.mock("../components/AdminDialogs", async (importOriginal) => {
   return {
+    ...(await importOriginal<typeof import("../components/AdminDialogs")>()),
     useAdminDialogs: () => ({
       confirm: confirmMock,
       prompt: promptMock,
@@ -25,6 +26,26 @@ vi.mock("../../components/ui/toast", () => {
   };
 });
 
+const documentItem: AdminDocument = {
+  documentId: "doc-word-1",
+  documentRouteKey: "doc-word-1",
+  nodeId: "node-word-1",
+  format: "docx",
+  title: "合同文档",
+  spaceId: "space-1",
+  spaceName: "销售空间",
+  spaceOwnerUserId: "owner-1",
+  spaceOwnerName: "张三",
+  spaceOwnerEmail: "zhangsan@example.com",
+  visibility: "public",
+  status: "active",
+  bannedReason: "",
+  bannedAt: null,
+  deletedAt: null,
+  createdAt: "2026-03-07T00:00:00Z",
+  updatedAt: "2026-03-07T00:00:00Z"
+};
+
 describe("AdminDocumentsPage", () => {
   beforeEach(() => {
     confirmMock.mockReset();
@@ -36,27 +57,7 @@ describe("AdminDocumentsPage", () => {
     const listDocuments = vi
       .fn()
       .mockResolvedValueOnce({
-        items: [
-          {
-            documentId: "doc-word-1",
-            documentRouteKey: "doc-word-1",
-            nodeId: "node-word-1",
-            format: "docx",
-            title: "合同文档",
-            spaceId: "space-1",
-            spaceName: "销售空间",
-            spaceOwnerUserId: "owner-1",
-            spaceOwnerName: "张三",
-            spaceOwnerEmail: "zhangsan@example.com",
-            visibility: "public",
-            status: "active",
-            bannedReason: "",
-            bannedAt: null,
-            deletedAt: null,
-            createdAt: "2026-03-07T00:00:00Z",
-            updatedAt: "2026-03-07T00:00:00Z"
-          }
-        ],
+        items: [documentItem],
         pagination: { page: 1, pageSize: 20, total: 1 }
       })
       .mockResolvedValueOnce({
@@ -98,5 +99,45 @@ describe("AdminDocumentsPage", () => {
         })
       );
     });
+  });
+
+  it("loads activity only for the opened document details and retries after failure", async () => {
+    const getDocumentActivity = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("请稍后再试"))
+      .mockResolvedValueOnce({ openCount: 12, viewCount: 8, editCount: 3, downloadCount: 0 });
+    const dataGateway = {
+      admin: {
+        listDocuments: vi.fn().mockResolvedValue({
+          items: [documentItem],
+          pagination: { page: 1, pageSize: 20, total: 1 }
+        }),
+        getDocumentActivity
+      }
+    } as unknown as DataGateway;
+
+    render(<AdminDocumentsPage dataGateway={dataGateway} />);
+
+    const detailButton = await screen.findByRole("button", { name: "详情" });
+    expect(getDocumentActivity).not.toHaveBeenCalled();
+    fireEvent.click(detailButton);
+
+    const dialog = within(screen.getByRole("dialog", { name: "文档详情" }));
+    expect(dialog.getByText(documentItem.title)).toBeInTheDocument();
+    expect(dialog.getByRole("link", { name: "查看正文" })).toHaveAttribute("href", "/r/space-1/doc-word-1");
+    expect(await dialog.findByRole("alert")).toHaveTextContent("请稍后再试");
+    expect(getDocumentActivity).toHaveBeenCalledWith(documentItem.documentId);
+
+    fireEvent.click(dialog.getByRole("button", { name: "重试" }));
+    await dialog.findByText("打开次数");
+    expect(dialog.getByText("打开次数").nextElementSibling).toHaveTextContent("12");
+    expect(dialog.getByText("查看次数").nextElementSibling).toHaveTextContent("8");
+    expect(dialog.getByText("编辑次数").nextElementSibling).toHaveTextContent("3");
+    expect(dialog.getByText("下载次数").nextElementSibling).toHaveTextContent("0");
+    expect(getDocumentActivity).toHaveBeenCalledTimes(2);
+
+    fireEvent.click(dialog.getByRole("button", { name: "关闭" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(detailButton).toHaveFocus();
   });
 });

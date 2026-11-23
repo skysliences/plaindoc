@@ -60,6 +60,58 @@ func TestBleveProvider_SearchMatchesVisibilityMatrix(t *testing.T) {
 	})
 }
 
+func TestSearchProviders_PlatformAdminSeesAllActiveMarkdown(t *testing.T) {
+	db := openVisibilityMatrixTestDB(t, "file:test-platform-admin-search?mode=memory&cache=shared")
+	seedVisibilityMatrixTestData(t, db)
+	// The Bleve snapshot below is intentionally out of date for these three documents.
+	statements := []string{
+		`ALTER TABLE documents ADD COLUMN format TEXT NOT NULL DEFAULT 'markdown'`,
+		`UPDATE documents SET status = 'banned' WHERE document_id = 'doc-member-authenticated'`,
+		`UPDATE documents SET deleted_at = CURRENT_TIMESTAMP WHERE document_id = 'doc-authenticated-member'`,
+		`UPDATE documents SET format = 'docx' WHERE document_id = 'doc-public-member'`,
+	}
+	for _, statement := range statements {
+		if err := db.Exec(statement).Error; err != nil {
+			t.Fatalf("prepare platform admin search data: %v", err)
+		}
+	}
+
+	ctx := context.Background()
+	bleve := NewBleveProvider(BleveProviderOptions{DB: db, IndexPath: filepath.Join(t.TempDir(), "bleve-index")})
+	if err := bleve.Upsert(ctx, buildVisibilityMatrixIndexRecords(time.Now().UTC().Unix())); err != nil {
+		t.Fatalf("bleve upsert failed: %v", err)
+	}
+
+	for _, provider := range []Provider{NewDatabaseProvider(db), bleve} {
+		t.Run(provider.Name(), func(t *testing.T) {
+			request := SearchRequest{Query: "matrix hit", ActorUserID: "platform-admin", CanViewAllDocuments: true}
+			result, err := provider.Search(ctx, request)
+			if err != nil {
+				t.Fatalf("cross-space search failed: %v", err)
+			}
+			assertSearchDocSet(t, result, []string{
+				"doc-public-public", "doc-public-authenticated",
+				"doc-authenticated-public", "doc-authenticated-authenticated",
+				"doc-member-public", "doc-member-member",
+			})
+
+			request.SpaceID = "space-member"
+			result, err = provider.Search(ctx, request)
+			if err != nil {
+				t.Fatalf("single-space search failed: %v", err)
+			}
+			assertSearchDocSet(t, result, []string{"doc-member-public", "doc-member-member"})
+
+			request.ActorUserID = ""
+			result, err = provider.Search(ctx, request)
+			if err != nil {
+				t.Fatalf("anonymous search failed: %v", err)
+			}
+			assertSearchDocSet(t, result, []string{})
+		})
+	}
+}
+
 func TestDatabaseProvider_SearchAllowsPartialTokenMatch(t *testing.T) {
 	db := openVisibilityMatrixTestDB(t, "file:test-database-provider-partial-token-match?mode=memory&cache=shared")
 	seedVisibilityMatrixTestData(t, db)

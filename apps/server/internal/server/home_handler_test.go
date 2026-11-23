@@ -296,6 +296,92 @@ func TestRouter_Explore_LoggedInUsesNoStoreAndCategoryFilter(t *testing.T) {
 	}
 }
 
+func TestRouter_HomeAndExplore_PlatformAdminSeesActivePrivateSpaces(t *testing.T) {
+	database, serve := setupAuthTestRouter(t)
+	defer database.Close()
+
+	ownerID, _, _ := registerAccessUser(t, serve, "home-private-owner@example.com")
+	platformAdminID, _, platformAdminToken := registerAccessUser(t, serve, "home-platform-admin@example.com")
+	spaceAdminID, _, spaceAdminToken := registerAccessUser(t, serve, "home-space-admin@example.com")
+	if err := database.ORM.Create(&[]models.UserAdminRole{
+		{UserID: platformAdminID, Role: models.AdminRolePlatformAdmin},
+		{UserID: spaceAdminID, Role: models.AdminRoleSpaceAdmin},
+	}).Error; err != nil {
+		t.Fatalf("insert admin roles: %v", err)
+	}
+
+	const categoryID = "01homecate000000000000000020"
+	const otherCategoryID = "01homecate000000000000000021"
+	const privateSpaceID = "01homeprivatespace0000000001"
+	const emptySpaceID = "01homeprivatespace0000000002"
+	const bannedSpaceID = "01homeprivatespace0000000003"
+	const deletedSpaceID = "01homeprivatespace0000000004"
+	seedHomepageCategory(t, database, categoryID, "私有空间分类", false)
+	seedHomepageCategory(t, database, otherCategoryID, "另一分类", false)
+	for _, space := range []homepageSeedSpaceInput{
+		{SpaceID: privateSpaceID, Name: "仅成员可见的空间", CategoryID: categoryID, CategoryName: "私有空间分类"},
+		{SpaceID: emptySpaceID, Name: "暂未添加文档的私有空间", CategoryID: otherCategoryID, CategoryName: "另一分类"},
+		{SpaceID: bannedSpaceID, Name: "已封禁的私有空间", CategoryID: categoryID, CategoryName: "私有空间分类"},
+		{SpaceID: deletedSpaceID, Name: "已删除的私有空间", CategoryID: categoryID, CategoryName: "私有空间分类"},
+	} {
+		space.OwnerUserID = ownerID
+		space.Visibility = string(models.VisibilityMember)
+		seedHomepageSpace(t, database, space)
+	}
+	for spaceID, status := range map[string]models.EntityStatus{
+		bannedSpaceID: models.EntityStatusBanned, deletedSpaceID: models.EntityStatusDeleted,
+	} {
+		if err := database.ORM.Model(&models.Space{}).
+			Where(models.SpaceColumns.SpaceID+" = ?", spaceID).
+			Update(models.SpaceColumns.Status, status).Error; err != nil {
+			t.Fatalf("update space status: %v", err)
+		}
+	}
+	seedHomepageDocument(t, database, homepageSeedDocumentInput{
+		SpaceID:    privateSpaceID,
+		NodeID:     "01homeprivatenode00000000001",
+		DocumentID: "01homeprivatedoc000000000001",
+		Title:      "仅成员可见的文档",
+		Visibility: string(models.VisibilityMember),
+	})
+
+	for _, tc := range []struct {
+		name        string
+		path        string
+		token       string
+		wantPrivate bool
+		wantEmpty   bool
+	}{
+		{name: "platform home", path: "/", token: platformAdminToken, wantPrivate: true, wantEmpty: true},
+		{name: "platform category", path: "/explore/" + categoryID, token: platformAdminToken, wantPrivate: true},
+		{name: "unscoped space admin", path: "/", token: spaceAdminToken},
+		{name: "anonymous", path: "/"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, tc.path, nil)
+			if tc.token != "" {
+				req.Header.Set("Authorization", "Bearer "+tc.token)
+			}
+			rec := serve(req)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("expected status 200, got %d", rec.Code)
+			}
+			if tc.token != "" && rec.Header().Get("Cache-Control") != "private, no-store, max-age=0" {
+				t.Fatalf("expected private authenticated response, got %q", rec.Header().Get("Cache-Control"))
+			}
+			body := rec.Body.String()
+			if strings.Contains(body, `href="/r/`+privateSpaceID+`"`) != tc.wantPrivate ||
+				strings.Contains(body, `href="/r/`+emptySpaceID+`"`) != tc.wantEmpty {
+				t.Fatalf("unexpected visibility for private or empty space")
+			}
+			if strings.Contains(body, bannedSpaceID) || strings.Contains(body, deletedSpaceID) ||
+				strings.Contains(body, "data-space-manage-url") {
+				t.Fatal("expected banned and deleted spaces and owner-only management to stay hidden")
+			}
+		})
+	}
+}
+
 func TestRouter_HomeSearchEnabled_ShowsSearchBoxAndResults(t *testing.T) {
 	database, serve := setupAuthTestRouter(t)
 	defer func() {

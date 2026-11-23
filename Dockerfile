@@ -20,7 +20,7 @@ RUN npm ci
 
 # 构建前端产物：客户端 dist + SSR worker dist-ssr。
 COPY apps/web apps/web
-RUN npm run build -w @plaindoc/web
+RUN npm run build -w @bugodoc/web
 
 FROM golang:${GO_VERSION}-bookworm AS go-builder
 WORKDIR /workspace/apps/server
@@ -34,9 +34,10 @@ COPY apps/server ./
 ARG TARGETOS=linux
 ARG TARGETARCH=amd64
 # github.com/chai2010/webp requires CGO; disable CGO will cause backend build failures.
-RUN CGO_ENABLED=1 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -o /out/plaindoc-server ./cmd/server
+RUN CGO_ENABLED=1 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -o /out/bugodoc-server ./cmd/server
 
 FROM node:${NODE_VERSION}-bookworm-slim AS runtime
+LABEL org.opencontainers.image.title="bugodoc"
 WORKDIR /app
 
 # 这些是镜像内置的兜底默认值，方便 `docker run` 直接启动。
@@ -57,7 +58,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=go-builder /out/plaindoc-server /app/plaindoc-server
+COPY --from=go-builder /out/bugodoc-server /app/bugodoc-server
 COPY --from=web-builder /workspace/apps/web/dist /app/apps/web/dist
 COPY --from=web-builder /workspace/apps/web/dist-ssr /app/apps/web/dist-ssr
 
@@ -67,4 +68,4 @@ RUN mkdir -p /app/data /app/uploads \
 USER node
 EXPOSE 8080
 
-CMD ["/app/plaindoc-server"]
+CMD ["/app/bugodoc-server"]

@@ -10,16 +10,22 @@ import (
 
 // RecordDocumentActivity records an operation whose actor and document have already been authorized.
 func RecordDocumentActivity(ctx context.Context, repo repository.AuditLogRepository, actor, documentID, action, requestID string) error {
-	if repo == nil || actor == "" {
+	if repo == nil {
 		return nil
 	}
 	summary := map[string]string{
-		"read": "打开文档",
-		"edit": "保存文档编辑",
-		"copy": "复制文档内容",
+		"read":     "打开文档",
+		"view":     "查看文档",
+		"download": "下载或导出文档",
+		"edit":     "保存文档编辑",
+		"copy":     "复制文档内容",
 	}[action]
+	var actorUserID *string
+	if actor != "" {
+		actorUserID = &actor
+	}
 	return repo.Create(ctx, &models.AuditLog{
-		ActorUserID: &actor,
+		ActorUserID: actorUserID,
 		Module:      "document_activity",
 		Action:      action,
 		TargetType:  "document",

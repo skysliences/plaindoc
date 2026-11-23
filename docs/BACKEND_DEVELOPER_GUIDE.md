@@ -1,4 +1,4 @@
-# 后端统一开发文档（`apps/server`）
+# bugodoc 后端统一开发文档（`apps/server`）
 
 **Last Updated**: 2026-04-05  
 **适用对象**: 后端工程师、全栈工程师、AI Agent  
@@ -117,7 +117,7 @@
 1. `loadDotEnvCandidates()` 尝试加载 `.env` 候选路径。
 2. 调用 `config.Load()` 解析与校验配置。
 3. 初始化日志 writer（stdout/file/both）。
-4. 创建 `StartupState` 与 `SwitchHandler`，先监听 `APP_ADDR` 并挂载 Bootstrap HTTP。
+4. 创建 `StartupState` 与 `SwitchHandler`，先监听 `APP_ADDR` 并挂载 Bootstrap HTTP，初始化期间展示「bugodoc 正在初始化」。
 5. 若 `SSR_WORKER_ENABLED=true`，先 `validateSSRWorkerRuntime()` 再启动 WorkerPool；失败时 Bootstrap 页面进入 failed 状态。
 6. 初始化数据库与迁移；迁移期间 `/startup` 与页面路由展示数据库初始化进度，`/api/startup/status` 返回启动快照。
 7. 构建正式 router，`StartupState.MarkReady()` 后通过 `SwitchHandler` 原子切换到正式 Gin Router。
@@ -549,10 +549,12 @@ ONLYOFFICE 一等文档规则：
 
 发布产物：
 
-1. `release/plaindoc-server-linux-amd64`
-2. `release/plaindoc-server-linux-amd64-<version>.tar.gz`
-3. `release/plaindoc-web-<version>.tar.gz`
+1. `release/bugodoc-server-linux-amd64`
+2. `release/bugodoc-server-linux-amd64-<version>.tar.gz`
+3. `release/bugodoc-web-<version>.tar.gz`
 4. `release/checksums-<version>.txt`
+
+Docker 镜像内的可执行文件为 `/app/bugodoc-server`。从旧版升级时可沿用 `DB_DSN`、Compose 数据卷和空间交换包。Go 模块路径继续使用 `github.com/lifei6671/plaindoc/apps/server`。
 
 ---
 
@@ -569,12 +571,14 @@ ONLYOFFICE 一等文档规则：
 ### 10.1 空间自助协作
 
 - 登录用户可调用 `POST /api/spaces` 创建仅成员可见的空间。示例 Markdown 文档、初始修订和空间在同一事务中创建，响应带有 `exampleDocumentId`。首页弹窗通过 `POST /spaces` 提交表单，成功后在当前标签页打开示例文档。登录用户可在有空间写权限时通过 `POST /api/spaces/:spaceId/nodes` 添加多篇文档。`GET /api/my-spaces` 返回本人拥有或加入的空间及编辑和管理能力。 创建成功后跳转到示例文档的阅读 URL。阅读 SSR 根据现有文档写权限生成可选的 editUrl。
+- 新建空间的示例文档正文以「欢迎使用 bugodoc」开头。
 - 空间所有者可通过 `PATCH /api/spaces/:spaceId` 改名，通过 `GET /api/spaces/:spaceId/members` 查看成员，通过 `PUT /api/spaces/:spaceId/members` 按注册邮箱添加成员或更新角色，通过 `DELETE /api/spaces/:spaceId/members/:userId` 移除成员。
 - 单文档权限新增 `read_no_copy` 和 `edit_no_copy`，旧授权默认允许复制。复制限制覆盖阅读页、Markdown 编辑器的剪贴板操作和代码按钮，Office iframe 通过 ONLYOFFICE 的 copy 权限配置。复制与导出分别配置。
-- 文档成员权限请求可单独提交 `exportDenied`。未设置时允许导出，继承空间角色的成员也可单独禁用导出。阅读页和分享页的 Markdown/PDF 按钮执行前调用导出权限接口。Office 原文件链接签发和使用时会校验导出权限，ONLYOFFICE 配置同步禁用下载和打印。批量空间导出也会检查操作者对空间内文档的导出限制。
-- `document_activity` 复用平台管理员审计列表与保留周期。阅读按成功打开阅读页、分享页或读取正文计数，编辑按成功保存或恢复的 Markdown 和 Office 版本计数，复制按登录用户的产品内剪贴板事件计数。审计不存储剪贴板内容，匿名访问和 ONLYOFFICE iframe 内复制不计入用户统计。
+- 文档成员权限请求可单独提交 `exportDenied`。未设置时允许导出，继承空间角色的成员也可单独禁用导出。阅读页和分享页的 Markdown/PDF 按钮执行前调用导出权限接口（`POST` 记录成功发起的导出，`GET` 仅检查权限）。Office 原文件链接签发和使用时会校验导出权限，ONLYOFFICE 配置同步禁用下载和打印。批量空间导出也会检查操作者对空间内文档的导出限制。
+- `document_activity` 复用审计记录与保留周期。后台 `GET /api/admin/documents/:documentId/activity` 按文档管理权限汇总四项数据。打开为正文 API 读取与阅读、分享页访问的合计，查看仅计阅读、分享页的成功响应。旧版混合的 `read` 记录只计入打开，独立查看记录自本版开始。编辑按成功保存或恢复的版本计数。下载按用户在阅读、分享页成功发起 Markdown/PDF 导出或获取 Office 原文件计数。成功的匿名访问和导出以空操作者记录。复制仅记录登录用户的产品内剪贴板事件。
 - 成员列表传入 `documentId` 可查看该文档的权限配置。空间所有者可通过 `PUT /api/docs/:docId/permissions/:userId` 设置 `access` 为 `inherit`、`read`、`edit` 或 `denied`。单篇编辑授权要求用户仍在空间内。目录结构操作仍需空间写权限。
-- `denied` 限制对应的登录账号，覆盖该账号在阅读、搜索、编辑和已有分享链接中的访问。匿名访问继续由空间及文档的可见性和分享设置决定。数据库迁移 0035 为现有文档权限表增加拒绝标记。
+- `denied` 限制对应的登录账号，覆盖该账号在阅读、搜索、编辑和已有分享链接中的访问。平台管理员可在站内查看所有正常状态的空间、文件夹和文档，包括成员可见和对该管理员拒绝访问的文档。编辑、复制、导出和分享仍按各自的授权校验。匿名访问继续由空间及文档的可见性和分享设置决定。数据库迁移 0035 为现有文档权限表增加拒绝标记。
+- 平台管理员在首页和分类页可浏览所有正常空间，包括只有文件夹或暂无文档的空间。封禁和已删除记录仍可在后台按状态查询。空间管理员与普通成员沿用各自的访问范围。
 - `TestRouter_WorkspaceCollaboration` 使用 SQLite 覆盖注册、邀请、授权、撤销、编辑及检索。`TestRouter_HomeCreateSpaceStartsWithExampleDocument` 验证首页表单提交、示例文档与初始修订。MySQL 和 PostgreSQL 部署也需运行迁移 0035。
 
 ---
@@ -670,6 +674,7 @@ flowchart TD
 1. `spaces.visibility` 与 `documents.visibility`（`public/authenticated/member`）。
 2. 空间成员角色：`owner/collaborator/reader`（见 `space_members.role`、`models.Role`）。
 3. 可见性判定由 `VisibilityService` 统一执行（后端真值来源）。
+4. 平台管理员搜索范围覆盖所有正常空间内可检索的 Markdown 文档。检索结果返回前仍校验数据库中的最新空间、文档状态和格式。文件夹通过阅读页目录查看。
 
 为兼容检索过滤，定义 `role_level`（内容访问角色）：
 

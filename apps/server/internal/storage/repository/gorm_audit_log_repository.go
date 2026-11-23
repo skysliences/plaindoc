@@ -195,6 +195,39 @@ func (r *gormAuditLogRepository) List(
 	return records, total, nil
 }
 
+func (r *gormAuditLogRepository) CountActionsForTarget(
+	ctx context.Context,
+	module string,
+	targetType string,
+	targetID string,
+) (map[string]int64, error) {
+	if r == nil || r.db == nil {
+		return nil, fmt.Errorf("audit log repository db is nil")
+	}
+
+	columns := models.AuditLogColumns
+	var rows []struct {
+		Action string
+		Count  int64
+	}
+	if err := r.db.WithContext(ctx).
+		Model(&models.AuditLog{}).
+		Select(columns.Action+", COUNT(*) AS count").
+		Where(columns.Module+" = ?", module).
+		Where(columns.TargetType+" = ?", targetType).
+		Where(columns.TargetID+" = ?", targetID).
+		Group(columns.Action).
+		Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+
+	counts := make(map[string]int64, len(rows))
+	for _, row := range rows {
+		counts[row.Action] = row.Count
+	}
+	return counts, nil
+}
+
 func normalizeAuditModules(input []string) []string {
 	if len(input) == 0 {
 		return nil

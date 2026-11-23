@@ -267,7 +267,7 @@ export function AdminSpaceImportDialog({
         <header className="flex items-start justify-between border-b border-slate-200 bg-slate-50 px-5 py-4">
           <div className="space-y-1">
             <h3 className="text-lg font-semibold text-slate-900">导入空间</h3>
-            <p className="text-xs text-slate-600">上传 PlainDoc 空间交换包或 EPUB，先解析预览，再创建导入任务。</p>
+            <p className="text-xs text-slate-600">上传 bugodoc 空间交换包或 EPUB，先解析预览，再创建导入任务。</p>
           </div>
           <Button type="button" size="icon" variant="ghost" className="h-8 w-8" disabled={importLocked} onClick={closeDialog}>
             <X size={16} />

@@ -10,6 +10,7 @@ import (
 
 	"github.com/oklog/ulid/v2"
 
+	"github.com/lifei6671/plaindoc/apps/server/internal/config"
 	"github.com/lifei6671/plaindoc/apps/server/internal/ssr/protocol"
 	"github.com/lifei6671/plaindoc/apps/server/internal/storage/models"
 )
@@ -117,7 +118,7 @@ func (r *AdminSpaceExportSSRReaderHTMLRenderer) buildPayload(
 			RenderError:    "",
 			Version:        1,
 			ContentVersion: 1,
-			AuthorNickname: "PlainDoc",
+			AuthorNickname: config.ProductName,
 			UpdatedAt:      exportedAt.UTC().Format(time.RFC3339),
 		},
 		Attachments:   []ReaderDocumentAttachmentViewModel{},

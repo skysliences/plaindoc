@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/lifei6671/plaindoc/apps/server/internal/config"
 	"github.com/lifei6671/plaindoc/apps/server/internal/logit"
 	"github.com/lifei6671/plaindoc/apps/server/internal/pkg/errcode"
 	searchconfig "github.com/lifei6671/plaindoc/apps/server/internal/search"
@@ -490,8 +491,8 @@ func (s *AdminSystemConfigService) TestEmailSend(
 	emailConfig := NormalizeEmailConfig(testPayload)
 	if err := s.mailSender.Send(ctx, emailConfig, MailMessage{
 		To:       []string{toEmail},
-		Subject:  "PlainDoc 邮件配置测试",
-		TextBody: "这是一封来自 PlainDoc 的测试邮件，用于验证 SMTP 配置是否可用。",
+		Subject:  config.ProductName + " 邮件配置测试",
+		TextBody: "这是一封来自 " + config.ProductName + " 的测试邮件，用于验证 SMTP 配置是否可用。",
 	}); err != nil {
 		return fmt.Errorf("%w: %v", errcode.ErrAdminSystemConfigInvalidValue, err)
 	}

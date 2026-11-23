@@ -44,6 +44,7 @@ type SearchQueryService struct {
 	searchConfigService  *SearchConfigService
 	searchVisibilityRepo repository.SearchVisibilityRepository
 	documentPermissions  repository.DocumentPermissionRepository
+	adminAccessService   *AdminAccessService
 	providers            map[searchcfg.ProviderName]searchprovider.Provider
 }
 
@@ -81,6 +82,11 @@ func (s *SearchQueryService) SetSearchVisibilityRepository(
 
 func (s *SearchQueryService) SetDocumentPermissionRepository(permissions repository.DocumentPermissionRepository) {
 	s.documentPermissions = permissions
+}
+
+// SetAdminAccessService 注入平台管理员检索权限判定。
+func (s *SearchQueryService) SetAdminAccessService(adminAccessService *AdminAccessService) {
+	s.adminAccessService = adminAccessService
 }
 
 // Search 执行统一检索请求。
@@ -142,39 +148,50 @@ func (s *SearchQueryService) Search(
 
 	normalizedSpaceID := strings.TrimSpace(input.SpaceID)
 	normalizedViewerUserID := strings.TrimSpace(input.ViewerUserID)
-	scopeSpaceIDs, err := s.resolveScopeSpaceIDs(ctx, normalizedSpaceID, normalizedViewerUserID)
-	if err != nil {
-		return SearchQueryResult{}, err
+	canViewAllDocuments := false
+	if normalizedViewerUserID != "" && s.adminAccessService != nil {
+		canViewAllDocuments, err = s.adminAccessService.IsPlatformAdmin(ctx, normalizedViewerUserID)
+		if err != nil {
+			return SearchQueryResult{}, err
+		}
 	}
-	if len(scopeSpaceIDs) == 0 {
-		return SearchQueryResult{
-			Provider: providerName,
-			Response: searchprovider.SearchResponse{Total: 0, Hits: []searchprovider.SearchHit{}},
-		}, nil
-	}
-
-	userRoleLevel, err := s.resolveUserRoleLevel(ctx, normalizedSpaceID, normalizedViewerUserID)
-	if err != nil {
-		return SearchQueryResult{}, err
+	var scopeSpaceIDs []string
+	userRoleLevel := 0
+	if !canViewAllDocuments {
+		scopeSpaceIDs, err = s.resolveScopeSpaceIDs(ctx, normalizedSpaceID, normalizedViewerUserID)
+		if err != nil {
+			return SearchQueryResult{}, err
+		}
+		if len(scopeSpaceIDs) == 0 {
+			return SearchQueryResult{
+				Provider: providerName,
+				Response: searchprovider.SearchResponse{Total: 0, Hits: []searchprovider.SearchHit{}},
+			}, nil
+		}
+		userRoleLevel, err = s.resolveUserRoleLevel(ctx, normalizedSpaceID, normalizedViewerUserID)
+		if err != nil {
+			return SearchQueryResult{}, err
+		}
 	}
 
 	request := searchprovider.SearchRequest{
-		SpaceID:           normalizedSpaceID,
-		ScopeSpaceIDs:     scopeSpaceIDs,
-		ActorUserID:       normalizedViewerUserID,
-		IsAuthenticated:   normalizedViewerUserID != "",
-		UserRoleLevel:     userRoleLevel,
-		RawQuery:          queryText,
-		Query:             normalizedQuery,
-		Page:              input.Page,
-		PageSize:          input.PageSize,
-		Sort:              input.Sort,
-		NeedHighlight:     input.NeedHighlight,
-		DictVersion:       strings.TrimSpace(analyzeOutput.DictVersion),
-		NormalizerVersion: searchNormalizerVersion,
+		SpaceID:             normalizedSpaceID,
+		ScopeSpaceIDs:       scopeSpaceIDs,
+		ActorUserID:         normalizedViewerUserID,
+		IsAuthenticated:     normalizedViewerUserID != "",
+		CanViewAllDocuments: canViewAllDocuments,
+		UserRoleLevel:       userRoleLevel,
+		RawQuery:            queryText,
+		Query:               normalizedQuery,
+		Page:                input.Page,
+		PageSize:            input.PageSize,
+		Sort:                input.Sort,
+		NeedHighlight:       input.NeedHighlight,
+		DictVersion:         strings.TrimSpace(analyzeOutput.DictVersion),
+		NormalizerVersion:   searchNormalizerVersion,
 	}
 
-	if normalizedViewerUserID != "" && s.documentPermissions != nil {
+	if !canViewAllDocuments && normalizedViewerUserID != "" && s.documentPermissions != nil {
 		permissions, err := s.documentPermissions.List(ctx, normalizedSpaceID, "", normalizedViewerUserID)
 		if err != nil {
 			return SearchQueryResult{}, err

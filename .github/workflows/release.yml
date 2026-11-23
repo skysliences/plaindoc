@@ -85,7 +85,7 @@ jobs:
           LDFLAGS="${LDFLAGS} -X github.com/lifei6671/plaindoc/apps/server/internal/buildinfo.BuildTimeUTC=${BUILD_TIME_UTC}"
           LDFLAGS="${LDFLAGS} -X github.com/lifei6671/plaindoc/apps/server/internal/buildinfo.GoVersion=${BUILD_GO_VERSION}"
           # github.com/chai2010/webp requires CGO; CGO_ENABLED=0 will fail with undefined webp symbols.
-          CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "$LDFLAGS" -o ../../release/plaindoc-server-linux-amd64 ./cmd/server
+          CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "$LDFLAGS" -o ../../release/bugodoc-server-linux-amd64 ./cmd/server
           popd >/dev/null
 
       - name: Package release artifacts
@@ -102,22 +102,22 @@ jobs:
             "$BUILD_TIME_UTC" \
             "$BUILD_GO_VERSION" \
             > "release/build-metadata-${GITHUB_REF_NAME}.txt"
-          tar -C apps/web -czf "release/plaindoc-web-${GITHUB_REF_NAME}.tar.gz" dist dist-ssr
-          mkdir -p "release/plaindoc-bundle/apps/web"
-          cp "release/plaindoc-server-linux-amd64" "release/plaindoc-bundle/plaindoc-server-linux-amd64"
-          cp "release/build-metadata-${GITHUB_REF_NAME}.txt" "release/plaindoc-bundle/build-metadata.txt"
-          cp -R "apps/web/dist" "release/plaindoc-bundle/apps/web/"
-          cp -R "apps/web/dist-ssr" "release/plaindoc-bundle/apps/web/"
-          tar -czf "release/plaindoc-server-linux-amd64-${GITHUB_REF_NAME}.tar.gz" \
-            -C release/plaindoc-bundle \
-            plaindoc-server-linux-amd64 \
+          tar -C apps/web -czf "release/bugodoc-web-${GITHUB_REF_NAME}.tar.gz" dist dist-ssr
+          mkdir -p "release/bugodoc-bundle/apps/web"
+          cp "release/bugodoc-server-linux-amd64" "release/bugodoc-bundle/bugodoc-server-linux-amd64"
+          cp "release/build-metadata-${GITHUB_REF_NAME}.txt" "release/bugodoc-bundle/build-metadata.txt"
+          cp -R "apps/web/dist" "release/bugodoc-bundle/apps/web/"
+          cp -R "apps/web/dist-ssr" "release/bugodoc-bundle/apps/web/"
+          tar -czf "release/bugodoc-server-linux-amd64-${GITHUB_REF_NAME}.tar.gz" \
+            -C release/bugodoc-bundle \
+            bugodoc-server-linux-amd64 \
             build-metadata.txt \
             apps/web/dist \
             apps/web/dist-ssr
           sha256sum \
-            "release/plaindoc-server-linux-amd64" \
-            "release/plaindoc-server-linux-amd64-${GITHUB_REF_NAME}.tar.gz" \
-            "release/plaindoc-web-${GITHUB_REF_NAME}.tar.gz" \
+            "release/bugodoc-server-linux-amd64" \
+            "release/bugodoc-server-linux-amd64-${GITHUB_REF_NAME}.tar.gz" \
+            "release/bugodoc-web-${GITHUB_REF_NAME}.tar.gz" \
             "release/build-metadata-${GITHUB_REF_NAME}.txt" \
             > "release/checksums-${GITHUB_REF_NAME}.txt"
 
@@ -127,9 +127,9 @@ jobs:
           tag_name: ${{ github.ref_name }}
           generate_release_notes: true
           files: |
-            release/plaindoc-server-linux-amd64
-            release/plaindoc-server-linux-amd64-${{ github.ref_name }}.tar.gz
-            release/plaindoc-web-${{ github.ref_name }}.tar.gz
+            release/bugodoc-server-linux-amd64
+            release/bugodoc-server-linux-amd64-${{ github.ref_name }}.tar.gz
+            release/bugodoc-web-${{ github.ref_name }}.tar.gz
             release/build-metadata-${{ github.ref_name }}.txt
             release/checksums-${{ github.ref_name }}.txt
 
@@ -180,6 +180,7 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ steps.image.outputs.name }}
+          labels: org.opencontainers.image.title=bugodoc
           tags: |
             type=ref,event=tag
             type=raw,value=latest,enable=${{ startsWith(github.ref_name, 'v') }}

@@ -1,4 +1,4 @@
-import { ArrowLeftRight, ChevronDown, Copy, Download, FileText, LoaderCircle, Plus, RefreshCw, Search, Settings, ShieldBan, ShieldCheck, Tags, Trash2, UploadCloud, UserPlus } from "lucide-react";
+import { ArrowLeftRight, ChevronDown, Copy, Download, FileText, FolderOpen, LoaderCircle, Plus, RefreshCw, Search, Settings, ShieldBan, ShieldCheck, Tags, Trash2, UploadCloud, UserPlus } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState, type FormEventHandler } from "react";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
@@ -1108,6 +1108,14 @@ export function AdminSpacesPage({ dataGateway, mode }: AdminSpacesPageProps) {
                               </Button>
                             </DropdownMenuTrigger>
                             <DropdownMenuContent align="end" className="w-44">
+                              {space.status === "active" && (
+                                <DropdownMenuItem asChild>
+                                  <a href={buildReaderPath(space.spaceId)}>
+                                    <FolderOpen size={14} className="mr-2" aria-hidden="true" />
+                                    <span>查看目录</span>
+                                  </a>
+                                </DropdownMenuItem>
+                              )}
                               <DropdownMenuItem
                                 disabled={isActioning || isDeleted}
                                 onSelect={() => handleOpenSpaceEditor(space)}

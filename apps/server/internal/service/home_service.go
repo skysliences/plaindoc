@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -70,6 +71,7 @@ type HomepagePageRecord struct {
 	ActiveCategory   string
 	Pagination       HomepagePagination
 	CacheControl     string
+	CanAccessAdmin   bool
 	SiteName         string
 	SiteDescription  string
 	FilingNumber     string
@@ -93,6 +95,7 @@ type HomeService struct {
 	spaceRepo         repository.SpaceRepository
 	spaceCategoryRepo repository.SpaceCategoryRepository
 	systemConfigRepo  repository.SystemConfigRepository
+	adminAccess       *AdminAccessService
 }
 
 // NewHomeService 创建首页服务。
@@ -100,11 +103,13 @@ func NewHomeService(
 	spaceRepo repository.SpaceRepository,
 	spaceCategoryRepo repository.SpaceCategoryRepository,
 	systemConfigRepo repository.SystemConfigRepository,
+	adminAccess *AdminAccessService,
 ) *HomeService {
 	return &HomeService{
 		spaceRepo:         spaceRepo,
 		spaceCategoryRepo: spaceCategoryRepo,
 		systemConfigRepo:  systemConfigRepo,
+		adminAccess:       adminAccess,
 	}
 }
 
@@ -117,6 +122,13 @@ func (s *HomeService) GetPage(ctx context.Context, input HomepageQueryInput) (Ho
 	page, pageSize, offset := normalizeHomepagePagination(input.Page, input.PageSize)
 	viewerUserID := strings.TrimSpace(input.ViewerUserID)
 	categoryID := strings.TrimSpace(input.CategoryID)
+	var adminRoles []models.AdminRole
+	if viewerUserID != "" && s.adminAccess != nil {
+		// 角色查询失败时按普通访问者权限处理。
+		if roles, err := s.adminAccess.ListAdminRoles(ctx, viewerUserID); err == nil {
+			adminRoles = roles
+		}
+	}
 
 	categories, err := s.spaceCategoryRepo.List(ctx)
 	if err != nil {
@@ -124,10 +136,11 @@ func (s *HomeService) GetPage(ctx context.Context, input HomepageQueryInput) (Ho
 	}
 
 	records, total, err := s.spaceRepo.ListVisibleForHomepage(ctx, repository.ListVisibleHomepageSpacesParams{
-		ViewerUserID: viewerUserID,
-		CategoryID:   categoryID,
-		Limit:        pageSize,
-		Offset:       offset,
+		ViewerUserID:        viewerUserID,
+		ViewerPlatformAdmin: slices.Contains(adminRoles, models.AdminRolePlatformAdmin),
+		CategoryID:          categoryID,
+		Limit:               pageSize,
+		Offset:              offset,
 	})
 	if err != nil {
 		return HomepagePageRecord{}, err
@@ -143,6 +156,7 @@ func (s *HomeService) GetPage(ctx context.Context, input HomepageQueryInput) (Ho
 			Total:    total,
 		},
 		CacheControl:    "private, no-store, max-age=0",
+		CanAccessAdmin:  len(adminRoles) > 0,
 		SiteName:        homepageDefaultSiteName,
 		SiteDescription: homepageDefaultSiteDescription,
 	}

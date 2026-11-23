@@ -6,6 +6,8 @@ import (
 	"html"
 	"net/http"
 	"strings"
+
+	"github.com/lifei6671/plaindoc/apps/server/internal/config"
 )
 
 const startupUnavailableCode = 50300
@@ -76,7 +78,7 @@ func writeStartupHTML(w http.ResponseWriter, snapshot StartupSnapshot) {
 }
 
 func renderStartupHTML(snapshot StartupSnapshot) string {
-	title := "PlainDoc 正在初始化"
+	title := config.ProductName + " 正在初始化"
 	message := html.EscapeString(snapshot.Message)
 	current := "准备中"
 	if snapshot.CurrentVersion > 0 || strings.TrimSpace(snapshot.CurrentName) != "" {

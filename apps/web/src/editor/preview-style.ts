@@ -94,7 +94,7 @@ export function buildThemeCssTemplate(theme: PreviewThemeTemplate): string {
   );
   const inlineCodeSource = buildCssDeclarationsSource(buildStyleDetailEntries(theme.inlineCodeStyle));
 
-  return `/* PlainDoc 主题样式模板（可复制后直接修改） 
+  return `/* bugodoc 主题样式模板（可复制后直接修改）
  * 主题名称：${theme.name}
  * 主题 ID：${theme.id}
  * 语法高亮：${theme.syntaxTheme}

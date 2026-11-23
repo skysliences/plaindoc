@@ -10,6 +10,9 @@ import (
 	"time"
 )
 
+// ProductName 是应用面向用户显示的名称。
+const ProductName = "bugodoc"
+
 // Config 统一承载服务启动所需配置，避免业务层分散读取环境变量。
 type Config struct {
 	Env            string

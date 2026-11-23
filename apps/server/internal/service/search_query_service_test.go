@@ -183,6 +183,19 @@ func TestSearchQueryService_SearchReturnsEmptyWhenScopeUnavailable(t *testing.T)
 	if provider.CallCount() != 0 {
 		t.Fatalf("expected provider call count=0, got=%d", provider.CallCount())
 	}
+
+	// Platform admins need no space membership to search active Markdown content.
+	searchQueryService.SetAdminAccessService(NewAdminAccessService(&stubAdminRoleRepository{isPlatformAdmin: true}, nil, nil))
+	_, searchErr = searchQueryService.Search(context.Background(), SearchQueryInput{
+		ViewerUserID: "platform-admin",
+		Query:        "hello world",
+	})
+	if searchErr != nil {
+		t.Fatalf("platform admin search failed: %v", searchErr)
+	}
+	if request := provider.LastRequest(); provider.CallCount() != 1 || !request.CanViewAllDocuments {
+		t.Fatalf("expected unrestricted provider search for platform admin, got %+v", request)
+	}
 }
 
 func TestSearchQueryService_SearchFallsBackToDatabaseWhenActiveProviderSearchFailed(t *testing.T) {

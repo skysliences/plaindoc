@@ -10,6 +10,8 @@ import (
 	"net/smtp"
 	"strings"
 	"time"
+
+	"github.com/lifei6671/plaindoc/apps/server/internal/config"
 )
 
 // MailMessage 定义邮件消息体。
@@ -175,11 +177,11 @@ func buildTextMailPayload(
 ) string {
 	subject := strings.TrimSpace(message.Subject)
 	if subject == "" {
-		subject = "PlainDoc Notification"
+		subject = config.ProductName + " Notification"
 	}
 	body := strings.TrimSpace(message.TextBody)
 	if body == "" {
-		body = "PlainDoc Notification"
+		body = config.ProductName + " Notification"
 	}
 
 	var payload strings.Builder

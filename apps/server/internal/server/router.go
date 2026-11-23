@@ -159,7 +159,7 @@ func newRouter(
 		cfg.JWT.Secret,
 	)
 	// 首页 SSR 服务：负责首页/分类页可见性过滤、分类导航和缓存策略配置读取。
-	homeService := service.NewHomeService(spaceRepo, spaceCategoryRepo, systemConfigRepo)
+	homeService := service.NewHomeService(spaceRepo, spaceCategoryRepo, systemConfigRepo, adminAccessService)
 	// sitemap 服务：负责公开空间/文档 URL 的收敛输出。
 	sitemapService := service.NewSitemapService(db, systemConfigRepo)
 	// 搜索词典服务：负责从 DB 加载 jieba 用户词条。
@@ -183,6 +183,7 @@ func newRouter(
 		bleveProvider,
 	)
 	searchQueryService.SetSearchVisibilityRepository(searchVisibilityRepo)
+	searchQueryService.SetAdminAccessService(adminAccessService)
 	documentPermissionRepo := repository.NewGormDocumentPermissionRepository(db)
 	searchQueryService.SetDocumentPermissionRepository(documentPermissionRepo)
 	searchIndexService := service.NewSearchIndexService(
@@ -204,7 +205,7 @@ func newRouter(
 	// 首页全文检索服务：负责首页落地页检索结果读取与可见性过滤。
 	homeSearchService := service.NewHomeSearchService(searchQueryService, db)
 	// 可见性服务为“空间/文档可访问性”提供统一判定，避免 handler 里散落权限逻辑。
-	visibilityService := service.NewVisibilityService(spaceRepo, documentRepo, documentPermissionRepo)
+	visibilityService := service.NewVisibilityService(spaceRepo, documentRepo, documentPermissionRepo, adminAccessService)
 	// 阅读页服务：聚合空间树与文档正文，供 SSR worker 渲染。
 	readerPageService := service.NewReaderPageService(db, visibilityService, documentAttachmentRepo)
 	// 阅读页 SSR 渲染缓存：仅缓存 Node 渲染结果，不缓存鉴权流程。
@@ -216,7 +217,6 @@ func newRouter(
 		homeService,
 		homeSearchService,
 		searchConfigService,
-		adminAccessService,
 		collaborationService,
 		cfg.WebOrigin,
 	)
@@ -500,6 +500,7 @@ func newRouter(
 		// 阅读页 Office 原文件下载 access-link。
 		api.POST("/reader/spaces/:spaceId/docs/:docId/office-source/access-link", readerPageHandler.CreateOfficeSourceAccessLink)
 		api.GET("/reader/spaces/:spaceId/docs/:docId/export-access", readerPageHandler.CheckDocumentExportAccess)
+		api.POST("/reader/spaces/:spaceId/docs/:docId/export-access", readerPageHandler.CheckDocumentExportAccess)
 		// 生成 ONLYOFFICE 编辑配置。
 		api.GET("/docs/:docId/onlyoffice/edit-config", workspaceHandler.GetOnlyOfficeEditConfig)
 		// ONLYOFFICE Document Server 拉取正文文件。
@@ -557,6 +558,7 @@ func newRouter(
 		)
 		// 分享页 Office 原文件下载 access-link。
 		api.GET("/shares/:spaceId/:docKey/export-access", documentSharePageHandler.CheckDocumentExportAccess)
+		api.POST("/shares/:spaceId/:docKey/export-access", documentSharePageHandler.CheckDocumentExportAccess)
 		api.POST(
 			"/shares/:spaceId/:docKey/office-source/access-link",
 			documentSharePageHandler.CreateOfficeSourceAccessLink,
@@ -649,6 +651,7 @@ func newRouter(
 			documentRepo,
 			userRepo,
 			workspaceRepo,
+			auditLogRepo,
 			adminAccessService,
 			adminAuditService,
 			documentAttachmentCleanupService,
@@ -887,6 +890,7 @@ func newRouter(
 
 			// ---- 文档治理 ----
 			adminAPI.GET("/documents", adminDocumentHandler.ListDocuments)
+			adminAPI.GET("/documents/:documentId/activity", adminDocumentHandler.GetActivity)
 			adminAPI.GET("/document-shares", adminDocumentShareHandler.ListShares)
 			adminAPI.PATCH("/document-shares/:shareId", adminDocumentShareHandler.UpdateShare)
 			adminAPI.DELETE("/document-shares/:shareId", adminDocumentShareHandler.DisableShare)

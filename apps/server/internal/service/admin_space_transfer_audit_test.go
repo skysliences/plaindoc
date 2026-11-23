@@ -166,3 +166,7 @@ func (r *stubSpaceTransferAuditLogRepo) List(
 ) ([]repository.AdminAuditLogListRecord, int64, error) {
 	return nil, 0, nil
 }
+
+func (r *stubSpaceTransferAuditLogRepo) CountActionsForTarget(context.Context, string, string, string) (map[string]int64, error) {
+	return nil, nil
+}

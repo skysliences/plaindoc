@@ -1,7 +1,7 @@
-# PlainDoc
+# bugodoc
 
 一套面向中小团队的轻量级文档管理系统。  
-如果你熟悉 MinDoc，PlainDoc 的目标很直接：保留文档系统的核心价值，同时带来更现代的编辑体验和更省心的工程化部署。
+如果你熟悉 MinDoc，bugodoc 的目标是提供现代的编辑体验和易于维护的部署方式。
 
 开箱即可获得：
 
@@ -34,7 +34,7 @@
 
 ## 产品定位
 
-PlainDoc 是一个真正可落地的文档平台，而不是“仅能写 Markdown 的编辑器”。
+bugodoc 是一个覆盖文档编辑、阅读和管理的团队文档平台。
 
 我们希望它帮助团队实现三件事：
 
@@ -158,6 +158,8 @@ PlainDoc 是一个真正可落地的文档平台，而不是“仅能写 Markdow
 
 ## 4. 运行方式
 
+从 PlainDoc 升级时，可沿用原有部署目录、数据库和 Docker 卷。DockerHub 镜像仍使用 `lifei6671/plaindoc`，已有空间交换包继续使用 `.plaindoc` 扩展名。
+
 ### 4.1 方式 A：Docker Compose（推荐）
 
 要求：
@@ -252,27 +254,28 @@ go test ./...
 ### Docker 镜像（本地手动构建）
 
 ```bash
-docker build -t plaindoc:latest .
-docker run --rm -p 8080:8080 plaindoc:latest
+docker build -t bugodoc:latest .
+docker run --rm -p 8080:8080 bugodoc:latest
 ```
 
 ### 5.2 GitHub Release 产物说明
 
 当你推送 tag 后，`Release` 工作流会上传以下文件：
 
-- `plaindoc-server-linux-amd64`：Linux amd64 的后端可执行文件（Go 编译产物）。
-- `plaindoc-server-linux-amd64-<tag>.tar.gz`：一体化部署压缩包，包含后端可执行文件、`apps/web/dist` 和 `apps/web/dist-ssr`。
-- `plaindoc-web-<tag>.tar.gz`：前端发布产物压缩包，包含 `dist`（前端静态资源）和 `dist-ssr`（阅读页 SSR Worker 产物）。
+- `bugodoc-server-linux-amd64`：Linux amd64 的后端可执行文件（Go 编译产物）。
+- `bugodoc-server-linux-amd64-<tag>.tar.gz`：一体化部署压缩包，包含后端可执行文件、`apps/web/dist` 和 `apps/web/dist-ssr`。
+- `bugodoc-web-<tag>.tar.gz`：前端发布产物压缩包，包含 `dist`（前端静态资源）和 `dist-ssr`（阅读页 SSR Worker 产物）。
 - `checksums-<tag>.txt`：上述产物的 SHA256 校验清单。
+
+现有部署脚本若引用 `plaindoc-server-linux-amd64` 可执行文件或旧名前缀的压缩包，升级时请按新文件名调整。
 
 ### 5.3 使用 Release 产物部署（Linux 裸机/云主机）
 
 **默认账号**： admin@iminho.me 
 **默认密码**：123456
 
-1. 下载对应 tag 的核心文件：
-`plaindoc-server-linux-amd64-<tag>.tar.gz`、`checksums-<tag>.txt`。  
-`plaindoc-web-<tag>.tar.gz` 为可选文件（仅前端产物包，适合只替换前端时使用）。  
+1. 下载对应 tag 的 `bugodoc-server-linux-amd64-<tag>.tar.gz` 和 `checksums-<tag>.txt`。
+   如需单独更新前端，也可下载 `bugodoc-web-<tag>.tar.gz`。
 2. 校验文件完整性：
 
 ```bash
@@ -283,8 +286,8 @@ sha256sum -c checksums-<tag>.txt
 
 ```bash
 mkdir -p /opt/plaindoc/apps/web
-tar -xzf plaindoc-server-linux-amd64-<tag>.tar.gz -C /opt/plaindoc
-chmod +x /opt/plaindoc/plaindoc-server-linux-amd64
+tar -xzf bugodoc-server-linux-amd64-<tag>.tar.gz -C /opt/plaindoc
+chmod +x /opt/plaindoc/bugodoc-server-linux-amd64
 ```
 
 4. 配置并启动（示例）：
@@ -300,7 +303,7 @@ export SSR_WORKER_ENABLED=true
 export SSR_WORKER_EXEC=node
 export SSR_WORKER_ENTRY=/opt/plaindoc/apps/web/dist-ssr/worker-entry.js
 
-/opt/plaindoc/plaindoc-server-linux-amd64
+/opt/plaindoc/bugodoc-server-linux-amd64
 ```
 
 提示：阅读页 SSR 依赖 Node 子进程。若服务器未安装 Node，请先安装 Node，或临时设置 `SSR_WORKER_ENABLED=false`。

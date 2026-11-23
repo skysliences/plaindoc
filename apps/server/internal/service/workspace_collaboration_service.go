@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/lifei6671/plaindoc/apps/server/internal/config"
 	"github.com/lifei6671/plaindoc/apps/server/internal/storage/models"
 	"github.com/lifei6671/plaindoc/apps/server/internal/storage/repository"
 	"github.com/oklog/ulid/v2"
@@ -56,7 +57,7 @@ func NewWorkspaceCollaborationService(
 
 const exampleDocumentTitle = "示例文档"
 
-const exampleDocumentContent = `# 欢迎使用 PlainDoc
+const exampleDocumentContent = `# 欢迎使用 ` + config.ProductName + `
 
 这是空间的第一篇文档。你可以直接修改这篇示例，也可以在左侧点击 **新建文档**，在同一个空间继续记录。
 

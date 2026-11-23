@@ -14,9 +14,9 @@
         <span class="yt-nav-toggle-bar" aria-hidden="true"></span>
         <span class="yt-nav-toggle-bar" aria-hidden="true"></span>
       </button>
-      <a href="/" class="yt-brand" aria-label="{{ .SiteName }} 首页">
-        <img src="/assets/favicon.png?v=bugo" alt="BUGO" class="yt-brand-logo" loading="eager" decoding="async">
-        <span class="yt-brand-badge">Docs</span>
+      <a href="/" class="yt-brand" aria-label="{{ if .SiteName }}{{ .SiteName }}{{ else }}bugodoc{{ end }} 首页">
+        <img src="/assets/favicon.png?v=bugo" alt="bugodoc" class="yt-brand-logo" loading="eager" decoding="async">
+        <span class="yt-brand-badge">doc</span>
       </a>
     </div>
 

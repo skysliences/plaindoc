@@ -1,13 +1,13 @@
-import { LoaderCircle, RefreshCw, Search, ShieldBan, ShieldCheck, Trash2 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState, type FormEventHandler } from "react";
+import { FileText, LoaderCircle, RefreshCw, Search, ShieldBan, ShieldCheck, Trash2 } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEventHandler } from "react";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Checkbox } from "../../components/ui/checkbox";
 import { Input } from "../../components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select";
 import { showToast } from "../../components/ui/toast";
-import { type AdminDocument, type AdminDocumentListResult, type DataGateway, type Visibility } from "../../data-access";
-import { useAdminDialogs } from "../components/AdminDialogs";
+import { type AdminDocument, type AdminDocumentActivity, type AdminDocumentListResult, type DataGateway, type Visibility } from "../../data-access";
+import { AdminDialogLayer, useAdminDialogs } from "../components/AdminDialogs";
 import {
   AdminBulkActionBar,
   AdminPageCard,
@@ -18,6 +18,12 @@ import {
 import { formatError } from "../../editor/status-utils";
 
 const DEFAULT_PAGE_SIZE = 20;
+const DOCUMENT_ACTIVITY_METRICS = [
+  { key: "openCount", label: "打开次数" },
+  { key: "viewCount", label: "查看次数" },
+  { key: "editCount", label: "编辑次数" },
+  { key: "downloadCount", label: "下载次数" }
+] as const;
 
 interface AdminDocumentsPageProps {
   dataGateway: DataGateway;
@@ -26,6 +32,95 @@ interface AdminDocumentsPageProps {
 interface AdminDocumentsState {
   items: AdminDocument[];
   pagination: AdminDocumentListResult["pagination"];
+}
+
+type DocumentActivityState =
+  | { status: "loading" }
+  | { status: "error"; message: string }
+  | { status: "loaded"; activity: AdminDocumentActivity };
+
+interface DocumentDetailsDialogProps {
+  item: AdminDocument;
+  admin: DataGateway["admin"];
+  onClose: () => void;
+}
+
+function DocumentDetailsDialog({ item, admin, onClose }: DocumentDetailsDialogProps) {
+  const [state, setState] = useState<DocumentActivityState>({ status: "loading" });
+  const [requestVersion, setRequestVersion] = useState(0);
+
+  useEffect(() => {
+    let active = true;
+    admin.getDocumentActivity(item.documentId).then(
+      (activity) => {
+        if (active) {
+          setState({ status: "loaded", activity });
+        }
+      },
+      (error: unknown) => {
+        if (active) {
+          setState({ status: "error", message: formatError(error) });
+        }
+      }
+    );
+    return () => {
+      active = false;
+    };
+  }, [admin, item.documentId, requestVersion]);
+
+  return (
+    <AdminDialogLayer
+      open
+      title="文档详情"
+      description={item.title || item.documentId}
+      onClose={onClose}
+      footer={(
+        <>
+          {state.status === "error" ? (
+            <Button type="button" variant="outline" onClick={() => {
+              setState({ status: "loading" });
+              setRequestVersion((version) => version + 1);
+            }}>
+              重试
+            </Button>
+          ) : null}
+          {item.status === "active" && (
+            <Button asChild variant="outline">
+              <a href={buildDocumentReaderPath(item.spaceId, item.documentRouteKey || item.documentId)}>查看正文</a>
+            </Button>
+          )}
+          <Button type="button" variant="secondary" onClick={onClose} autoFocus>关闭</Button>
+        </>
+      )}
+    >
+      {state.status === "loading" && (
+        <div role="status" className="flex items-center gap-2 py-4 text-sm text-slate-600">
+          <LoaderCircle size={16} className="animate-spin" aria-hidden="true" />
+          正在加载文档统计…
+        </div>
+      )}
+      {state.status === "error" && (
+        <p role="alert" className="m-0 py-4 text-sm text-rose-700">加载文档统计失败：{state.message}</p>
+      )}
+      {state.status === "loaded" && (
+        <>
+          <dl aria-label="文档使用统计" className="m-0 grid grid-cols-2 gap-3 sm:grid-cols-4">
+            {DOCUMENT_ACTIVITY_METRICS.map(({ key, label }) => (
+              <div key={key} className="min-w-0 rounded-lg border border-solid border-slate-200 bg-slate-50 p-3">
+                <dt className="text-xs font-medium text-slate-600">{label}</dt>
+                <dd className="m-0 mt-1 break-words text-xl font-semibold tabular-nums text-slate-900">
+                  {state.activity[key].toLocaleString("zh-CN")}
+                </dd>
+              </div>
+            ))}
+          </dl>
+          <p className="mb-0 mt-3 text-xs text-slate-600">
+            统计基于当前保留的审计记录。查看次数计入打开次数，编辑按保存或恢复计数，下载包含站内导出。
+          </p>
+        </>
+      )}
+    </AdminDialogLayer>
+  );
 }
 
 function emptyDocumentsState(): AdminDocumentsState {
@@ -147,6 +242,12 @@ export function AdminDocumentsPage({ dataGateway }: AdminDocumentsPageProps) {
 
   const [documentsState, setDocumentsState] = useState<AdminDocumentsState>(() => emptyDocumentsState());
   const [loading, setLoading] = useState(false);
+  const [detailDocument, setDetailDocument] = useState<AdminDocument | null>(null);
+  const detailTriggerRef = useRef<HTMLButtonElement>(null);
+  const closeDetails = useCallback(() => {
+    setDetailDocument(null);
+    detailTriggerRef.current?.focus();
+  }, []);
 
   const [actioningDocumentID, setActioningDocumentID] = useState<string | null>(null);
   const [batchActioning, setBatchActioning] = useState(false);
@@ -459,6 +560,14 @@ export function AdminDocumentsPage({ dataGateway }: AdminDocumentsPageProps) {
   return (
     <section aria-label="文档管理">
       {dialogs}
+      {detailDocument && (
+        <DocumentDetailsDialog
+          key={detailDocument.documentId}
+          item={detailDocument}
+          admin={dataGateway.admin}
+          onClose={closeDetails}
+        />
+      )}
       <AdminPageCard>
           <form className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_220px_160px_180px_170px_auto]" onSubmit={handleSearchSubmit}>
             <label className="space-y-1.5">
@@ -742,6 +851,19 @@ export function AdminDocumentsPage({ dataGateway }: AdminDocumentsPageProps) {
                           <td className="px-3 py-3 text-xs text-slate-600">{formatDateTime(document.updatedAt)}</td>
                           <td className="px-3 py-3">
                             <div className="flex flex-wrap items-center gap-2">
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="outline"
+                                aria-haspopup="dialog"
+                                onClick={(event) => {
+                                  detailTriggerRef.current = event.currentTarget;
+                                  setDetailDocument(document);
+                                }}
+                              >
+                                <FileText size={14} aria-hidden="true" />
+                                <span>详情</span>
+                              </Button>
                               {document.status === "banned" ? (
                                 <Button
                                   type="button"

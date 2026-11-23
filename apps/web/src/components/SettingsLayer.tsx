@@ -223,7 +223,7 @@ export const SettingsLayer = memo(function SettingsLayer({
                     <SettingsTextField
                       label="Bucket"
                       value={draftImageHostingConfig.cloudflareR2.bucket}
-                      placeholder="例如：plaindoc-assets"
+                      placeholder="例如：bugodoc-assets"
                       onChange={(value) => setCloudflareField("bucket", value)}
                     />
                     <SettingsTextField
@@ -257,7 +257,7 @@ export const SettingsLayer = memo(function SettingsLayer({
                     <SettingsTextField
                       label="Bucket"
                       value={draftImageHostingConfig.aliyunOss.bucket}
-                      placeholder="例如：plaindoc-assets"
+                      placeholder="例如：bugodoc-assets"
                       onChange={(value) => setAliyunField("bucket", value)}
                     />
                     <SettingsTextField

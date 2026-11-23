@@ -59,7 +59,7 @@ interface AdminDialogLayerProps {
   children?: ReactNode;
 }
 
-function AdminDialogLayer({ open, title, description, onClose, footer, children }: AdminDialogLayerProps) {
+export function AdminDialogLayer({ open, title, description, onClose, footer, children }: AdminDialogLayerProps) {
   useEffect(() => {
     if (!open) {
       return;

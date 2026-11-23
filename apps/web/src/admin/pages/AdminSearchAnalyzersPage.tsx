@@ -547,7 +547,7 @@ export function AdminSearchAnalyzersPage({ dataGateway }: AdminSearchAnalyzersPa
                         </Badge>
                       </div>
                       <p className="text-xs text-slate-500">
-                        下方标签是 PlainDoc 平台定义的分词能力位，不是随机标签。蓝色表示治理对象已支持，灰色表示当前未支持或规划中。
+                        下方标签是 bugodoc 平台定义的分词能力位，不是随机标签。蓝色表示治理对象已支持，灰色表示当前未支持或规划中。
                       </p>
                       {!isManagedAnalyzerActive && runtimeActiveAnalyzer ? (
                         <p className="rounded-md border border-amber-200 bg-amber-50 px-2 py-1.5 text-xs text-amber-700">

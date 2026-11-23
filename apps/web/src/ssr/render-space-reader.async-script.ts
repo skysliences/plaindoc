@@ -1453,7 +1453,7 @@ export const READER_ASYNC_ENHANCEMENT_SCRIPT = `(() => {
     };
     actionButton.disabled = true;
     try {
-      const result = await fetch(path + "/export-access", { credentials: "same-origin", cache: "no-store" });
+      const result = await fetch(path + "/export-access", { method: "POST", credentials: "same-origin", cache: "no-store" });
       const response = await result.json();
       if (!actionButton.isConnected) return;
       if (!result.ok || response?.code !== 0) {

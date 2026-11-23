@@ -152,6 +152,7 @@ describe("AdminSpacesPage", () => {
     const settingsButton = within(row).getByRole("button", { name: "展开更多操作" });
     await user.click(settingsButton);
 
+    expect(screen.getByRole("menuitem", { name: "查看目录" })).toHaveAttribute("href", "/r/space-admin");
     expect(screen.getByText("编辑文档")).toBeInTheDocument();
     expect(screen.getByText("空间设置")).toBeInTheDocument();
     expect(screen.getByText("导出空间")).toBeInTheDocument();
@@ -198,12 +199,12 @@ describe("AdminSpacesPage", () => {
     await user.click(within(row).getByRole("button", { name: "展开更多操作" }));
     await user.click(screen.getByText("导出空间"));
 
-    expect(screen.getByText("PlainDoc 包是可导入的完整空间交换包，用于迁移、备份和跨环境恢复。")).toBeInTheDocument();
+    expect(screen.getByText("bugodoc 包是可导入的完整空间交换包，用于迁移、备份和跨环境恢复。")).toBeInTheDocument();
 	    expect(screen.getByText("目录树和空间元数据")).toBeInTheDocument();
     expect(screen.getByText("空间封面")).toBeInTheDocument();
 	    expect(screen.getByText("后续还要通过“导入空间”恢复为新空间。")).toBeInTheDocument();
 
-    await user.selectOptions(screen.getByDisplayValue("PlainDoc 包"), "markdown_zip");
+    await user.selectOptions(screen.getByDisplayValue("bugodoc 包"), "markdown_zip");
     expect(screen.getByText("Markdown ZIP 是内容归档包，用于离线查看或交给外部系统处理。")).toBeInTheDocument();
     expect(screen.getByText("Office 文档不会转换成 Markdown，也不保证可完整导回。")).toBeInTheDocument();
 
@@ -213,7 +214,7 @@ describe("AdminSpacesPage", () => {
     expect(screen.getByText("EPUB 是阅读产物，不能作为空间导入包。")).toBeInTheDocument();
   });
 
-  it("forces PlainDoc package exports to keep importable options", async () => {
+  it("forces bugodoc package exports to keep importable options", async () => {
     const listSpaces = vi.fn().mockResolvedValue({
       items: [createAdminSpace()],
       pagination: {
@@ -327,7 +328,7 @@ describe("AdminSpacesPage", () => {
 
     await user.click(within(row).getByRole("button", { name: "展开更多操作" }));
     await user.click(screen.getByText("导出空间"));
-    await user.selectOptions(screen.getByDisplayValue("PlainDoc 包"), "epub");
+    await user.selectOptions(screen.getByDisplayValue("bugodoc 包"), "epub");
     await user.click(screen.getByRole("button", { name: "开始导出" }));
 
     await waitFor(() => expect(startSpaceExport).toHaveBeenCalledWith({
@@ -428,7 +429,7 @@ describe("AdminSpacesPage", () => {
 
     await user.click(within(row).getByRole("button", { name: "展开更多操作" }));
     await user.click(screen.getByText("导出空间"));
-    await user.selectOptions(screen.getByDisplayValue("PlainDoc 包"), "epub");
+    await user.selectOptions(screen.getByDisplayValue("bugodoc 包"), "epub");
     await user.click(screen.getByRole("button", { name: "开始导出" }));
     await waitFor(() => expect(subscribeSpaceExport).toHaveBeenCalledTimes(1));
 
@@ -1030,7 +1031,7 @@ describe("AdminSpacesPage", () => {
     expect(screen.queryByText("失败")).toBeNull();
   });
 
-  it("inspects a selected PlainDoc package and shows the import preview", async () => {
+  it("inspects a selected bugodoc package and shows the import preview", async () => {
     const listSpaces = vi.fn().mockResolvedValue({
       items: [],
       pagination: {

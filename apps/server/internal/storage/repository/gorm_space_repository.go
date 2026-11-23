@@ -302,33 +302,13 @@ func (r *gormSpaceRepository) ListVisibleForHomepage(
 	}
 
 	viewerUserID := strings.TrimSpace(params.ViewerUserID)
+	viewerPlatformAdmin := viewerUserID != "" && params.ViewerPlatformAdmin
 	categoryID := strings.TrimSpace(params.CategoryID)
 
-	// 首页空间展示与阅读页权限必须一致：
-	// 至少存在一篇当前访问者可读（有效状态）的文档时，空间才进入首页/分类列表。
+	// 按成员可见性查询时，首页、分类页仅展示有可读文档的空间或空空间。
 	normalizedSpaceVisibilityExpr := "CASE WHEN " + qualifiedColumn("s", models.SpaceColumns.Visibility) + " IN ('public','authenticated','member') THEN " + qualifiedColumn("s", models.SpaceColumns.Visibility) + " ELSE 'member' END"
 	normalizedDocumentVisibilityExpr := "CASE WHEN " + qualifiedColumn("d", models.DocumentColumns.Visibility) + " IN ('public','authenticated','member') THEN " + qualifiedColumn("d", models.DocumentColumns.Visibility) + " ELSE 'member' END"
 	normalizedDocumentStatusExpr := "CASE WHEN " + qualifiedColumn("d", models.DocumentColumns.Status) + " IN ('active','banned','deleted') THEN " + qualifiedColumn("d", models.DocumentColumns.Status) + " ELSE 'active' END"
-
-	// 统一首页空间可见性基础过滤，供 count/list 复用。
-	// 这样 count 可以只保留必要 JOIN，避免和列表查询一样携带展示字段 JOIN。
-	applyHomepageCommonFilters := func(query *gorm.DB) *gorm.DB {
-		query = query.Where(qualifiedColumn("s", models.SpaceColumns.Status)+" = ?", models.EntityStatusActive)
-		if categoryID != "" {
-			query = query.Where(qualifiedColumn("s", models.SpaceColumns.CategoryID)+" = ?", categoryID)
-		}
-		if viewerUserID == "" {
-			return query.Where(qualifiedColumn("s", models.SpaceColumns.Visibility)+" = ?", models.VisibilityPublic)
-		}
-		return query.
-			Joins("LEFT JOIN "+tableName(models.SpaceMember{})+" AS sm ON sm."+models.SpaceMemberColumns.SpaceID+" = "+qualifiedColumn("s", models.SpaceColumns.SpaceID)+" AND sm."+models.SpaceMemberColumns.UserID+" = ?", viewerUserID).
-			Where(
-				"("+qualifiedColumn("s", models.SpaceColumns.Visibility)+" IN ? OR ("+qualifiedColumn("s", models.SpaceColumns.Visibility)+" = ? AND ("+qualifiedColumn("s", models.SpaceColumns.OwnerUserID)+" = ? OR sm.id IS NOT NULL)))",
-				[]models.Visibility{models.VisibilityPublic, models.VisibilityAuthenticated},
-				models.VisibilityMember,
-				viewerUserID,
-			)
-	}
 
 	buildDocumentVisibilityQuery := func() *gorm.DB {
 		query := r.db.WithContext(ctx).
@@ -376,14 +356,36 @@ func (r *gormSpaceRepository) ListVisibleForHomepage(
 			Where(qualifiedColumn("d_any", models.DocumentColumns.DeletedAt) + " IS NULL")
 	}
 
+	// 列表与总数使用同一组可见性条件。
+	applyHomepageFilters := func(query *gorm.DB) *gorm.DB {
+		query = query.Where(qualifiedColumn("s", models.SpaceColumns.Status)+" = ?", models.EntityStatusActive)
+		if categoryID != "" {
+			query = query.Where(qualifiedColumn("s", models.SpaceColumns.CategoryID)+" = ?", categoryID)
+		}
+		if viewerPlatformAdmin {
+			return query
+		}
+		if viewerUserID == "" {
+			query = query.Where(qualifiedColumn("s", models.SpaceColumns.Visibility)+" = ?", models.VisibilityPublic)
+		} else {
+			query = query.
+				Joins("LEFT JOIN "+tableName(models.SpaceMember{})+" AS sm ON sm."+models.SpaceMemberColumns.SpaceID+" = "+qualifiedColumn("s", models.SpaceColumns.SpaceID)+" AND sm."+models.SpaceMemberColumns.UserID+" = ?", viewerUserID).
+				Where(
+					"("+qualifiedColumn("s", models.SpaceColumns.Visibility)+" IN ? OR ("+qualifiedColumn("s", models.SpaceColumns.Visibility)+" = ? AND ("+qualifiedColumn("s", models.SpaceColumns.OwnerUserID)+" = ? OR sm.id IS NOT NULL)))",
+					[]models.Visibility{models.VisibilityPublic, models.VisibilityAuthenticated},
+					models.VisibilityMember,
+					viewerUserID,
+				)
+		}
+		return query.Where(
+			"(NOT EXISTS (?) OR EXISTS (?))",
+			buildSpaceHasAnyDocumentQuery(),
+			buildDocumentVisibilityQuery(),
+		)
+	}
+
 	var total int64
-	countQuery := r.db.WithContext(ctx).Table(tableWithAlias(models.Space{}, "s"))
-	countQuery = applyHomepageCommonFilters(countQuery)
-	countQuery = countQuery.Where(
-		"(NOT EXISTS (?) OR EXISTS (?))",
-		buildSpaceHasAnyDocumentQuery(),
-		buildDocumentVisibilityQuery(),
-	)
+	countQuery := applyHomepageFilters(r.db.WithContext(ctx).Table(tableWithAlias(models.Space{}, "s")))
 	if err := countQuery.Session(&gorm.Session{}).Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
@@ -400,12 +402,7 @@ func (r *gormSpaceRepository) ListVisibleForHomepage(
 	listQuery := r.db.WithContext(ctx).
 		Table(tableWithAlias(models.Space{}, "s")).
 		Joins("LEFT JOIN " + tableName(models.User{}) + " AS u ON u." + models.UserColumns.UserID + " = " + qualifiedColumn("s", models.SpaceColumns.OwnerUserID))
-	listQuery = applyHomepageCommonFilters(listQuery)
-	listQuery = listQuery.Where(
-		"(NOT EXISTS (?) OR EXISTS (?))",
-		buildSpaceHasAnyDocumentQuery(),
-		buildDocumentVisibilityQuery(),
-	)
+	listQuery = applyHomepageFilters(listQuery)
 
 	type homepageSpaceRow struct {
 		ID           int64               `gorm:"column:id"`

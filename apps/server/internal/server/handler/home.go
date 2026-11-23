@@ -9,22 +9,22 @@ import (
 	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
+	"github.com/lifei6671/plaindoc/apps/server/internal/config"
 	"github.com/lifei6671/plaindoc/apps/server/internal/server/view"
 	"github.com/lifei6671/plaindoc/apps/server/internal/service"
 )
 
 type homeHandler struct {
-	authService        *service.AuthService
-	homeService        *service.HomeService
-	homeSearchService  *service.HomeSearchService
-	searchConfig       *service.SearchConfigService
-	adminAccessService *service.AdminAccessService
-	collaboration      *service.WorkspaceCollaborationService
-	webOrigin          string
+	authService       *service.AuthService
+	homeService       *service.HomeService
+	homeSearchService *service.HomeSearchService
+	searchConfig      *service.SearchConfigService
+	collaboration     *service.WorkspaceCollaborationService
+	webOrigin         string
 }
 
 const exploreAllCategoryRouteToken = "all"
-const seoTitleSuffix = "PlainDoc - 一个适合中小团队文档在线管理系统"
+const seoTitleSuffix = config.ProductName + " - 一个适合中小团队文档在线管理系统"
 
 type homeViewerIdentity struct {
 	UserID        string
@@ -40,18 +40,16 @@ func NewHomeHandler(
 	homeService *service.HomeService,
 	homeSearchService *service.HomeSearchService,
 	searchConfigService *service.SearchConfigService,
-	adminAccessService *service.AdminAccessService,
 	collaboration *service.WorkspaceCollaborationService,
 	webOrigin string,
 ) *homeHandler {
 	return &homeHandler{
-		authService:        authService,
-		homeService:        homeService,
-		homeSearchService:  homeSearchService,
-		searchConfig:       searchConfigService,
-		adminAccessService: adminAccessService,
-		collaboration:      collaboration,
-		webOrigin:          normalizeWebOrigin(webOrigin),
+		authService:       authService,
+		homeService:       homeService,
+		homeSearchService: homeSearchService,
+		searchConfig:      searchConfigService,
+		collaboration:     collaboration,
+		webOrigin:         normalizeWebOrigin(webOrigin),
 	}
 }
 
@@ -107,7 +105,6 @@ func (h *homeHandler) Search(c *gin.Context) {
 	}
 
 	viewerIdentity := h.resolveOptionalViewerIdentity(c)
-	canAccessAdmin := h.resolveCanAccessAdmin(c, viewerIdentity)
 	searchEnabled := h.resolveHomepageSearchEnabled(c)
 
 	categoryRecord, err := h.homeService.GetPage(c.Request.Context(), service.HomepageQueryInput{
@@ -158,7 +155,7 @@ func (h *homeHandler) Search(c *gin.Context) {
 		FilingLink:           categoryRecord.FilingLink,
 		IsSearch:             true,
 		IsAuthenticated:      viewerIdentity.Authenticated,
-		CanAccessAdmin:       canAccessAdmin,
+		CanAccessAdmin:       categoryRecord.CanAccessAdmin,
 		WorkspaceURL:         h.webOrigin + "/editor",
 		CurrentUserName:      viewerIdentity.Name,
 		CurrentUserAvatar:    buildUserAvatarText(viewerIdentity.Name, viewerIdentity.Email),
@@ -214,7 +211,6 @@ func (h *homeHandler) renderPage(c *gin.Context, explore bool) {
 	}
 
 	viewerIdentity := h.resolveOptionalViewerIdentity(c)
-	canAccessAdmin := h.resolveCanAccessAdmin(c, viewerIdentity)
 	searchEnabled := h.resolveHomepageSearchEnabled(c)
 	record, err := h.homeService.GetPage(c.Request.Context(), service.HomepageQueryInput{
 		ViewerUserID: viewerIdentity.UserID,
@@ -265,7 +261,7 @@ func (h *homeHandler) renderPage(c *gin.Context, explore bool) {
 		FilingLink:           record.FilingLink,
 		IsExplore:            explore,
 		IsAuthenticated:      viewerIdentity.Authenticated,
-		CanAccessAdmin:       canAccessAdmin,
+		CanAccessAdmin:       record.CanAccessAdmin,
 		WorkspaceURL:         h.webOrigin + "/editor",
 		SpaceCreationError:   spaceCreationError(c.Query("spaceCreationError")),
 		CurrentUserName:      viewerIdentity.Name,
@@ -323,26 +319,6 @@ func (h *homeHandler) resolveOptionalViewerIdentity(c *gin.Context) homeViewerId
 		AvatarURL:     strings.TrimSpace(session.User.AvatarURL),
 		Authenticated: strings.TrimSpace(session.User.ID) != "",
 	}
-}
-
-func (h *homeHandler) resolveCanAccessAdmin(
-	c *gin.Context,
-	viewerIdentity homeViewerIdentity,
-) bool {
-	if h == nil || h.adminAccessService == nil || c == nil {
-		return false
-	}
-	if !viewerIdentity.Authenticated || strings.TrimSpace(viewerIdentity.UserID) == "" {
-		return false
-	}
-	hasAdminRole, err := h.adminAccessService.IsAdmin(
-		c.Request.Context(),
-		strings.TrimSpace(viewerIdentity.UserID),
-	)
-	if err != nil {
-		return false
-	}
-	return hasAdminRole
 }
 
 func (h *homeHandler) resolveHomepageSearchEnabled(c *gin.Context) bool {

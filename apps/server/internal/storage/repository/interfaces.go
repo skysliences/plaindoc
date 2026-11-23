@@ -210,12 +210,13 @@ type SearchVisibleDocumentRow struct {
 
 // SearchVisibleDocumentsParams 检索可见文档分页查询参数。
 type SearchVisibleDocumentsParams struct {
-	ActorUserID   string
-	SpaceID       string
-	ScopeSpaceIDs []string
-	Terms         []string
-	Limit         int
-	Offset        int
+	ActorUserID         string
+	SpaceID             string
+	ScopeSpaceIDs       []string
+	CanViewAllDocuments bool
+	Terms               []string
+	Limit               int
+	Offset              int
 }
 
 // SearchVisibleDocumentIDsByCandidatesParams 候选文档可见性过滤参数。
@@ -223,6 +224,7 @@ type SearchVisibleDocumentIDsByCandidatesParams struct {
 	ActorUserID          string
 	SpaceID              string
 	ScopeSpaceIDs        []string
+	CanViewAllDocuments  bool
 	CandidateDocumentIDs []string
 }
 
@@ -786,10 +788,11 @@ type WorkspaceRepository interface {
 
 // ListVisibleHomepageSpacesParams 首页/分类页可见空间查询参数。
 type ListVisibleHomepageSpacesParams struct {
-	ViewerUserID string
-	CategoryID   string
-	Limit        int
-	Offset       int
+	ViewerUserID        string
+	ViewerPlatformAdmin bool
+	CategoryID          string
+	Limit               int
+	Offset              int
 }
 
 // HomepageVisibleSpaceRecord 首页/分类页可见空间列表项。
@@ -1340,4 +1343,5 @@ type AdminAuditLogListRecord struct {
 type AuditLogRepository interface {
 	Create(ctx context.Context, auditLog *models.AuditLog) error
 	List(ctx context.Context, params ListAuditLogsParams) ([]AdminAuditLogListRecord, int64, error)
+	CountActionsForTarget(ctx context.Context, module string, targetType string, targetID string) (map[string]int64, error)
 }

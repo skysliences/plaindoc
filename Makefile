@@ -33,7 +33,7 @@ SERVER_LDFLAGS := -X github.com/lifei6671/plaindoc/apps/server/internal/buildinf
 	-X github.com/lifei6671/plaindoc/apps/server/internal/buildinfo.CommitSHA=$(BUILD_COMMIT) \
 	-X github.com/lifei6671/plaindoc/apps/server/internal/buildinfo.BuildTimeUTC=$(BUILD_TIME_UTC) \
 	-X github.com/lifei6671/plaindoc/apps/server/internal/buildinfo.GoVersion=$(BUILD_GO_VERSION)
-SERVER_BINARY := plaindoc-server-linux-amd64
+SERVER_BINARY := bugodoc-server-linux-amd64
 SERVER_BINARY_PATH := $(RELEASE_DIR)/$(SERVER_BINARY)
 
 .PHONY: help \
@@ -44,7 +44,7 @@ SERVER_BINARY_PATH := $(RELEASE_DIR)/$(SERVER_BINARY)
 	package clean-release print-ssr-entry
 
 help:
-	@echo "PlainDoc Make Targets"
+	@echo "bugodoc Make Targets"
 	@echo ""
 	@echo "Development:"
 	@echo "  make install          # install npm deps"
@@ -203,23 +203,23 @@ package: build check-web-build check-web-ssr
 		"$(BUILD_TIME_UTC)" \
 		"$(BUILD_GO_VERSION)" \
 		> "$(RELEASE_DIR)/build-metadata-$(VERSION).txt"
-	tar -C "$(WEB_DIR)" -czf "$(RELEASE_DIR)/plaindoc-web-$(VERSION).tar.gz" dist dist-ssr
-	@rm -rf "$(RELEASE_DIR)/plaindoc-bundle"
-	@mkdir -p "$(RELEASE_DIR)/plaindoc-bundle/apps/web"
-	cp "$(SERVER_BINARY_PATH)" "$(RELEASE_DIR)/plaindoc-bundle/$(SERVER_BINARY)"
-	cp "$(RELEASE_DIR)/build-metadata-$(VERSION).txt" "$(RELEASE_DIR)/plaindoc-bundle/build-metadata.txt"
-	cp -R "$(WEB_DIR)/dist" "$(RELEASE_DIR)/plaindoc-bundle/apps/web/"
-	cp -R "$(WEB_DIR)/dist-ssr" "$(RELEASE_DIR)/plaindoc-bundle/apps/web/"
-	tar -czf "$(RELEASE_DIR)/plaindoc-server-linux-amd64-$(VERSION).tar.gz" \
-		-C "$(RELEASE_DIR)/plaindoc-bundle" \
+	tar -C "$(WEB_DIR)" -czf "$(RELEASE_DIR)/bugodoc-web-$(VERSION).tar.gz" dist dist-ssr
+	@rm -rf "$(RELEASE_DIR)/bugodoc-bundle"
+	@mkdir -p "$(RELEASE_DIR)/bugodoc-bundle/apps/web"
+	cp "$(SERVER_BINARY_PATH)" "$(RELEASE_DIR)/bugodoc-bundle/$(SERVER_BINARY)"
+	cp "$(RELEASE_DIR)/build-metadata-$(VERSION).txt" "$(RELEASE_DIR)/bugodoc-bundle/build-metadata.txt"
+	cp -R "$(WEB_DIR)/dist" "$(RELEASE_DIR)/bugodoc-bundle/apps/web/"
+	cp -R "$(WEB_DIR)/dist-ssr" "$(RELEASE_DIR)/bugodoc-bundle/apps/web/"
+	tar -czf "$(RELEASE_DIR)/bugodoc-server-linux-amd64-$(VERSION).tar.gz" \
+		-C "$(RELEASE_DIR)/bugodoc-bundle" \
 		"$(SERVER_BINARY)" \
 		build-metadata.txt \
 		apps/web/dist \
 		apps/web/dist-ssr
 	sha256sum \
 		"$(SERVER_BINARY_PATH)" \
-		"$(RELEASE_DIR)/plaindoc-server-linux-amd64-$(VERSION).tar.gz" \
-		"$(RELEASE_DIR)/plaindoc-web-$(VERSION).tar.gz" \
+		"$(RELEASE_DIR)/bugodoc-server-linux-amd64-$(VERSION).tar.gz" \
+		"$(RELEASE_DIR)/bugodoc-web-$(VERSION).tar.gz" \
 		"$(RELEASE_DIR)/build-metadata-$(VERSION).txt" \
 		> "$(RELEASE_DIR)/checksums-$(VERSION).txt"
 	@echo "release artifacts generated under $(RELEASE_DIR)"

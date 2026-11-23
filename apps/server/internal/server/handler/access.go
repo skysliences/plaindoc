@@ -200,6 +200,9 @@ func (h *accessHandler) GetDocument(c *gin.Context) {
 		return
 	}
 
+	appendVaryHeader(c, "Authorization")
+	appendVaryHeader(c, "Cookie")
+	c.Header("Cache-Control", "private, no-store")
 	viewerUserID, err := h.resolveOptionalViewerUserID(c)
 	if err != nil {
 		setRequestErrmsg(c, err, "解析访问令牌失败")

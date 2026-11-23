@@ -73,7 +73,7 @@
 ```json
 {
   "enabled": true,
-  "fromName": "PlainDoc",
+  "fromName": "bugodoc",
   "fromEmail": "no-reply@example.com",
   "replyTo": "",
   "appBaseUrl": "https://docs.example.com",

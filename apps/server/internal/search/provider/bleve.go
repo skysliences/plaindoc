@@ -265,6 +265,7 @@ func (p *BleveProvider) filterCandidatesByVisibility(
 
 	hasActorIdentity := strings.TrimSpace(request.ActorUserID) != ""
 	isAuthenticated := hasActorIdentity || request.IsAuthenticated
+	canViewAllDocuments := request.CanViewAllDocuments && hasActorIdentity
 	isSingleSpaceSearch := strings.TrimSpace(request.SpaceID) != ""
 	scopeSpaceIDSet := buildBleveScopeSpaceIDSet(request.SpaceID, request.ScopeSpaceIDs)
 	directVisibleDocIDs := make(map[string]struct{}, len(candidates))
@@ -288,6 +289,11 @@ func (p *BleveProvider) filterCandidatesByVisibility(
 			}
 		}
 
+		if canViewAllDocuments {
+			// 使用数据库确认文档仍处于可检索状态，避免返回已封禁或已删除的陈旧索引。
+			needDBCheckDocIDs = append(needDBCheckDocIDs, docID)
+			continue
+		}
 		switch strings.ToLower(strings.TrimSpace(item.VisibilityScope)) {
 		case string(models.VisibilityPublic):
 			directVisibleDocIDs[docID] = struct{}{}
@@ -361,7 +367,7 @@ func (p *BleveProvider) filterCandidatesByVisibility(
 			if _, exists := visibleByDBDocIDs[docID]; !exists {
 				continue
 			}
-			if !isSingleSpaceSearch &&
+			if !canViewAllDocuments && !isSingleSpaceSearch &&
 				strings.EqualFold(strings.TrimSpace(item.VisibilityScope), string(models.VisibilityMember)) {
 				spaceID := strings.TrimSpace(item.SpaceID)
 				if spaceID == "" {
@@ -656,6 +662,7 @@ func (p *BleveProvider) filterVisibleDocIDs(
 			ActorUserID:          strings.TrimSpace(request.ActorUserID),
 			SpaceID:              strings.TrimSpace(request.SpaceID),
 			ScopeSpaceIDs:        request.ScopeSpaceIDs,
+			CanViewAllDocuments:  request.CanViewAllDocuments,
 			CandidateDocumentIDs: documentIDs,
 		},
 	)

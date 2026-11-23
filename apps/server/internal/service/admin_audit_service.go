@@ -53,6 +53,8 @@ var validAdminAuditModules = map[string]struct{}{
 }
 
 var validAdminAuditActions = map[string]struct{}{
+	"view":                         {},
+	"download":                     {},
 	"read":                         {},
 	"edit":                         {},
 	"copy":                         {},

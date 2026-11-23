@@ -26,7 +26,7 @@ func (r *gormSearchVisibilityRepository) SearchVisibleDocuments(
 		return nil, 0, fmt.Errorf("search visibility repository db is nil")
 	}
 
-	query := r.baseVisibleDocumentsQuery(ctx, params.ActorUserID, params.SpaceID, params.ScopeSpaceIDs)
+	query := r.baseVisibleDocumentsQuery(ctx, params.ActorUserID, params.SpaceID, params.ScopeSpaceIDs, params.CanViewAllDocuments)
 	normalizedTerms := make([]string, 0, len(params.Terms))
 	for _, item := range params.Terms {
 		normalizedTerm := strings.ToLower(strings.TrimSpace(item))
@@ -92,7 +92,7 @@ func (r *gormSearchVisibilityRepository) FilterVisibleDocumentIDsByCandidates(
 		return []string{}, nil
 	}
 
-	query := r.baseVisibleDocumentsQuery(ctx, params.ActorUserID, params.SpaceID, params.ScopeSpaceIDs).
+	query := r.baseVisibleDocumentsQuery(ctx, params.ActorUserID, params.SpaceID, params.ScopeSpaceIDs, params.CanViewAllDocuments).
 		Where(qualifiedColumn("d", models.DocumentColumns.DocumentID)+" IN ?", params.CandidateDocumentIDs)
 
 	type row struct {
@@ -288,6 +288,7 @@ func (r *gormSearchVisibilityRepository) baseVisibleDocumentsQuery(
 	actorUserID string,
 	spaceID string,
 	scopeSpaceIDs []string,
+	canViewAllDocuments bool,
 ) *gorm.DB {
 	query := r.db.WithContext(ctx).
 		Table(tableWithAlias(models.Document{}, "d")).
@@ -309,6 +310,9 @@ func (r *gormSearchVisibilityRepository) baseVisibleDocumentsQuery(
 		if len(normalizedScopeSpaceIDs) > 0 {
 			query = query.Where(qualifiedColumn("s", models.SpaceColumns.SpaceID)+" IN ?", normalizedScopeSpaceIDs)
 		}
+	}
+	if canViewAllDocuments && strings.TrimSpace(actorUserID) != "" {
+		return query
 	}
 	return applySearchVisibilityMatrixFilter(query, actorUserID)
 }

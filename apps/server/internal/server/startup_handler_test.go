@@ -27,7 +27,7 @@ func TestStartupHandlerServesHTMLForPageRoutes(t *testing.T) {
 		t.Fatalf("expected 200 for startup page, got %d", recorder.Code)
 	}
 	body := recorder.Body.String()
-	if !strings.Contains(body, "PlainDoc 正在初始化") {
+	if !strings.Contains(body, "bugodoc 正在初始化") {
 		t.Fatalf("expected startup title in html: %s", body)
 	}
 	if !strings.Contains(body, "/api/startup/status") {

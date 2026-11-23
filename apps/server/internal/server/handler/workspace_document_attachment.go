@@ -568,7 +568,7 @@ func (h *workspaceHandler) RedirectDocumentAttachmentDownload(c *gin.Context) {
 		response.WorkspaceErrAccessToken.Write(c)
 		return
 	}
-	if _, err := h.visibilityService.GetDocument(c.Request.Context(), documentID, viewerUserID); err != nil {
+	if err := h.visibilityService.AuthorizeDocumentAttachmentDownload(c.Request.Context(), documentID, viewerUserID); err != nil {
 		setRequestErrmsg(c, err, "验证文档访问权限失败")
 		writeWorkspaceDocumentAccessError(c, err)
 		return
@@ -656,13 +656,23 @@ func (h *workspaceHandler) CreateDocumentAttachmentAccessLink(c *gin.Context) {
 		return
 	}
 
+	rawPurpose := strings.TrimSpace(c.Query("purpose"))
+	purpose := normalizeWorkspaceDocumentAttachmentPurpose(rawPurpose)
+	if rawPurpose != "" && purpose == "" {
+		response.DocumentAttachmentErrInvalidPurpose.Write(c)
+		return
+	}
+	if purpose == "" {
+		purpose = workspaceDocumentAttachmentPurposeDownload
+	}
+
 	viewerUserID, err := h.resolveOptionalViewerUserID(c)
 	if err != nil {
 		setRequestErrmsg(c, err, "解析访问令牌失败")
 		response.WorkspaceErrAccessToken.Write(c)
 		return
 	}
-	if _, err := h.visibilityService.GetDocument(c.Request.Context(), documentID, viewerUserID); err != nil {
+	if err := h.authorizeAttachmentLink(c.Request.Context(), documentID, viewerUserID, service.DocumentAttachmentLinkPurpose(purpose)); err != nil {
 		setRequestErrmsg(c, err, "验证文档访问权限失败")
 		writeWorkspaceDocumentAccessError(c, err)
 		return
@@ -684,15 +694,6 @@ func (h *workspaceHandler) CreateDocumentAttachmentAccessLink(c *gin.Context) {
 		return
 	}
 
-	rawPurpose := strings.TrimSpace(c.Query("purpose"))
-	purpose := normalizeWorkspaceDocumentAttachmentPurpose(rawPurpose)
-	if rawPurpose != "" && purpose == "" {
-		response.DocumentAttachmentErrInvalidPurpose.Write(c)
-		return
-	}
-	if purpose == "" {
-		purpose = workspaceDocumentAttachmentPurposeDownload
-	}
 	if purpose == workspaceDocumentAttachmentPurposePreview && !isDocumentAttachmentPreviewSupported(attachment.PreviewKind) {
 		response.DocumentAttachmentErrPreviewUnsupported.Write(c)
 		return
@@ -811,7 +812,7 @@ func (h *workspaceHandler) ServeDocumentAttachmentByToken(c *gin.Context) {
 		response.WorkspaceErrAccessToken.Write(c)
 		return
 	}
-	if _, err := h.visibilityService.GetDocument(c.Request.Context(), claims.DocumentID, viewerUserID); err != nil {
+	if err := h.authorizeAttachmentLink(c.Request.Context(), claims.DocumentID, viewerUserID, claims.Purpose); err != nil {
 		setRequestErrmsg(c, err, "验证文档访问权限失败")
 		writeWorkspaceDocumentAccessError(c, err)
 		return
@@ -856,6 +857,19 @@ func (h *workspaceHandler) ServeDocumentAttachmentByToken(c *gin.Context) {
 		return
 	}
 	c.Redirect(http.StatusTemporaryRedirect, targetURL)
+}
+
+func (h *workspaceHandler) authorizeAttachmentLink(
+	ctx context.Context,
+	documentID string,
+	viewerUserID string,
+	purpose service.DocumentAttachmentLinkPurpose,
+) error {
+	if purpose == service.DocumentAttachmentLinkPurposeDownload {
+		return h.visibilityService.AuthorizeDocumentAttachmentDownload(ctx, documentID, viewerUserID)
+	}
+	_, err := h.visibilityService.GetDocument(ctx, documentID, viewerUserID)
+	return err
 }
 
 func (h *workspaceHandler) serveLocalDocumentAttachment(

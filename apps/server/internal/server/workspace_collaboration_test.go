@@ -72,6 +72,7 @@ func TestRouter_WorkspaceCollaboration(t *testing.T) {
 	request(http.MethodPut, permissionPath, memberToken, `{"exportDenied":true}`, http.StatusForbidden)
 	request(http.MethodPut, permissionPath, ownerToken, `{"exportDenied":true}`, http.StatusOK)
 	request(http.MethodGet, exportPath, memberToken, "", http.StatusForbidden)
+	request(http.MethodPost, exportPath, memberToken, "", http.StatusForbidden)
 	request(http.MethodGet, exportPath, ownerToken, "", http.StatusOK)
 	request(http.MethodGet, docPath, memberToken, "", http.StatusOK)
 	request(http.MethodPut, docPath, memberToken, `{"contentMd":"仍不可保存","baseVersion":1}`, http.StatusForbidden)
@@ -93,6 +94,7 @@ func TestRouter_WorkspaceCollaboration(t *testing.T) {
 	request(http.MethodGet, exportPath, memberToken, "", http.StatusForbidden)
 	request(http.MethodPut, permissionPath, ownerToken, `{"exportDenied":false}`, http.StatusOK)
 	request(http.MethodGet, exportPath, memberToken, "", http.StatusOK)
+	request(http.MethodPost, exportPath, memberToken, "", http.StatusOK)
 	request(http.MethodPost, docPath+"/copy-events", memberToken, "", http.StatusOK)
 	request(http.MethodPost, docPath+"/copy-events", "", "", http.StatusForbidden)
 	permissionList := request(http.MethodGet, memberPath+"?documentId="+protectedDoc, ownerToken, "", http.StatusOK).Body.String()
@@ -150,7 +152,7 @@ func TestRouter_WorkspaceCollaboration(t *testing.T) {
 	}
 	auditPath := "/api/admin/audits?module=document_activity&actorUserId=" + memberID + "&targetId=" + protectedDoc
 	request(http.MethodGet, auditPath, memberToken, "", http.StatusForbidden)
-	for action, want := range map[string]int64{"edit": 2, "copy": 1} {
+	for action, want := range map[string]int64{"edit": 2, "copy": 1, "view": 3, "download": 1} {
 		audit := request(http.MethodGet, auditPath+"&action="+action, ownerToken, "", http.StatusOK)
 		data := decodeJSONResultData[struct {
 			Pagination struct{ Total int64 }
@@ -215,7 +217,7 @@ func TestRouter_HomeCreateSpaceStartsWithExampleDocument(t *testing.T) {
 		ContentMD string
 		Version   int
 	}](t, serve(docRequest).Body.Bytes())
-	if !strings.Contains(document.ContentMD, "# 欢迎使用 PlainDoc") || document.Version != 1 {
+	if !strings.Contains(document.ContentMD, "# 欢迎使用 bugodoc") || document.Version != 1 {
 		t.Fatalf("example document content was not initialized: %+v", document)
 	}
 	coverPath := "/space-covers/" + spaceID

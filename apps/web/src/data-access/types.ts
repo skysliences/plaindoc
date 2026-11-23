@@ -855,6 +855,13 @@ export interface AdminDocumentListResult {
   };
 }
 
+export interface AdminDocumentActivity {
+  openCount: number;
+  viewCount: number;
+  editCount: number;
+  downloadCount: number;
+}
+
 export type AdminDocumentAttachmentStatusFilter = "all" | "active" | "deleted";
 export type AdminDocumentAttachmentStorageProviderFilter = "all" | "local" | "cloudflare-r2" | "aliyun-oss";
 
@@ -1210,7 +1217,7 @@ export type AdminAuditModule =
   | "document_activity"
   | "theme"
   | "system_config";
-export type AdminAuditAction = "create" | "update" | "delete" | "read" | "edit" | "copy";
+export type AdminAuditAction = "create" | "update" | "delete" | "read" | "view" | "edit" | "copy" | "download";
 
 export interface AdminAuditLog {
   id: number;
@@ -1325,6 +1332,7 @@ export interface AdminGateway {
   transferSpaceOwnership(input: { spaceId: string; targetUserId?: string; targetEmail?: string }): Promise<AdminSpace>;
   deleteSpace(spaceId: string): Promise<void>;
   listDocuments(input?: AdminDocumentListInput): Promise<AdminDocumentListResult>;
+  getDocumentActivity(documentId: string): Promise<AdminDocumentActivity>;
   listDocumentShares(input?: AdminDocumentShareListInput): Promise<AdminDocumentShareListResult>;
   updateDocumentShare(input: {
     shareId: string;

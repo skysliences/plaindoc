@@ -19,7 +19,7 @@ func (h *readerPageHandler) CheckDocumentExportAccess(c *gin.Context) {
 	spaceID := strings.TrimSpace(c.Param("spaceId"))
 	documentID := strings.TrimSpace(c.Param("docId"))
 	viewer := h.resolveOptionalViewerIdentity(c)
-	allowed, err := h.readerPageService.DocumentExportAllowed(c.Request.Context(), spaceID, documentID, viewer.UserID)
+	authorizedDocumentID, allowed, err := h.readerPageService.ResolveDocumentExportAccess(c.Request.Context(), spaceID, documentID, viewer.UserID)
 	switch {
 	case errors.Is(err, service.ErrSpaceNotFound), errors.Is(err, service.ErrDocumentNotFound):
 		response.Error(c, http.StatusNotFound, response.CodeDocumentNotFound, "文档不存在，或已被删除")
@@ -31,6 +31,9 @@ func (h *readerPageHandler) CheckDocumentExportAccess(c *gin.Context) {
 	case !allowed:
 		writeDocumentExportForbidden(c)
 	default:
+		if c.Request.Method == http.MethodPost {
+			recordDocumentActivity(c, h.activityRepo, viewer.UserID, authorizedDocumentID, "download")
+		}
 		response.JSON(c, http.StatusOK, struct{}{})
 	}
 }
@@ -54,6 +57,9 @@ func (h *documentSharePageHandler) CheckDocumentExportAccess(c *gin.Context) {
 	if !allowed {
 		writeDocumentExportForbidden(c)
 		return
+	}
+	if c.Request.Method == http.MethodPost {
+		recordDocumentActivity(c, h.readerRenderer.activityRepo, viewer.UserID, share.DocumentID, "download")
 	}
 	response.JSON(c, http.StatusOK, struct{}{})
 }

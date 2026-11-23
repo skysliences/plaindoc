@@ -51,6 +51,10 @@ func (s *ReaderPageService) CanCreateDocument(ctx context.Context, spaceID, view
 	return s.visibilityService.CanWriteSpace(ctx, spaceID, viewerUserID)
 }
 
+func (s *ReaderPageService) CanReviewAllDocuments(ctx context.Context, viewerUserID string) (bool, error) {
+	return s.visibilityService.CanReviewAllDocuments(ctx, viewerUserID)
+}
+
 // ResolveLandingDocumentID 返回空间阅读入口应跳转的首篇可读文档路由标识（slug 或 document_id）。
 func (s *ReaderPageService) ResolveLandingDocumentID(
 	ctx context.Context,
@@ -120,26 +124,27 @@ func (s *ReaderPageService) ResolveLandingDocumentID(
 	return "", ErrDocumentNotFound
 }
 
-// DocumentExportAllowed checks read access and export policy for the current reader route.
-func (s *ReaderPageService) DocumentExportAllowed(ctx context.Context, spaceID, routeKey, viewerID string) (bool, error) {
+// ResolveDocumentExportAccess checks read access and export policy for the current reader route.
+func (s *ReaderPageService) ResolveDocumentExportAccess(ctx context.Context, spaceID, routeKey, viewerID string) (string, bool, error) {
 	documentID, err := s.resolveDocumentID(ctx, spaceID, routeKey)
 	if err != nil {
-		return false, err
+		return "", false, err
 	}
 	row, err := s.loadDocumentRow(ctx, documentID)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return false, ErrDocumentNotFound
+		return "", false, ErrDocumentNotFound
 	}
 	if err != nil {
-		return false, err
+		return "", false, err
 	}
 	if row.SpaceID != spaceID {
-		return false, ErrDocumentNotFound
+		return "", false, ErrDocumentNotFound
 	}
 	if _, err := s.visibilityService.GetDocument(ctx, documentID, viewerID); err != nil {
-		return false, err
+		return "", false, err
 	}
-	return s.visibilityService.DocumentExportAllowed(ctx, documentID, viewerID)
+	allowed, err := s.visibilityService.DocumentExportAllowed(ctx, documentID, viewerID)
+	return documentID, allowed, err
 }
 
 // BuildPage 按 space/doc/viewer 组装阅读页 SSR 输入视图。
@@ -371,6 +376,10 @@ func (s *ReaderPageService) loadTree(
 	if err != nil {
 		return nil, err
 	}
+	canReview, err := s.CanReviewAllDocuments(ctx, viewerUserID)
+	if err != nil {
+		return nil, err
+	}
 
 	treeNodes := make(map[string]*readerTreeNode, len(rows))
 	for _, row := range rows {
@@ -379,7 +388,7 @@ func (s *ReaderPageService) loadTree(
 			continue
 		}
 		documentID := normalizeReaderOptionalString(row.DocumentID)
-		if documentID != nil && permissions[*documentID].AccessDenied {
+		if !canReview && documentID != nil && permissions[*documentID].AccessDenied {
 			continue
 		}
 		readerSlug := normalizeReaderOptionalString(row.ReaderSlug)

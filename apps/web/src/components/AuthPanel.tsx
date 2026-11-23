@@ -146,7 +146,7 @@ export function AuthPanel({
 
   const switchActionText = mode === "login" ? "注册新账号" : "去登录";
   const switchPromptText = mode === "login" ? "还没有账号？" : "已有账号？";
-  const headingText = mode === "login" ? "PlainDoc 登录" : "PlainDoc 注册";
+  const headingText = mode === "login" ? "bugodoc 登录" : "bugodoc 注册";
   const introText = mode === "login" ? "登录后开始编辑文档" : "注册后创建你的文档空间";
   const badgeText = mode === "login" ? "账号登录" : "账号注册";
   const showProviderSelector =

@@ -470,7 +470,7 @@ const SECURITY_TEMPLATE: SecuritySystemConfigValue = {
 
 const EMAIL_TEMPLATE: EmailSystemConfigValue = {
   enabled: false,
-  fromName: "PlainDoc",
+  fromName: "bugodoc",
   fromEmail: "",
   replyTo: "",
   appBaseUrl: "",
@@ -2148,7 +2148,7 @@ export function AdminSystemConfigsPage({ dataGateway, scope = "system" }: AdminS
                             }));
                             markDirty("site");
                           }}
-                          placeholder="例如：PlainDoc"
+                          placeholder="例如：bugodoc"
                           disabled={saving}
                         />
                         <p className="text-xs text-slate-500">
@@ -2339,7 +2339,7 @@ export function AdminSystemConfigsPage({ dataGateway, scope = "system" }: AdminS
                             }));
                             markDirty("email");
                           }}
-                          placeholder="PlainDoc"
+                          placeholder="bugodoc"
                           disabled={saving}
                         />
                       </label>
@@ -4199,7 +4199,7 @@ export function AdminSystemConfigsPage({ dataGateway, scope = "system" }: AdminS
                         <label className="space-y-1.5">
                           <span className="text-xs font-semibold tracking-wide text-slate-600">Bucket</span>
                           <Input
-                            placeholder="plaindoc-assets"
+                            placeholder="bugodoc-assets"
                             value={imageHostingDraft.cloudflareR2.bucket}
                             onChange={(event) => setCloudflareField("bucket", event.target.value)}
                             disabled={saving}
@@ -4380,7 +4380,7 @@ export function AdminSystemConfigsPage({ dataGateway, scope = "system" }: AdminS
                         <label className="space-y-1.5">
                           <span className="text-xs font-semibold tracking-wide text-slate-600">Bucket</span>
                           <Input
-                            placeholder="plaindoc-assets"
+                            placeholder="bugodoc-assets"
                             value={imageHostingDraft.aliyunOss.bucket}
                             onChange={(event) => setAliyunField("bucket", event.target.value)}
                             disabled={saving}

@@ -443,7 +443,7 @@ const ADMIN_MENU_GROUPS: readonly AdminMenuGroup[] = [
   { label: "系统治理", keys: ["system", "office-config", "document-templates", "themes", "search-analyzers", "audits"] }
 ];
 const ADMIN_PAGE_BACKGROUND = "lab(98.26% 0 0)";
-const ADMIN_TITLE_EXTRA_METADATA = "PlainDoc - 一个适合中小团队文档在线管理系统";
+const ADMIN_TITLE_EXTRA_METADATA = "bugodoc - 一个适合中小团队文档在线管理系统";
 const ADMIN_DEFAULT_PAGE_TITLE = "管理后台";
 const ADMIN_BUILD_VERSION = (import.meta.env.VITE_BUILD_VERSION ?? "").trim() || "dev";
 
@@ -817,10 +817,10 @@ export function AdminApp({
         >
           <div className="flex items-center gap-2 px-2 py-1">
             <span className="flex h-7 w-7 shrink-0 items-center justify-center overflow-hidden rounded-md border border-slate-200/80 bg-white shadow-sm">
-              <img src={ADMIN_BRAND_LOGO_SRC} alt="PlainDoc logo" className="h-full w-full object-cover" />
+              <img src={ADMIN_BRAND_LOGO_SRC} alt="bugodoc logo" className="h-full w-full object-cover" />
             </span>
             <div className="flex min-w-0 items-center gap-1.5">
-              <p className="truncate text-sm font-semibold tracking-tight">PlainDoc 管理后台</p>
+              <p className="truncate text-sm font-semibold tracking-tight">bugodoc 管理后台</p>
               <Badge variant="outline" className="h-5 shrink-0 border-slate-200 bg-slate-50 px-1.5 text-[10px] font-medium text-slate-600">
                 {ADMIN_BUILD_VERSION}
               </Badge>

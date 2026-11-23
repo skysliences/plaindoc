@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strings"
 
+	"github.com/lifei6671/plaindoc/apps/server/internal/config"
 	"github.com/lifei6671/plaindoc/apps/server/internal/storage/repository"
 	"gorm.io/gorm"
 )
@@ -64,7 +65,7 @@ func NewEmailConfigService(systemConfigRepo repository.SystemConfigRepository) *
 func DefaultEmailConfig() EmailConfig {
 	return EmailConfig{
 		Enabled:    false,
-		FromName:   "PlainDoc",
+		FromName:   config.ProductName,
 		FromEmail:  "",
 		ReplyTo:    "",
 		AppBaseURL: "",

@@ -130,14 +130,14 @@ export function AdminAuthPanel({
         <CardHeader className="space-y-4 pb-4">
           <div className="flex items-center gap-2">
             <span className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-md border border-slate-200/80 bg-white shadow-sm">
-              <img src={ADMIN_BRAND_LOGO_SRC} alt="PlainDoc logo" className="h-full w-full object-cover" />
+              <img src={ADMIN_BRAND_LOGO_SRC} alt="bugodoc logo" className="h-full w-full object-cover" />
             </span>
             <Badge variant="outline" className="w-fit border-cyan-200 bg-cyan-50 text-cyan-700">
               <span>Admin Console</span>
             </Badge>
           </div>
           <div className="space-y-2">
-            <CardTitle className="text-2xl tracking-tight">PlainDoc 管理后台</CardTitle>
+            <CardTitle className="text-2xl tracking-tight">bugodoc 管理后台</CardTitle>
             <CardDescription>使用现有账号登录，系统会自动校验管理员角色。</CardDescription>
           </div>
         </CardHeader>

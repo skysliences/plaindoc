@@ -227,6 +227,10 @@ func (r *gormReaderPageRepository) ListTreeNodesBySpaceID(
 	}
 
 	rows := make([]readerPageTreeNodeRow, 0, 64)
+	activeDocument := r.db.WithContext(ctx).
+		Where(qualifiedColumn("d", models.DocumentColumns.Status)+" NOT IN ?", []models.EntityStatus{models.EntityStatusBanned, models.EntityStatusDeleted}).
+		Where(qualifiedColumn("d", models.DocumentColumns.BannedAt) + " IS NULL").
+		Where(qualifiedColumn("d", models.DocumentColumns.DeletedAt) + " IS NULL")
 	if err := r.db.WithContext(ctx).
 		Table(tableWithAlias(models.Node{}, "n")).
 		Select(
@@ -243,6 +247,7 @@ func (r *gormReaderPageRepository) ListTreeNodesBySpaceID(
 		).
 		Joins("LEFT JOIN "+tableName(models.Document{})+" AS d ON d."+models.DocumentColumns.NodeID+" = n."+models.NodeColumns.NodeID).
 		Where("n."+models.NodeColumns.SpaceID+" = ?", normalizedSpaceID).
+		Where(r.db.WithContext(ctx).Where(qualifiedColumn("d", models.DocumentColumns.DocumentID) + " IS NULL").Or(activeDocument)).
 		Order("n." + models.NodeColumns.ParentNodeID + " ASC, n." + models.NodeColumns.Sort + " ASC, n." + models.NodeColumns.ID + " ASC").
 		Find(&rows).Error; err != nil {
 		return nil, err

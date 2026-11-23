@@ -65,6 +65,35 @@ function createPayload(
 }
 
 describe("renderSpaceReader", () => {
+  it("renders folders without document actions when a space has no readable document", () => {
+    const payload = createPayload("markdown");
+    payload.document = {
+      ...payload.document,
+      id: "",
+      nodeId: "",
+      routeKey: "",
+      title: "",
+      contentMd: ""
+    };
+    payload.activeDocId = "";
+    payload.tree = [{
+      id: "folder",
+      type: "folder",
+      title: "内部文件夹",
+      sort: 0,
+      children: []
+    }];
+
+    const result = renderSpaceReader(payload);
+    const reader = new DOMParser().parseFromString(result.html, "text/html");
+    expect(result.head.canonical).toBe("/r/space-reader-test");
+    expect(reader.querySelector(".reader-article-title")?.textContent).toBe("测试空间");
+    expect(reader.querySelector(".reader-tree__label-text")?.textContent).toBe("内部文件夹");
+    expect(reader.body.textContent).toContain("此空间暂无可阅读文档。");
+    expect(reader.querySelector("[data-reader-export-action]")).toBeNull();
+    expect(reader.querySelector('meta[name="robots"]')?.getAttribute("content")).toBe("noindex, nofollow");
+  });
+
   it("renders office reader shell with noindex and without markdown export actions", () => {
     const result = renderSpaceReader(createPayload("docx"));
 

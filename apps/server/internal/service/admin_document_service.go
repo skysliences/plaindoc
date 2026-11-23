@@ -89,6 +89,14 @@ type ListAdminDocumentsResult struct {
 	Total    int64
 }
 
+// AdminDocumentActivity 后台文档详情中的操作次数。
+type AdminDocumentActivity struct {
+	OpenCount     int64
+	ViewCount     int64
+	EditCount     int64
+	DownloadCount int64
+}
+
 // UpdateAdminDocumentStatusInput 后台文档状态更新参数。
 type UpdateAdminDocumentStatusInput struct {
 	ActorUserID string
@@ -103,6 +111,7 @@ type AdminDocumentService struct {
 	documentRepo                     repository.DocumentRepository
 	userRepo                         repository.UserRepository
 	workspaceRepo                    repository.WorkspaceRepository
+	auditLogRepo                     repository.AuditLogRepository
 	adminAccessService               *AdminAccessService
 	adminAuditService                *AdminAuditService
 	documentAttachmentCleanupService *DocumentAttachmentCleanupService
@@ -113,6 +122,7 @@ func NewAdminDocumentService(
 	documentRepo repository.DocumentRepository,
 	userRepo repository.UserRepository,
 	workspaceRepo repository.WorkspaceRepository,
+	auditLogRepo repository.AuditLogRepository,
 	adminAccessService *AdminAccessService,
 	adminAuditService *AdminAuditService,
 	documentAttachmentCleanupService *DocumentAttachmentCleanupService,
@@ -121,6 +131,7 @@ func NewAdminDocumentService(
 		documentRepo:                     documentRepo,
 		userRepo:                         userRepo,
 		workspaceRepo:                    workspaceRepo,
+		auditLogRepo:                     auditLogRepo,
 		adminAccessService:               adminAccessService,
 		adminAuditService:                adminAuditService,
 		documentAttachmentCleanupService: documentAttachmentCleanupService,
@@ -189,6 +200,57 @@ func (s *AdminDocumentService) ListDocuments(
 		Page:     page,
 		PageSize: pageSize,
 		Total:    total,
+	}, nil
+}
+
+// GetActivity 查询文档的操作次数，使用与后台文档列表相同的管理范围。
+func (s *AdminDocumentService) GetActivity(
+	ctx context.Context,
+	actorUserID string,
+	documentID string,
+) (result AdminDocumentActivity, err error) {
+	defer func() {
+		err = errcode.MapAdminDocumentError(err)
+	}()
+
+	if s == nil || s.documentRepo == nil || s.adminAccessService == nil || s.auditLogRepo == nil {
+		return AdminDocumentActivity{}, errors.New("admin document service dependencies are nil")
+	}
+	actorUserID = strings.TrimSpace(actorUserID)
+	documentID = strings.TrimSpace(documentID)
+	if actorUserID == "" {
+		return AdminDocumentActivity{}, errcode.ErrAdminForbidden
+	}
+	if documentID == "" {
+		return AdminDocumentActivity{}, errcode.ErrAdminDocumentInvalidDocumentID
+	}
+
+	restrictToScopes, err := s.resolveScopeRestriction(ctx, actorUserID)
+	if err != nil {
+		return AdminDocumentActivity{}, err
+	}
+	accessInfo, err := s.documentRepo.GetAccessByDocumentID(ctx, documentID)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return AdminDocumentActivity{}, errcode.ErrAdminDocumentNotFound
+	}
+	if err != nil {
+		return AdminDocumentActivity{}, err
+	}
+	if restrictToScopes {
+		if err := s.ensureCanManageSpace(ctx, actorUserID, accessInfo.SpaceID); err != nil {
+			return AdminDocumentActivity{}, err
+		}
+	}
+
+	counts, err := s.auditLogRepo.CountActionsForTarget(ctx, "document_activity", "document", accessInfo.Document.DocumentID)
+	if err != nil {
+		return AdminDocumentActivity{}, err
+	}
+	return AdminDocumentActivity{
+		OpenCount:     counts["read"] + counts["view"],
+		ViewCount:     counts["view"],
+		EditCount:     counts["edit"],
+		DownloadCount: counts["download"],
 	}, nil
 }
 

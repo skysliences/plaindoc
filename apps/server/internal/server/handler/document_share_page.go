@@ -132,7 +132,7 @@ func (h *documentSharePageHandler) Page(c *gin.Context) {
 			AttachmentBasePath: buildDocumentShareAttachmentBasePath(spaceID, shareDocKey),
 		},
 	}
-	recordDocumentActivity(c, h.readerRenderer.activityRepo, viewer.UserID, pageResult.Page.Document.ID, "read")
+	recordDocumentActivity(c, h.readerRenderer.activityRepo, viewer.UserID, pageResult.Page.Document.ID, "view")
 	h.readerRenderer.renderReaderPayload(
 		c,
 		http.StatusOK,

@@ -35,7 +35,7 @@ import readerGoogleSansCodeStyleText from "./render-space-reader.font.css?inline
 import { buildReaderMarkdownRenderer } from "./markdown-shared";
 import type { ReaderDocumentAttachmentPayload, ReaderPagePayload, ReaderTreeNode } from "./ssr-types";
 
-const SEO_TITLE_SUFFIX = "PlainDoc - 一个适合中小团队文档在线管理系统";
+const SEO_TITLE_SUFFIX = "bugodoc - 一个适合中小团队文档在线管理系统";
 const readerTocParser = new MarkdownIt({
   html: false,
   linkify: true,
@@ -582,7 +582,8 @@ export function renderSpaceReader(payload: ReaderPagePayload): SpaceReaderRender
   const readerBasePath = shareEnabled
     ? normalizeReaderPathPrefix(payload.share?.basePath, `/s/${encodeURIComponent(payload.space.id)}`)
     : `/r/${encodeURIComponent(payload.space.id)}`;
-  const canonicalPath = `${readerBasePath}/${encodeURIComponent(documentRouteKey)}`;
+  const isSpaceDirectory = !documentRouteKey && !payload.access;
+  const canonicalPath = isSpaceDirectory ? readerBasePath : `${readerBasePath}/${encodeURIComponent(documentRouteKey)}`;
 
   const resolvedTheme = resolvePreviewTheme(
     payload.document.themeId || DEFAULT_PREVIEW_THEME_TEMPLATE.id,
@@ -591,8 +592,8 @@ export function renderSpaceReader(payload: ReaderPagePayload): SpaceReaderRender
   const previewThemeClassName = getPreviewThemeClassName(resolvedTheme.id);
   const previewThemeStyleText = buildPreviewThemeStyleText(resolvedTheme);
   const previewThemeCustomStyleText = (resolvedTheme.customCss ?? "").trim();
-  const articleTitle = payload.document.title.trim() || "未命名文档";
   const spaceTitle = payload.space.name.trim() || "未命名空间";
+  const articleTitle = isSpaceDirectory ? spaceTitle : (payload.document.title.trim() || "未命名文档");
   const seoTitle = composeSEOTitle(payload.space.title || articleTitle);
   const hasDeniedAccess = Boolean(payload.access?.code?.trim());
   const markdownRenderer = buildReaderMarkdownRenderer(payload.document.contentMd, resolvedTheme, {
@@ -621,7 +622,7 @@ export function renderSpaceReader(payload: ReaderPagePayload): SpaceReaderRender
     </button>
   );
   const loginPath = `/login?redirect=${encodeURIComponent(canonicalPath)}`;
-  const shouldNoIndex = isOfficeDocument;
+  const shouldNoIndex = isOfficeDocument || isSpaceDirectory;
 
   const appMarkup = renderToStaticMarkup(
     <html lang="zh-CN">
@@ -751,7 +752,12 @@ export function renderSpaceReader(payload: ReaderPagePayload): SpaceReaderRender
               className={`reader-article-shell${isOfficeDocument ? " reader-article-shell--office" : ""}`}
               data-reader-hook="article-shell"
             >
-              {!hasDeniedAccess ? (
+              {isSpaceDirectory ? (
+                <header className="reader-article-header">
+                  <h1 className="reader-article-title">{spaceTitle}</h1>
+                  <p className="reader-article-meta">此空间暂无可阅读文档。</p>
+                </header>
+              ) : !hasDeniedAccess ? (
                 <header className="reader-article-header">
                   <h1 className="reader-article-title">{articleTitle}</h1>
                   <div className="reader-article-meta">
@@ -825,7 +831,7 @@ export function renderSpaceReader(payload: ReaderPagePayload): SpaceReaderRender
                     </div>
                   </div>
                 </section>
-              ) : (
+              ) : isSpaceDirectory ? null : (
                 <>
                   {shouldRenderOnlyOffice ? (
                     <section className="office-pane reader-office-pane" aria-label={resolveOfficeDocumentLabel(payload.document.format)}>

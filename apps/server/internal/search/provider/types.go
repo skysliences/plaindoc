@@ -39,6 +39,8 @@ type SearchRequest struct {
 	ScopeSpaceIDs       []string
 	ActorUserID         string
 	IsAuthenticated     bool
+	// CanViewAllDocuments 仅由服务层验证平台管理员角色后设置。
+	CanViewAllDocuments bool
 	UserRoleLevel       int
 	RawQuery            string
 	Query               string

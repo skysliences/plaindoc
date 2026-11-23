@@ -1,4 +1,4 @@
-# PlainDoc AGENTS 指南
+# bugodoc AGENTS 指南
 
 > 目标：让新加入的 AI Agent 在 5-10 分钟内建立正确心智模型，避免改动跑偏。
 >  
@@ -8,7 +8,7 @@
 
 ## 1. 项目一句话
 
-PlainDoc 是一个面向中小团队的文档平台：Go 单体后端 + React 前端编辑器 + 双 SSR（Go 模板 SSR + Node Worker 阅读 SSR），覆盖编辑、阅读、分享与后台治理。
+bugodoc 是一个面向中小团队的文档平台：Go 单体后端 + React 前端编辑器 + 双 SSR（Go 模板 SSR + Node Worker 阅读 SSR），覆盖编辑、阅读、分享与后台治理。
 
 ---
 
@@ -106,7 +106,7 @@ PlainDoc 是一个面向中小团队的文档平台：Go 单体后端 + React �
 
 - 后端：`cd apps/server && go test ./... -count=1`
 - 前端构建门禁：`npm run web:build`
-- 前端规则门禁：`npm run check:dropdown-menu -w @plaindoc/web`
+- 前端规则门禁：`npm run check:dropdown-menu -w @bugodoc/web`
 
 环境变量样例：
 
@@ -122,6 +122,7 @@ PlainDoc 是一个面向中小团队的文档平台：Go 单体后端 + React �
 3. 权限模型：
    - 协作端：`owner > collaborator > reader`
    - 管理端：`platform_admin` 与 `space_admin` 严格隔离
+   - 平台管理员可以查看所有正常状态的空间、文档和文件夹，包括成员可见的内容。空间管理员按既有授权范围访问。平台管理员的全局查看权限与编辑、复制、导出权限独立校验。
    - 管理后台壳页：所有已登录用户可进入，`/admin/me` 与 `/admin/profile` 只要求登录态；普通成员若属于某个空间，可看到空间管理但只保留“编辑文档”入口；分享中心对所有登录用户开放，但普通用户只显示“我的分享”，且只能修改/取消自己创建的分享；左下角用户徽章需随当前登录用户角色动态展示。
    - 个人资料自助更新：普通登录用户可在 `/admin/profile` 修改昵称、头像和密码；后台审计仅对 `profile` / `profile_password` 这类自助场景放行，其他后台审计仍要求管理员身份。
 4. 高风险后台写操作必须走 operation token，并写审计日志。
@@ -172,5 +173,5 @@ PlainDoc 是一个面向中小团队的文档平台：Go 单体后端 + React �
 2. 再定位“契约真值文件”（types/config/router），最后落到实现细节。
 3. 每次改动后至少执行最小回归：`go test ./... -count=1`（server）+ `npm run web:build`（web）。
 4. 涉及契约、配置、SSR、路由变更时，同步更新 `BACKEND_DEVELOPER_GUIDE.md` 或 `FRONTEND_DEVELOPER_GUIDE.md`，避免文档漂移。
-5. 每次完成影响应用运行的改动后，Agent 必须在回复前自行更新本地预览，并让服务继续运行，供用户实时测试。优先复用本项目现有的 `http://127.0.0.1:8080` 预览和 `apps/server/data/local-preview` 数据目录。按改动重建前端、SSR Worker 和 Go 服务产物，构建成功后再重启需要重启的 PlainDoc 进程。保留现有本地配置和数据，先确认端口上的进程属于本项目。
+5. 每次完成影响应用运行的改动后，Agent 必须在回复前自行更新本地预览，并让服务继续运行，供用户实时测试。优先复用本项目现有的 `http://127.0.0.1:8080` 预览和 `apps/server/data/local-preview` 数据目录。按改动重建前端、SSR Worker 和 Go 服务产物，构建成功后再重启需要重启的 bugodoc 进程。保留现有本地配置和数据，先确认端口上的进程属于本项目。
 6. 部署后检查 `/api/healthz` 返回 `code == 0`，并访问首页或本次改动涉及的入口，确认新版本已生效。最终回复提供可测试的本地地址和验证结果。如果部署失败，先排查并重试，再说明具体阻塞和当前服务状态。

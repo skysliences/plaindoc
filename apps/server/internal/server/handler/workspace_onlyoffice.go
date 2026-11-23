@@ -229,7 +229,8 @@ func (h *workspaceHandler) ServeOnlyOfficeSourceDocument(c *gin.Context) {
 		return
 	}
 
-	if claims.Purpose == service.OnlyOfficeDocumentTokenPurposeDownload {
+	isDownload := claims.Purpose == service.OnlyOfficeDocumentTokenPurposeDownload
+	if isDownload {
 		allowed, err := h.visibilityService.DocumentExportAllowed(c.Request.Context(), documentID, claims.ActorUserID)
 		if err != nil || !allowed {
 			c.Status(http.StatusForbidden)
@@ -256,6 +257,9 @@ func (h *workspaceHandler) ServeOnlyOfficeSourceDocument(c *gin.Context) {
 
 	if strings.EqualFold(strings.TrimSpace(blob.StorageProvider), string(service.ImageHostingProviderLocal)) {
 		h.serveLocalOnlyOfficeSourceBlob(c, blob.ObjectKey, fileName, mimeType)
+		if isDownload && (c.Writer.Status() == http.StatusOK || c.Writer.Status() == http.StatusPartialContent) {
+			recordDocumentActivity(c, h.auditLogRepo, claims.ActorUserID, documentID, "download")
+		}
 		return
 	}
 
@@ -263,6 +267,9 @@ func (h *workspaceHandler) ServeOnlyOfficeSourceDocument(c *gin.Context) {
 	if err != nil || strings.TrimSpace(targetURL) == "" {
 		c.Status(http.StatusInternalServerError)
 		return
+	}
+	if isDownload {
+		recordDocumentActivity(c, h.auditLogRepo, claims.ActorUserID, documentID, "download")
 	}
 	c.Redirect(http.StatusTemporaryRedirect, targetURL)
 }

@@ -18,6 +18,7 @@ import (
 	"time"
 
 	epub "github.com/go-shiori/go-epub"
+	"github.com/lifei6671/plaindoc/apps/server/internal/config"
 	"github.com/lifei6671/plaindoc/apps/server/internal/pkg/errcode"
 	"github.com/lifei6671/plaindoc/apps/server/internal/storage/models"
 	"gorm.io/gorm"
@@ -157,13 +158,13 @@ func (s *AdminSpaceExportService) buildAdminSpaceEPUB(
 		title = strings.TrimSpace(space.SpaceID)
 	}
 	if title == "" {
-		title = "PlainDoc Space"
+		title = config.ProductName + " Space"
 	}
 	book, err := epub.NewEpub(title)
 	if err != nil {
 		return nil, err
 	}
-	book.SetAuthor("PlainDoc")
+	book.SetAuthor(config.ProductName)
 	book.SetIdentifier("plaindoc:space:" + strings.TrimSpace(space.SpaceID) + ":" + exportedAt.Format(time.RFC3339))
 	book.SetLang("zh-CN")
 	if description := strings.TrimSpace(space.Description); description != "" {
@@ -548,7 +549,7 @@ func buildAdminSpaceEPUBTitlePage(space models.Space, exportedAt time.Time) stri
 		title = strings.TrimSpace(space.SpaceID)
 	}
 	if title == "" {
-		title = "PlainDoc Space"
+		title = config.ProductName + " Space"
 	}
 	var builder strings.Builder
 	builder.WriteString("<section>")

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/lifei6671/plaindoc/apps/server/internal/config"
 	"github.com/lifei6671/plaindoc/apps/server/internal/pkg/rendercache"
 	"github.com/lifei6671/plaindoc/apps/server/internal/server/response"
 	"github.com/lifei6671/plaindoc/apps/server/internal/service"
@@ -142,6 +143,14 @@ func (h *readerPageHandler) Space(c *gin.Context) {
 		viewer.UserID,
 	)
 	if err != nil {
+		if errors.Is(err, service.ErrDocumentNotFound) || errors.Is(err, service.ErrDocumentAccessDenied) {
+			canReview, roleErr := h.readerPageService.CanReviewAllDocuments(c.Request.Context(), viewer.UserID)
+			if roleErr != nil {
+				h.logError("resolve reader review role failed", roleErr, "space_id", spaceID)
+			} else if canReview && h.renderReaderSpaceDirectory(c, spaceID, viewer) {
+				return
+			}
+		}
 		if viewer.Authenticated && errors.Is(err, service.ErrDocumentNotFound) {
 			canCreate, permissionErr := h.readerPageService.CanCreateDocument(c.Request.Context(), spaceID, viewer.UserID)
 			if permissionErr == nil && canCreate {
@@ -185,6 +194,26 @@ func (h *readerPageHandler) Space(c *gin.Context) {
 
 	targetPath := "/r/" + url.PathEscape(spaceID) + "/" + url.PathEscape(documentID)
 	c.Redirect(http.StatusSeeOther, targetPath)
+}
+
+func (h *readerPageHandler) renderReaderSpaceDirectory(c *gin.Context, spaceID string, viewer readerPageViewerIdentity) bool {
+	space, tree, err := h.readerPageService.BuildSpaceContext(c.Request.Context(), spaceID, viewer.UserID)
+	if err != nil {
+		h.logError("build reader space directory failed", err, "space_id", spaceID)
+		return false
+	}
+	canCreate, _ := h.readerPageService.CanCreateDocument(c.Request.Context(), spaceID, viewer.UserID)
+	payload := readerPagePayload{
+		Space:         space,
+		Tree:          tree,
+		RequestOrigin: resolveRequestOrigin(c),
+		Viewer:        viewer,
+	}
+	if canCreate {
+		payload.CreateDocumentURL = h.webOrigin + "/editor/" + url.PathEscape(spaceID) + "?from=reader&create=document"
+	}
+	h.renderReaderPayload(c, http.StatusOK, spaceID, "", payload, false)
+	return true
 }
 
 // Page 渲染空间阅读页。
@@ -291,7 +320,7 @@ func (h *readerPageHandler) Page(c *gin.Context) {
 	if viewModel.CanEdit {
 		payload.EditURL = h.webOrigin + "/editor/" + url.PathEscape(spaceID) + "/" + url.PathEscape(viewModel.Document.ID) + "?from=reader"
 	}
-	recordDocumentActivity(c, h.activityRepo, viewer.UserID, viewModel.Document.ID, "read")
+	recordDocumentActivity(c, h.activityRepo, viewer.UserID, viewModel.Document.ID, "view")
 	h.renderReaderPayload(c, http.StatusOK, spaceID, documentID, payload, true)
 }
 
@@ -853,7 +882,7 @@ func resolveReaderErrorMessage(renderError *protocol.RenderError) string {
 func buildReaderFallbackHTML(payload readerPagePayload) string {
 	pageTitle := strings.TrimSpace(payload.Space.Title)
 	if pageTitle == "" {
-		pageTitle = "PlainDoc 阅读页"
+		pageTitle = config.ProductName + " 阅读页"
 	}
 	documentTitle := strings.TrimSpace(payload.Document.Title)
 	if documentTitle == "" {
@@ -885,7 +914,8 @@ func buildReaderFallbackHTML(payload readerPagePayload) string {
 	escapedAccessTitle := template.HTMLEscapeString(accessTitle)
 	escapedAccessDescription := template.HTMLEscapeString(accessDescription)
 	robotsMeta := ""
-	if models.IsOfficeDocumentFormat(payload.Document.Format) {
+	isSpaceDirectory := payload.Document.ID == "" && payload.Access == nil
+	if models.IsOfficeDocumentFormat(payload.Document.Format) || isSpaceDirectory {
 		robotsMeta = `    <meta name="robots" content="noindex, nofollow" />`
 	}
 
@@ -914,6 +944,10 @@ func buildReaderFallbackHTML(payload readerPagePayload) string {
 			escapedAccessTitle,
 			escapedAccessDescription,
 		)
+	}
+	if isSpaceDirectory {
+		headerContent = fmt.Sprintf(`<h1 class="reader-title">%s</h1>`, escapedSpaceName)
+		bodyContent = "<p>此空间暂无可阅读文档。</p>" + renderFallbackSpaceFolders(payload.Tree)
 	}
 
 	homeNav := ""
@@ -970,6 +1004,22 @@ func buildReaderFallbackHTML(payload readerPagePayload) string {
     <script src="/assets/document-copy.js" defer></script>
   </body>
 </html>`, robotsMeta, escapedPageTitle, printPolicy, homeNav, headerContent, bodyContent, stateJSON)
+}
+
+func renderFallbackSpaceFolders(nodes []service.ReaderTreeNodeViewModel) string {
+	var items strings.Builder
+	for _, node := range nodes {
+		if node.Type == models.NodeTypeFolder {
+			items.WriteString("<li>")
+			items.WriteString(template.HTMLEscapeString(node.Title))
+			items.WriteString(renderFallbackSpaceFolders(node.Children))
+			items.WriteString("</li>")
+		}
+	}
+	if items.Len() == 0 {
+		return ""
+	}
+	return "<ul>" + items.String() + "</ul>"
 }
 
 func escapeJSONForHTMLScript(rawJSON string) string {
@@ -1035,7 +1085,7 @@ const readerFallbackUnavailableHTML = `<!doctype html>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>PlainDoc 阅读页 - PlainDoc - 一个适合中小团队文档在线管理系统</title>
+    <title>` + config.ProductName + ` 阅读页 - ` + seoTitleSuffix + `</title>
   </head>
   <body>
     <p>reader page is temporarily unavailable</p>

@@ -25,7 +25,7 @@ function renderExportFormatLabel(format: AdminSpaceExportFormat): string {
     case "markdown_zip":
       return "Markdown ZIP";
     case "source_zip":
-      return "PlainDoc 包";
+      return "bugodoc 包";
     case "epub":
       return "EPUB";
     default:
@@ -42,7 +42,7 @@ function getExportFormatDescription(format: AdminSpaceExportFormat): {
   switch (format) {
     case "source_zip":
       return {
-        summary: "PlainDoc 包是可导入的完整空间交换包，用于迁移、备份和跨环境恢复。",
+        summary: "bugodoc 包是可导入的完整空间交换包，用于迁移、备份和跨环境恢复。",
         includes: ["目录树和空间元数据", "空间封面", "Markdown 文档", "Office 源文件", "附件与校验信息"],
         bestFor: "后续还要通过“导入空间”恢复为新空间。",
         note: "文件后缀为 .plaindoc，本质是机器可读交换包，不建议手动编辑后再导入。"
@@ -205,7 +205,7 @@ export function AdminSpaceExportDialog({ open, space, dataGateway, onOpenChange 
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent className="z-[2900]">
-                  <SelectItem value="source_zip">PlainDoc 包</SelectItem>
+                  <SelectItem value="source_zip">bugodoc 包</SelectItem>
                   <SelectItem value="markdown_zip">Markdown ZIP</SelectItem>
                   <SelectItem value="epub">EPUB</SelectItem>
                 </SelectContent>

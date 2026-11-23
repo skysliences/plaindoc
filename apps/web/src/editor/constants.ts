@@ -1,5 +1,5 @@
 // 编辑器初始化时使用的兜底内容。
-export const FALLBACK_CONTENT = `# PlainDoc
+export const FALLBACK_CONTENT = `# bugodoc
 
 加载中...
 `;
