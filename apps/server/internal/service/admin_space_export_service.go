@@ -191,6 +191,13 @@ type adminAuditRecorder interface {
 // AdminSpaceExportServiceOption 用于按运行环境注入导出依赖。
 type AdminSpaceExportServiceOption func(*AdminSpaceExportService)
 
+// WithAdminSpaceExportDocumentDenialChecker checks per-document permissions before exporting a space.
+func WithAdminSpaceExportDocumentDenialChecker(check func(context.Context, string, string) (map[string]bool, error)) AdminSpaceExportServiceOption {
+	return func(s *AdminSpaceExportService) {
+		s.documentExportDenials = check
+	}
+}
+
 // WithAdminSpaceExportRepositories 注入导出所需的空间与工作区读取仓储。
 func WithAdminSpaceExportRepositories(
 	spaceReader adminSpaceExportSpaceReader,
@@ -297,19 +304,20 @@ func NewAdminSpaceExportJobStore() *AdminSpaceExportJobStore {
 
 // AdminSpaceExportService 封装空间导出任务入口。
 type AdminSpaceExportService struct {
-	adminAccessService *AdminAccessService
-	store              *AdminSpaceExportJobStore
-	spaceReader        adminSpaceExportSpaceReader
-	workspaceReader    adminSpaceExportWorkspaceReader
-	attachmentReader   adminSpaceExportAttachmentReader
-	blobReader         adminSpaceExportBlobContentReader
-	officeHTMLRenderer adminSpaceExportOfficeHTMLRenderer
-	readerHTMLRenderer adminSpaceExportReaderHTMLRenderer
-	auditRecorder      adminAuditRecorder
-	transferJobRepo    repository.AdminSpaceTransferJobRepository
-	exportDir          string
-	nowFn              func() time.Time
-	canExportSpace     func(context.Context, string, string) (bool, error)
+	adminAccessService    *AdminAccessService
+	store                 *AdminSpaceExportJobStore
+	spaceReader           adminSpaceExportSpaceReader
+	workspaceReader       adminSpaceExportWorkspaceReader
+	attachmentReader      adminSpaceExportAttachmentReader
+	blobReader            adminSpaceExportBlobContentReader
+	officeHTMLRenderer    adminSpaceExportOfficeHTMLRenderer
+	readerHTMLRenderer    adminSpaceExportReaderHTMLRenderer
+	auditRecorder         adminAuditRecorder
+	transferJobRepo       repository.AdminSpaceTransferJobRepository
+	exportDir             string
+	nowFn                 func() time.Time
+	canExportSpace        func(context.Context, string, string) (bool, error)
+	documentExportDenials func(context.Context, string, string) (map[string]bool, error)
 }
 
 // NewAdminSpaceExportService 创建空间导出服务。
@@ -449,10 +457,18 @@ func (s *AdminSpaceExportService) CanExportSpace(ctx context.Context, actorUserI
 	if s == nil {
 		return false, nil
 	}
-	if s.canExportSpace != nil {
-		return s.canExportSpace(ctx, strings.TrimSpace(actorUserID), strings.TrimSpace(spaceID))
+	actorUserID = strings.TrimSpace(actorUserID)
+	spaceID = strings.TrimSpace(spaceID)
+	check := s.canExportSpace
+	if check == nil {
+		check = s.defaultCanExportSpace
 	}
-	return s.defaultCanExportSpace(ctx, actorUserID, spaceID)
+	allowed, err := check(ctx, actorUserID, spaceID)
+	if err != nil || !allowed || s.documentExportDenials == nil {
+		return allowed, err
+	}
+	denials, err := s.documentExportDenials(ctx, spaceID, actorUserID)
+	return len(denials) == 0 && err == nil, err
 }
 
 func (s *AdminSpaceExportService) defaultCanExportSpace(ctx context.Context, actorUserID string, spaceID string) (bool, error) {
@@ -539,23 +555,42 @@ func (s *AdminSpaceExportService) IssueDownloadURL(
 	trimmedJobID := strings.TrimSpace(jobID)
 	trimmedActorUserID := strings.TrimSpace(actorUserID)
 	now := s.now()
-	if err := s.store.IssueDownloadToken(
-		trimmedJobID,
-		trimmedActorUserID,
-		downloadTokenHash,
-		now,
-	); err != nil {
+	if err := s.requireDocumentDownloadPermission(ctx, trimmedJobID, trimmedActorUserID); err != nil {
 		if !errors.Is(err, errcode.ErrAdminSpaceExportJobNotFound) {
 			return "", err
 		}
 		if restoreErr := s.restoreCompletedExportTransferJob(ctx, trimmedActorUserID, trimmedJobID, now); restoreErr != nil {
 			return "", restoreErr
 		}
-		if err := s.store.IssueDownloadToken(trimmedJobID, trimmedActorUserID, downloadTokenHash, now); err != nil {
+		if err := s.requireDocumentDownloadPermission(ctx, trimmedJobID, trimmedActorUserID); err != nil {
 			return "", err
 		}
 	}
+	if err := s.store.IssueDownloadToken(trimmedJobID, trimmedActorUserID, downloadTokenHash, now); err != nil {
+		return "", err
+	}
 	return "/api/admin/space-exports/" + trimmedJobID + "/download?token=" + downloadToken, nil
+}
+
+func (s *AdminSpaceExportService) requireDocumentDownloadPermission(ctx context.Context, jobID, actorUserID string) error {
+	job, err := s.store.Get(jobID)
+	if err != nil {
+		return err
+	}
+	if job.ActorUserID != actorUserID {
+		return errcode.ErrAdminSpaceExportDownloadForbidden
+	}
+	if s.documentExportDenials == nil {
+		return nil
+	}
+	denials, err := s.documentExportDenials(ctx, job.SpaceID, actorUserID)
+	if err != nil {
+		return err
+	}
+	if len(denials) > 0 {
+		return errcode.ErrAdminSpaceExportDownloadForbidden
+	}
+	return nil
 }
 
 func (s *AdminSpaceExportService) restoreCompletedExportTransferJob(
@@ -638,13 +673,18 @@ func (s *AdminSpaceExportService) BeginExportJob(ctx context.Context, jobID stri
 	if err != nil {
 		return err
 	}
-	if ok, err := s.CanExportSpace(ctx, job.ActorUserID, job.SpaceID); err != nil {
-		return err
-	} else if !ok {
+	allowed, err := s.CanExportSpace(ctx, job.ActorUserID, job.SpaceID)
+	if err != nil || !allowed {
+		message := "导出权限已失效"
+		if err != nil {
+			message = "校验导出权限失败"
+		} else {
+			err = errcode.ErrAdminForbidden
+		}
 		failedAt := s.now()
-		s.store.Fail(job.JobID, "permission", "导出权限已失效", failedAt)
-		s.persistExportTransferJobFailed(ctx, job.JobID, "permission", "导出权限已失效", failedAt)
-		return errcode.ErrAdminForbidden
+		s.store.Fail(job.JobID, "permission", message, failedAt)
+		s.persistExportTransferJobFailed(ctx, job.JobID, "permission", message, failedAt)
+		return err
 	}
 	now := s.now()
 	if err := s.store.MarkRunning(job.JobID, now); err != nil {
@@ -681,6 +721,7 @@ func (s *AdminSpaceExportService) CompleteExportJob(jobID string, fileName strin
 
 // ConsumeDownloadToken 校验并消费导出下载 token。
 func (s *AdminSpaceExportService) ConsumeDownloadToken(
+	ctx context.Context,
 	jobID string,
 	actorUserID string,
 	token string,
@@ -688,7 +729,12 @@ func (s *AdminSpaceExportService) ConsumeDownloadToken(
 	if s == nil || s.store == nil {
 		return AdminSpaceExportDownload{}, errcode.ErrAdminSpaceExportJobNotFound
 	}
-	download, err := s.store.ConsumeDownloadToken(strings.TrimSpace(jobID), strings.TrimSpace(actorUserID), strings.TrimSpace(token), s.now())
+	jobID = strings.TrimSpace(jobID)
+	actorUserID = strings.TrimSpace(actorUserID)
+	if err := s.requireDocumentDownloadPermission(ctx, jobID, actorUserID); err != nil {
+		return AdminSpaceExportDownload{}, err
+	}
+	download, err := s.store.ConsumeDownloadToken(jobID, actorUserID, strings.TrimSpace(token), s.now())
 	if err != nil {
 		return AdminSpaceExportDownload{}, err
 	}
@@ -1091,6 +1137,9 @@ func (s *AdminSpaceExportService) buildAdminSpaceExportPackage(
 	nodes := make(map[string]repository.WorkspaceTreeNodeRecord, len(sortedRows))
 	children := make(map[string][]repository.WorkspaceTreeNodeRecord)
 	for _, row := range sortedRows {
+		if row.ImportedFileKind == models.ImportedFileKindUnsupported {
+			continue
+		}
 		nodeID := strings.TrimSpace(row.NodeID)
 		if nodeID == "" {
 			continue

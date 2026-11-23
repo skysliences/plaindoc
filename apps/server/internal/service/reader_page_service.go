@@ -19,17 +19,18 @@ type ReaderPageService struct {
 }
 
 type readerTreeNode struct {
-	ID             string
-	DocumentID     *string
-	ReaderSlug     *string
-	DocumentPath   *string
-	DocumentFormat *models.DocumentFormat
-	ParentID       *string
-	Type           models.NodeType
-	Title          string
-	Sort           int
-	Visibility     *models.Visibility
-	Children       []*readerTreeNode
+	ImportedFileKind models.ImportedFileKind
+	ID               string
+	DocumentID       *string
+	ReaderSlug       *string
+	DocumentPath     *string
+	DocumentFormat   *models.DocumentFormat
+	ParentID         *string
+	Type             models.NodeType
+	Title            string
+	Sort             int
+	Visibility       *models.Visibility
+	Children         []*readerTreeNode
 }
 
 // NewReaderPageService 创建阅读页聚合服务。
@@ -43,6 +44,11 @@ func NewReaderPageService(
 		visibilityService:      visibilityService,
 		documentAttachmentRepo: documentAttachmentRepo,
 	}
+}
+
+// CanCreateDocument reports whether the viewer can create documents in the space.
+func (s *ReaderPageService) CanCreateDocument(ctx context.Context, spaceID, viewerUserID string) (bool, error) {
+	return s.visibilityService.CanWriteSpace(ctx, spaceID, viewerUserID)
 }
 
 // ResolveLandingDocumentID 返回空间阅读入口应跳转的首篇可读文档路由标识（slug 或 document_id）。
@@ -114,6 +120,28 @@ func (s *ReaderPageService) ResolveLandingDocumentID(
 	return "", ErrDocumentNotFound
 }
 
+// DocumentExportAllowed checks read access and export policy for the current reader route.
+func (s *ReaderPageService) DocumentExportAllowed(ctx context.Context, spaceID, routeKey, viewerID string) (bool, error) {
+	documentID, err := s.resolveDocumentID(ctx, spaceID, routeKey)
+	if err != nil {
+		return false, err
+	}
+	row, err := s.loadDocumentRow(ctx, documentID)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return false, ErrDocumentNotFound
+	}
+	if err != nil {
+		return false, err
+	}
+	if row.SpaceID != spaceID {
+		return false, ErrDocumentNotFound
+	}
+	if _, err := s.visibilityService.GetDocument(ctx, documentID, viewerID); err != nil {
+		return false, err
+	}
+	return s.visibilityService.DocumentExportAllowed(ctx, documentID, viewerID)
+}
+
 // BuildPage 按 space/doc/viewer 组装阅读页 SSR 输入视图。
 func (s *ReaderPageService) BuildPage(
 	ctx context.Context,
@@ -159,7 +187,7 @@ func (s *ReaderPageService) BuildPage(
 		return ReaderPageViewModel{}, ErrDocumentNotFound
 	}
 
-	tree, err := s.loadTree(ctx, normalizedSpaceID)
+	tree, err := s.loadTree(ctx, normalizedSpaceID, normalizedViewerUserID)
 	if err != nil {
 		return ReaderPageViewModel{}, err
 	}
@@ -183,33 +211,56 @@ func (s *ReaderPageService) BuildPage(
 	documentIdentifier := normalizeReaderOptionalString(documentRow.ReaderSlug)
 	documentRouteKey := resolveReaderDocumentRouteKey(documentIDValue, documentRow.ReaderSlug)
 
+	canCreateDocument, _ := s.CanCreateDocument(ctx, normalizedSpaceID, normalizedViewerUserID)
+	copyAllowed, err := s.visibilityService.DocumentCopyAllowed(ctx, documentIDValue, normalizedViewerUserID)
+	if err != nil {
+		return ReaderPageViewModel{}, err
+	}
+	exportAllowed, err := s.visibilityService.DocumentExportAllowed(ctx, documentIDValue, normalizedViewerUserID)
+	if err != nil {
+		return ReaderPageViewModel{}, err
+	}
+
+	imageURL := ""
+	if documentRow.ImportedFileKind == models.ImportedFileKindImage {
+		imageURL = BuildDocumentImportedImageURL(documentIDValue)
+	}
+
 	return ReaderPageViewModel{
+		CanCreateDocument: canCreateDocument,
 		Space: ReaderSpaceViewModel{
 			ID:    normalizedSpaceID,
 			Name:  spaceName,
 			Title: pageTitle,
 		},
 		Document: ReaderDocumentViewModel{
-			ID:             documentIDValue,
-			NodeID:         strings.TrimSpace(documentRow.NodeID),
-			Identifier:     normalizeReaderString(documentIdentifier),
-			RouteKey:       documentRouteKey,
-			ThemeID:        strings.TrimSpace(documentRow.ThemeID),
-			Format:         models.NormalizeDocumentFormat(documentRow.Format),
-			Visibility:     normalizeReaderVisibility(documentRow.Visibility),
-			Title:          documentTitle,
-			ContentMD:      documentRow.ContentMD,
-			RenderStatus:   models.NormalizeDocumentRenderStatus(documentRow.RenderStatus),
-			RenderError:    strings.TrimSpace(documentRow.RenderError),
-			RenderedAt:     formatReaderOptionalTime(documentRow.RenderedAt),
-			Version:        documentRow.Version,
-			SourceBlobID:   normalizeReaderOptionalString(documentRow.SourceBlobID),
-			SourceFileName: normalizeReaderOptionalString(documentRow.SourceFileName),
-			SourceMimeType: normalizeReaderOptionalString(documentRow.SourceMimeType),
-			ContentVersion: normalizeReaderContentVersion(documentRow.ContentVersion, documentRow.Version),
-			AuthorNickname: normalizeReaderAuthorNickname(documentRow.AuthorNickname),
-			UpdatedAt:      updatedAt,
+			ID:               documentIDValue,
+			NodeID:           strings.TrimSpace(documentRow.NodeID),
+			Identifier:       normalizeReaderString(documentIdentifier),
+			RouteKey:         documentRouteKey,
+			ThemeID:          strings.TrimSpace(documentRow.ThemeID),
+			Format:           models.NormalizeDocumentFormat(documentRow.Format),
+			ImportedFileKind: documentRow.ImportedFileKind,
+			ImportedImageURL: imageURL,
+			Visibility:       normalizeReaderVisibility(documentRow.Visibility),
+			Title:            documentTitle,
+			ContentMD:        documentRow.ContentMD,
+			RenderStatus:     models.NormalizeDocumentRenderStatus(documentRow.RenderStatus),
+			RenderError:      strings.TrimSpace(documentRow.RenderError),
+			RenderedAt:       formatReaderOptionalTime(documentRow.RenderedAt),
+			Version:          documentRow.Version,
+			SourceBlobID:     normalizeReaderOptionalString(documentRow.SourceBlobID),
+			SourceFileName:   normalizeReaderOptionalString(documentRow.SourceFileName),
+			SourceMimeType:   normalizeReaderOptionalString(documentRow.SourceMimeType),
+			ContentVersion:   normalizeReaderContentVersion(documentRow.ContentVersion, documentRow.Version),
+			AuthorNickname:   normalizeReaderAuthorNickname(documentRow.AuthorNickname),
+			UpdatedAt:        updatedAt,
 		},
+		CopyDenied:   !copyAllowed,
+		ExportDenied: !exportAllowed,
+		CanEdit: documentRow.ImportedFileKind != models.ImportedFileKindImage &&
+			normalizedViewerUserID != "" &&
+			s.visibilityService.AuthorizeDocumentWrite(ctx, documentIDValue, normalizedViewerUserID) == nil,
 		Attachments: attachments,
 		Tree:        tree,
 		ActiveDocID: documentIDValue,
@@ -237,7 +288,7 @@ func (s *ReaderPageService) BuildSpaceContext(
 		return ReaderSpaceViewModel{}, nil, err
 	}
 
-	tree, err := s.loadTree(ctx, normalizedSpaceID)
+	tree, err := s.loadTree(ctx, normalizedSpaceID, normalizedViewerUserID)
 	if err != nil {
 		return ReaderSpaceViewModel{}, nil, err
 	}
@@ -306,12 +357,17 @@ func (s *ReaderPageService) loadSpaceDocumentIDs(
 
 func (s *ReaderPageService) loadTree(
 	ctx context.Context,
-	spaceID string,
+	spaceID string, viewerUserID string,
 ) ([]ReaderTreeNodeViewModel, error) {
 	if s == nil || s.readerPageRepo == nil {
 		return nil, errors.New("reader page repository is nil")
 	}
 	rows, err := s.readerPageRepo.ListTreeNodesBySpaceID(ctx, spaceID)
+	if err != nil {
+		return nil, err
+	}
+
+	permissions, err := s.visibilityService.DocumentPermissionsByViewer(ctx, spaceID, viewerUserID)
 	if err != nil {
 		return nil, err
 	}
@@ -323,22 +379,29 @@ func (s *ReaderPageService) loadTree(
 			continue
 		}
 		documentID := normalizeReaderOptionalString(row.DocumentID)
+		if documentID != nil && permissions[*documentID].AccessDenied {
+			continue
+		}
 		readerSlug := normalizeReaderOptionalString(row.ReaderSlug)
 		documentPath := resolveReaderTreeDocumentRouteKey(documentID, readerSlug)
 		documentVisibility := normalizeReaderDocumentVisibility(row.Type, row.DocumentVisibility)
 		documentFormat := normalizeReaderTreeDocumentFormat(row.Type, row.DocumentFormat)
+		if row.ImportedFileKind == models.ImportedFileKindUnsupported {
+			documentVisibility, documentFormat = nil, nil
+		}
 		treeNodes[nodeID] = &readerTreeNode{
-			ID:             nodeID,
-			DocumentID:     documentID,
-			ReaderSlug:     readerSlug,
-			DocumentPath:   documentPath,
-			DocumentFormat: documentFormat,
-			ParentID:       normalizeReaderOptionalString(row.ParentNodeID),
-			Type:           normalizeReaderNodeType(row.Type),
-			Title:          strings.TrimSpace(row.Title),
-			Sort:           row.Sort,
-			Visibility:     documentVisibility,
-			Children:       make([]*readerTreeNode, 0),
+			ID:               nodeID,
+			DocumentID:       documentID,
+			ReaderSlug:       readerSlug,
+			DocumentPath:     documentPath,
+			DocumentFormat:   documentFormat,
+			ImportedFileKind: row.ImportedFileKind,
+			ParentID:         normalizeReaderOptionalString(row.ParentNodeID),
+			Type:             normalizeReaderNodeType(row.Type),
+			Title:            strings.TrimSpace(row.Title),
+			Sort:             row.Sort,
+			Visibility:       documentVisibility,
+			Children:         make([]*readerTreeNode, 0),
 		}
 	}
 
@@ -356,6 +419,7 @@ func (s *ReaderPageService) loadTree(
 		}
 		parentNode, exists := treeNodes[*parentID]
 		if !exists {
+			node.ParentID = nil
 			roots = append(roots, node)
 			continue
 		}
@@ -395,6 +459,7 @@ func mapReaderTreeNodes(nodes []*readerTreeNode) []ReaderTreeNodeViewModel {
 			DocumentIdentifier: node.ReaderSlug,
 			DocumentRouteKey:   node.DocumentPath,
 			DocumentFormat:     node.DocumentFormat,
+			ImportedFileKind:   node.ImportedFileKind,
 			ParentID:           node.ParentID,
 			Type:               normalizeReaderNodeType(node.Type),
 			Title:              node.Title,
@@ -452,6 +517,9 @@ func (s *ReaderPageService) loadDocumentAttachments(
 
 	attachments := make([]ReaderDocumentAttachmentViewModel, 0, len(attachmentRows))
 	for _, item := range attachmentRows {
+		if models.IsImportedImageObjectKey(item.ObjectKey) {
+			continue
+		}
 		attachmentID := strings.TrimSpace(item.AttachmentID)
 		if attachmentID == "" {
 			continue

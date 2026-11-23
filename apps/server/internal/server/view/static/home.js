@@ -176,5 +176,78 @@
     });
   }
 
+  const createSpaceDialog = document.querySelector("[data-create-space-dialog]");
+  if (createSpaceDialog instanceof HTMLDialogElement) {
+    const form = createSpaceDialog.querySelector("form");
+    const nameInput = createSpaceDialog.querySelector("input[name='name']");
+    const submit = form.querySelector("button[type='submit']");
+    for (const trigger of document.querySelectorAll("[data-create-space-trigger]")) {
+      trigger.addEventListener("click", () => {
+        closeAllDropdowns();
+        closeMobileUI();
+        createSpaceDialog.showModal();
+      });
+    }
+    createSpaceDialog.querySelector("[data-create-space-cancel]").addEventListener("click", () => {
+      createSpaceDialog.close();
+    });
+    nameInput.addEventListener("input", () => nameInput.setCustomValidity(""));
+    form.addEventListener("submit", (event) => {
+      const name = nameInput.value.trim();
+      if (name === "" || Array.from(name).length > 64) {
+        event.preventDefault();
+        nameInput.setCustomValidity("请输入 1 至 64 个字符的空间名称。");
+        nameInput.reportValidity();
+        return;
+      }
+      nameInput.value = name;
+      submit.disabled = true;
+    });
+    window.addEventListener("pageshow", () => {
+      submit.disabled = false;
+    });
+    if (createSpaceDialog.hasAttribute("data-reopen")) {
+      createSpaceDialog.showModal();
+      const url = new URL(window.location.href);
+      url.searchParams.delete("spaceCreationError");
+      window.history.replaceState(null, "", url);
+    }
+  }
+
+  const managementDialog = document.querySelector("#space-management-dialog");
+  if (managementDialog instanceof HTMLDialogElement) {
+    const frame = managementDialog.querySelector("iframe");
+    let activeTrigger = null;
+    for (const trigger of document.querySelectorAll("[data-space-manage-url]")) {
+      trigger.addEventListener("click", () => {
+        activeTrigger = trigger;
+        frame.src = trigger.dataset.spaceManageUrl;
+        managementDialog.showModal();
+      });
+    }
+    managementDialog.addEventListener("close", () => {
+      frame.removeAttribute("src");
+      activeTrigger = null;
+    });
+    window.addEventListener("message", (event) => {
+      if (!managementDialog.open || !activeTrigger || event.source !== frame.contentWindow) return;
+      const frameURL = new URL(activeTrigger.dataset.spaceManageUrl, window.location.href);
+      if (event.origin !== frameURL.origin) return;
+      if (event.data?.type === "plaindoc:close-space-management") {
+        managementDialog.close();
+      }
+      if (event.data?.type === "plaindoc:space-renamed" &&
+          event.data.spaceId === frameURL.searchParams.get("space") &&
+          typeof event.data.name === "string") {
+        const card = activeTrigger.closest(".yt-card");
+        card.querySelector(".yt-card-title").textContent = event.data.name;
+        card.querySelector(".yt-card-title-link").setAttribute("aria-label", `打开空间 ${event.data.name}`);
+        card.querySelector(".yt-card-thumb").setAttribute("aria-label", `进入空间 ${event.data.name}`);
+        card.querySelector(".yt-card-image").alt = `${event.data.name} 封面`;
+        activeTrigger.setAttribute("aria-label", `管理空间 ${event.data.name}`);
+      }
+    });
+  }
+
   applyMobileUIState();
 })();

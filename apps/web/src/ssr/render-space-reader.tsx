@@ -1,14 +1,19 @@
 import katexStyleText from "katex/dist/katex.min.css?inline";
 import {
+  ArrowLeft,
   ChevronDown,
   Download,
   Eye,
+  File,
   FileSpreadsheet,
   FileText,
+  Folder,
+  Image as ImageIcon,
   LoaderCircle,
   Lock,
   LockOpen,
   Paperclip,
+  Plus,
   Printer
 } from "lucide-react";
 import MarkdownIt from "markdown-it";
@@ -216,7 +221,8 @@ function ReaderTree({ nodes, spaceId, activeDocId, linkBasePath, depth = 0 }: Re
   return (
     <ul className={depth > 0 ? "reader-tree__children" : "reader-tree"}>
       {nodes.map((node) => {
-        const isDocumentNode = node.type === "doc";
+        const isUnsupportedFile = node.importedFileKind === "unsupported";
+        const isDocumentNode = node.type === "doc" && !isUnsupportedFile;
         const resolvedDocumentID = isDocumentNode ? (node.documentId?.trim() || node.id.trim()) : node.id.trim();
         const resolvedDocumentRouteKey = isDocumentNode
           ? (node.documentRouteKey?.trim() || resolvedDocumentID)
@@ -232,14 +238,21 @@ function ReaderTree({ nodes, spaceId, activeDocId, linkBasePath, depth = 0 }: Re
         const rowClassName = `reader-tree__row${isActive ? " reader-tree__row--active" : ""}`;
         const arrowClassName = `reader-tree__arrow${isExpandable ? " reader-tree__arrow--expandable" : " reader-tree__arrow--empty"}`;
         const labelClassName = `reader-tree__label${isFolderNode ? " reader-tree__label--folder" : ""}${isActive ? " reader-tree__label--active" : ""}`;
-        const visibilityMarker = isDocumentNode ? renderVisibilityMarker(node.visibility) : null;
+        const DocumentIcon = node.documentFormat === "xlsx" ? FileSpreadsheet : FileText;
+        const FileIcon = node.importedFileKind === "image" ? ImageIcon : DocumentIcon;
+        const NodeIcon = isFolderNode ? Folder : isUnsupportedFile ? File : FileIcon;
+        const nodeIcon = (
+          <span className="reader-tree__type-icon" aria-hidden="true">
+            <NodeIcon size={15} />
+          </span>
+        );
         const staticLabel = (
           <span
             className={labelClassName}
             data-reader-hook="tree-label"
             data-reader-label-active={isActive ? "1" : undefined}
           >
-            {visibilityMarker}
+            {nodeIcon}
             <span
               className="reader-tooltip reader-tree__title-tooltip"
               data-reader-hook="tree-title-tooltip"
@@ -258,7 +271,7 @@ function ReaderTree({ nodes, spaceId, activeDocId, linkBasePath, depth = 0 }: Re
             data-reader-doc-id={isDocumentNode ? resolvedDocumentID : undefined}
             href={`${linkBasePath}/${encodeURIComponent(resolvedDocumentRouteKey)}`}
           >
-            {visibilityMarker}
+            {nodeIcon}
             <span
               className="reader-tooltip reader-tree__title-tooltip"
               data-reader-hook="tree-title-tooltip"
@@ -319,6 +332,17 @@ function ReaderTree({ nodes, spaceId, activeDocId, linkBasePath, depth = 0 }: Re
               >
                 {rowContent}
               </a>
+            ) : isUnsupportedFile ? (
+              <button
+                type="button"
+                className={`${rowClassName} reader-tree__row--unsupported`}
+                data-reader-hook="tree-row"
+                data-reader-unsupported-file={title}
+                aria-haspopup="dialog"
+                style={rowStyle}
+              >
+                {rowContent}
+              </button>
             ) : (
               <div className={rowClassName} style={rowStyle}>
                 {rowContent}
@@ -533,6 +557,10 @@ export function renderSpaceReader(payload: ReaderPagePayload): SpaceReaderRender
   const renderedAt = new Date(startedAt);
   const payloadBytes = new TextEncoder().encode(JSON.stringify(payload)).length;
   const isOfficeDocument = isOfficeDocumentFormat(payload.document.format);
+  const isImportedText = payload.document.importedFileKind === "text";
+  const isImportedImage = payload.document.importedFileKind === "image";
+  const importedImageUrl = payload.document.importedImageUrl?.trim();
+  const hasImportedImageUrl = importedImageUrl?.startsWith("/api/") === true;
   const officeRendering = payload.officeRendering ?? {
     independentRenderEnabled: false,
     fallbackToOnlyOfficeOnRenderFailure: true
@@ -574,11 +602,24 @@ export function renderSpaceReader(payload: ReaderPagePayload): SpaceReaderRender
   const authorNickname = payload.document.authorNickname.trim() || "未知作者";
   const documentMeta = `空间：${spaceTitle} · 作者：${authorNickname} · ${updatedMeta}`;
   const documentVisibilityMarker = hasDeniedAccess ? null : renderVisibilityMarker(payload.document.visibility);
-  const readerOutlineItems = hasDeniedAccess || isOfficeDocument ? [] : buildReaderOutlineItems(payload.document.contentMd);
+  const readerOutlineItems = hasDeniedAccess || isOfficeDocument || isImportedText || isImportedImage
+    ? []
+    : buildReaderOutlineItems(payload.document.contentMd);
   const hasReaderOutline = readerOutlineItems.length > 0;
   const documentAttachments = hasDeniedAccess ? [] : (Array.isArray(payload.attachments) ? payload.attachments : []);
   const showSidebarTree = !shareEnabled;
   const spaceLandingPath = shareEnabled ? canonicalPath : `/r/${encodeURIComponent(payload.space.id)}`;
+  const homeLink = (
+    <a href="/" className="reader-home-link">
+      <ArrowLeft size={15} aria-hidden="true" />
+      返回首页
+    </a>
+  );
+  const readingModeButton = (
+    <button type="button" className="reader-home-link reader-reading-mode" data-reader-inline-close="1" hidden>
+      阅读模式
+    </button>
+  );
   const loginPath = `/login?redirect=${encodeURIComponent(canonicalPath)}`;
   const shouldNoIndex = isOfficeDocument;
 
@@ -589,6 +630,7 @@ export function renderSpaceReader(payload: ReaderPagePayload): SpaceReaderRender
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <title>{seoTitle}</title>
         <link rel="canonical" href={canonicalPath} />
+        <link rel="icon" type="image/png" href="/assets/favicon-ico.png?v=bugo" />
         {shouldNoIndex ? <meta name="robots" content="noindex, nofollow" /> : null}
         {/* 字体样式最先注入，确保后续 body/code 字体声明可即时命中 Google Sans Code。 */}
         <style id="plaindoc-reader-google-sans-code-style">{readerGoogleSansCodeStyleText}</style>
@@ -600,7 +642,10 @@ export function renderSpaceReader(payload: ReaderPagePayload): SpaceReaderRender
           <style id="plaindoc-reader-theme-custom-style">{previewThemeCustomStyleText}</style>
         ) : null}
       </head>
-      <body>
+      <body
+        data-document-copy-denied={payload.copyDenied ? "1" : undefined}
+        data-document-export-denied={payload.exportDenied ? "1" : undefined}
+      >
         <div
           id="plaindoc-reader-progress"
           className="reader-progress"
@@ -615,11 +660,12 @@ export function renderSpaceReader(payload: ReaderPagePayload): SpaceReaderRender
               id="plaindoc-reader-sidebar"
               className="reader-sidebar"
               data-reader-hook="sidebar"
-              aria-label={`${spaceTitle} 文档目录`}
+              aria-label="文档目录"
             >
-              <div className="reader-sidebar__header">
-                <div className="reader-sidebar__header-row">
-                  <h2 className="reader-sidebar__title">{spaceTitle}</h2>
+              <section className="reader-sidebar__documents" aria-label={`${spaceTitle} 文档目录`}>
+                <div className="reader-sidebar__navigation">
+                  {homeLink}
+                  {readingModeButton}
                   <button
                     type="button"
                     className="reader-sidebar__close"
@@ -629,27 +675,32 @@ export function renderSpaceReader(payload: ReaderPagePayload): SpaceReaderRender
                     ×
                   </button>
                 </div>
-              </div>
-              <div className="reader-sidebar__tree-scroll">
-                <ReaderTree
-                  nodes={payload.tree}
-                  spaceId={payload.space.id}
-                  activeDocId={payload.activeDocId || payload.document.id}
-                  linkBasePath={readerBasePath}
-                />
-              </div>
-              <div className="reader-sidebar__footer" role="note" aria-label="发布信息">
-                本文档使用{" "}
-                <a
-                  href="https://github.com/lifei6671/plaindoc"
-                  title="PlainDoc"
-                  target="_blank"
-                  rel="noopener noreferrer nofollow"
-                >
-                  PlainDoc
-                </a>{" "}
-                发布
-              </div>
+                <div className="reader-sidebar__header">
+                  <div className="reader-sidebar__header-row">
+                    <h2 className="reader-sidebar__title">{spaceTitle}</h2>
+                    {!hasDeniedAccess && payload.createDocumentUrl ? (
+                      <button
+                        type="button"
+                        className="reader-sidebar__create"
+                        data-reader-create-document={payload.createDocumentUrl}
+                        aria-haspopup="dialog"
+                        aria-label="新建文档"
+                        title="新建文档"
+                      >
+                        <Plus size={18} aria-hidden="true" />
+                      </button>
+                    ) : null}
+                  </div>
+                </div>
+                <div className="reader-sidebar__tree-scroll">
+                  <ReaderTree
+                    nodes={payload.tree}
+                    spaceId={payload.space.id}
+                    activeDocId={payload.activeDocId || payload.document.id}
+                    linkBasePath={readerBasePath}
+                  />
+                </div>
+              </section>
             </aside>
           ) : null}
           <main
@@ -659,6 +710,8 @@ export function renderSpaceReader(payload: ReaderPagePayload): SpaceReaderRender
           >
             {showSidebarTree ? (
               <div className="reader-mobile-bar" data-reader-hook="mobile-bar">
+                {homeLink}
+                {readingModeButton}
                 <button
                   type="button"
                   className="reader-mobile-bar__toggle"
@@ -705,37 +758,48 @@ export function renderSpaceReader(payload: ReaderPagePayload): SpaceReaderRender
                     {documentVisibilityMarker}
                     <span className="reader-article-meta__text">{documentMeta}</span>
                   </div>
-                  <div className="reader-article-actions" role="group" aria-label={isOfficeDocument ? "文档操作" : "导出操作"}>
-                    {isOfficeDocument ? (
-                      <a
-                        className="reader-article-action reader-article-action--primary"
-                        data-reader-office-download="1"
-                        aria-disabled="true"
-                      >
-                        <Download size={14} aria-hidden="true" />
-                        <span>下载原文件</span>
-                      </a>
-                    ) : (
-                      <>
-                        <button
-                          type="button"
-                          className="reader-article-action"
-                          data-reader-export-action="markdown"
-                        >
-                          <FileText size={14} aria-hidden="true" />
-                          <span>导出 Markdown</span>
-                        </button>
-                        <button
-                          type="button"
+                  {!isImportedImage && ((!shareEnabled && payload.editUrl) || !payload.exportDenied) && (
+                    <div className="reader-article-actions" role="group" aria-label="文档操作">
+                      {!shareEnabled && payload.editUrl && (
+                        isOfficeDocument ? (
+                          <a className="reader-article-action" href={payload.editUrl}>编辑文档</a>
+                        ) : (
+                          <button type="button" className="reader-article-action" data-reader-inline-edit={payload.editUrl}>
+                            编辑文档
+                          </button>
+                        )
+                      )}
+                      {!payload.exportDenied && (isOfficeDocument ? (
+                        <a
                           className="reader-article-action reader-article-action--primary"
-                          data-reader-export-action="pdf"
+                          data-reader-office-download="1"
+                          aria-disabled="true"
                         >
-                          <Printer size={14} aria-hidden="true" />
-                          <span>导出 PDF</span>
-                        </button>
-                      </>
-                    )}
-                  </div>
+                          <Download size={14} aria-hidden="true" />
+                          <span>下载原文件</span>
+                        </a>
+                      ) : (
+                        <>
+                          <button
+                            type="button"
+                            className="reader-article-action"
+                            data-reader-export-action="markdown"
+                          >
+                            <FileText size={14} aria-hidden="true" />
+                            <span>导出 Markdown</span>
+                          </button>
+                          <button
+                            type="button"
+                            className="reader-article-action reader-article-action--primary"
+                            data-reader-export-action="pdf"
+                          >
+                            <Printer size={14} aria-hidden="true" />
+                            <span>导出 PDF</span>
+                          </button>
+                        </>
+                      ))}
+                    </div>
+                  )}
                 </header>
               ) : null}
               {hasDeniedAccess ? (
@@ -821,6 +885,26 @@ export function renderSpaceReader(payload: ReaderPagePayload): SpaceReaderRender
                         </div>
                       </div>
                     </section>
+                  ) : isImportedImage ? (
+                    <div id={PREVIEW_BODY_ID} className={`reader-imported-image ${PREVIEW_BODY_CLASS}`}>
+                      {hasImportedImageUrl ? (
+                        <button
+                          type="button"
+                          className="reader-imported-image__preview"
+                          data-reader-imported-image-preview="1"
+                          aria-label={`放大图片 ${articleTitle}`}
+                        >
+                          <img src={importedImageUrl} alt={articleTitle} />
+                        </button>
+                      ) : null}
+                      <p className="reader-imported-image__error" role="status" hidden={hasImportedImageUrl}>
+                        无法加载图片。
+                      </p>
+                    </div>
+                  ) : isImportedText ? (
+                    <pre id={PREVIEW_BODY_ID} className={`reader-plain-text ${PREVIEW_BODY_CLASS}`}>
+                      <span>{payload.document.contentMd}</span>
+                    </pre>
                   ) : (
                     <article
                       id={PREVIEW_BODY_ID}
@@ -941,15 +1025,30 @@ export function renderSpaceReader(payload: ReaderPagePayload): SpaceReaderRender
           </main>
         </div>
         {showSidebarTree ? (
-          <button
-            type="button"
-            className="reader-mobile-overlay"
-            data-reader-hook="mobile-overlay"
-            aria-label="关闭目录"
-            hidden
-          />
+          <>
+            <button
+              type="button"
+              className="reader-mobile-overlay"
+              data-reader-hook="mobile-overlay"
+              aria-label="关闭目录"
+              hidden
+            />
+            <dialog
+              className="reader-unsupported-file-dialog"
+              data-reader-unsupported-file-dialog="1"
+              aria-labelledby="plaindoc-reader-unsupported-file-title"
+              aria-describedby="plaindoc-reader-unsupported-file-message"
+            >
+              <h2 id="plaindoc-reader-unsupported-file-title">无法打开文件</h2>
+              <p id="plaindoc-reader-unsupported-file-message">当前页面不支持打开“<span data-reader-unsupported-filename="1" />”。</p>
+              <form method="dialog">
+                <button type="submit" className="reader-article-action" autoFocus>关闭</button>
+              </form>
+            </dialog>
+          </>
         ) : null}
         <ReaderImageViewerShell />
+        <script src="/assets/document-copy.js" defer />
         <script
           id="plaindoc-reader-state"
           type="application/json"

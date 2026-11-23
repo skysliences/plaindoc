@@ -390,6 +390,7 @@ type HomeCategoryViewData struct {
 
 // HomeSpaceViewData 首页/分类页空间卡片项。
 type HomeSpaceViewData struct {
+	ManageURL   string
 	SpaceID     string
 	Name        string
 	Description string
@@ -422,7 +423,9 @@ type HomePageViewData struct {
 	IsExplore            bool
 	IsSearch             bool
 	IsAuthenticated      bool
-	CanManageSpace       bool
+	CanAccessAdmin       bool
+	WorkspaceURL         string
+	SpaceCreationError   string
 	CurrentUserName      string
 	CurrentUserAvatar    string
 	CurrentUserAvatarURL string

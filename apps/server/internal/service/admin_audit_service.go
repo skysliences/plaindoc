@@ -42,6 +42,7 @@ const (
 )
 
 var validAdminAuditModules = map[string]struct{}{
+	"document_activity":                   {},
 	string(AdminAuditModuleUser):          {},
 	string(AdminAuditModuleSpace):         {},
 	string(AdminAuditModuleDocument):      {},
@@ -52,6 +53,9 @@ var validAdminAuditModules = map[string]struct{}{
 }
 
 var validAdminAuditActions = map[string]struct{}{
+	"read":                         {},
+	"edit":                         {},
+	"copy":                         {},
 	string(AdminAuditActionCreate): {},
 	string(AdminAuditActionUpdate): {},
 	string(AdminAuditActionDelete): {},

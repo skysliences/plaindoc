@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -252,7 +252,8 @@ describe("WorkspaceTree", () => {
     const user = userEvent.setup();
     render(<WorkspaceTree {...props} />);
 
-    await user.click(screen.getByRole("button", { name: "新建第一篇文档" }));
+    await user.click(screen.getByRole("button", { name: "打开目录快捷菜单" }));
+    await user.click(screen.getByRole("menuitem", { name: "从模板新建" }));
 
     await screen.findByRole("heading", { name: "新建文档" });
     await waitFor(() => {
@@ -285,8 +286,22 @@ describe("WorkspaceTree", () => {
       templateId: "tpl-meeting"
     });
     await waitFor(() => {
-      expect(props.onOpenDocument).toHaveBeenCalledWith("doc-new");
+      expect(screen.queryByRole("heading", { name: "新建文档" })).not.toBeInTheDocument();
     });
+  });
+
+  it("creates an untitled document ready for typing without opening creation options", async () => {
+    const props = createProps();
+    const user = userEvent.setup();
+    render(<WorkspaceTree {...props} />);
+
+    await user.click(screen.getByRole("button", { name: "新建文档" }));
+
+    expect(props.onCreateNode).toHaveBeenCalledWith({
+      parentId: null, type: "doc", title: "未命名文档", focusEditor: true
+    });
+    expect(props.onListDocumentTemplates).not.toHaveBeenCalled();
+    expect(screen.queryByRole("heading", { name: "新建文档" })).not.toBeInTheDocument();
   });
 
   it("retries preview loading after template detail request fails", async () => {
@@ -320,7 +335,8 @@ describe("WorkspaceTree", () => {
     const user = userEvent.setup();
     render(<WorkspaceTree {...props} />);
 
-    await user.click(screen.getByRole("button", { name: "新建第一篇文档" }));
+    await user.click(screen.getByRole("button", { name: "打开目录快捷菜单" }));
+    await user.click(screen.getByRole("menuitem", { name: "从模板新建" }));
     await screen.findByRole("heading", { name: "新建文档" });
 
     await user.selectOptions(screen.getByLabelText("模板（可选）"), "tpl-postmortem");
@@ -340,7 +356,8 @@ describe("WorkspaceTree", () => {
     const user = userEvent.setup();
     const { unmount } = render(<WorkspaceTree {...enabledProps} />);
 
-    await user.click(screen.getByRole("button", { name: "新建第一篇文档" }));
+    await user.click(screen.getByRole("button", { name: "打开目录快捷菜单" }));
+    await user.click(screen.getByRole("menuitem", { name: "从模板新建" }));
     expect(await screen.findByLabelText("文档格式")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "取消" }));
     await user.click(screen.getByRole("button", { name: "打开目录快捷菜单" }));
@@ -351,7 +368,8 @@ describe("WorkspaceTree", () => {
     const disabledProps = createProps({ officeCreationEnabled: false });
     render(<WorkspaceTree {...disabledProps} />);
 
-    await user.click(screen.getByRole("button", { name: "新建第一篇文档" }));
+    await user.click(screen.getByRole("button", { name: "打开目录快捷菜单" }));
+    await user.click(screen.getByRole("menuitem", { name: "从模板新建" }));
     expect(screen.queryByLabelText("文档格式")).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "取消" }));
     await user.click(screen.getByRole("button", { name: "打开目录快捷菜单" }));
@@ -383,7 +401,8 @@ describe("WorkspaceTree", () => {
     const user = userEvent.setup();
     render(<WorkspaceTree {...props} />);
 
-    await user.click(screen.getByRole("button", { name: "新建第一篇文档" }));
+    await user.click(screen.getByRole("button", { name: "打开目录快捷菜单" }));
+    await user.click(screen.getByRole("menuitem", { name: "从模板新建" }));
     await screen.findByRole("heading", { name: "新建文档" });
 
     const formatSelect = screen.getByLabelText("文档格式");
@@ -631,5 +650,97 @@ describe("WorkspaceTree", () => {
     expect(screen.getByLabelText("文档格式：Markdown")).toBeInTheDocument();
     expect(screen.getByLabelText("文档格式：Word")).toBeInTheDocument();
     expect(screen.getByLabelText("文档格式：Excel")).toBeInTheDocument();
+    expect(screen.queryByLabelText(/^可见性/)).not.toBeInTheDocument();
+  });
+
+  it("imports a directory into the selected folder using each file's relative path", async () => {
+    const props = createProps({
+      nodes: [{
+        id: "destination",
+        parentId: null,
+        spaceId: "space-1",
+        title: "项目",
+        type: "folder",
+        sort: 1,
+        children: []
+      }]
+    });
+    const user = userEvent.setup();
+    render(<WorkspaceTree {...props} />);
+
+    await user.click(screen.getByRole("button", { name: "打开文档操作菜单" }));
+    await user.click(screen.getByRole("menuitem", { name: "上传文件夹" }));
+    expect(screen.getByRole("heading", { name: "上传文件夹" })).toBeInTheDocument();
+    const files = [
+      new File(["first"], "notes.txt"),
+      new File(["second"], "notes.txt"),
+      new File([new Uint8Array([0, 1])], "asset.bin")
+    ];
+    const paths = ["资料/notes.txt", "资料/章节/notes.txt", "资料/附件/asset.bin"];
+    files.forEach((file, index) => {
+      Object.defineProperty(file, "webkitRelativePath", { value: paths[index] });
+    });
+    fireEvent.change(screen.getByLabelText("本地文件夹"), { target: { files } });
+    expect(screen.getByText("资料")).toBeInTheDocument();
+    expect(screen.getByText("3 个文件")).toBeInTheDocument();
+    await user.dblClick(screen.getByRole("button", { name: "开始导入" }));
+
+    expect(props.onImportDocuments).toHaveBeenCalledExactlyOnceWith({
+      targetNodeId: "destination",
+      files,
+      autoExtractTitle: false,
+      folderManifest: { paths }
+    });
+    expect(screen.queryByRole("button", { name: "开始导入" })).not.toBeInTheDocument();
+  });
+
+  it("opens nested folders and keeps unsupported files in the tree without opening a document", async () => {
+    const props = createProps({
+      nodes: [{
+        id: "folder",
+        parentId: null,
+        spaceId: "space-1",
+        title: "资料",
+        type: "folder",
+        sort: 1,
+        children: [{
+          id: "file-unsupported",
+          parentId: "folder",
+          spaceId: "space-1",
+          type: "doc",
+          importedFileKind: "unsupported",
+          title: "asset.bin",
+          sort: 1,
+          children: []
+        }, {
+          id: "file-text",
+          parentId: "folder",
+          spaceId: "space-1",
+          type: "doc",
+          importedFileKind: "text",
+          title: "notes.txt",
+          documentId: "doc-text",
+          sort: 2,
+          children: []
+        }]
+      }]
+    });
+    const user = userEvent.setup();
+    render(<WorkspaceTree {...props} />);
+
+    expect(screen.getByLabelText("文件夹")).toBeInTheDocument();
+    expect(screen.queryByText("asset.bin")).not.toBeInTheDocument();
+    await user.click(screen.getByText("资料"));
+    await user.click(screen.getByText("asset.bin"));
+    expect(screen.getByLabelText("不支持的文件")).toBeInTheDocument();
+    expect(toastErrorMock).toHaveBeenCalledWith("无法打开此文件");
+    expect(props.onOpenDocument).not.toHaveBeenCalled();
+
+    await user.click(screen.getByText("notes.txt"));
+    expect(screen.getByLabelText("文本文件")).toBeInTheDocument();
+    expect(props.onOpenDocument).toHaveBeenCalledExactlyOnceWith("doc-text");
+    screen.getByText("资料").closest("button")?.focus();
+    await user.keyboard("{Enter}");
+    expect(screen.queryByText("asset.bin")).not.toBeInTheDocument();
   });
 });

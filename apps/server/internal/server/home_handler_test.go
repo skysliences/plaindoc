@@ -154,7 +154,7 @@ func TestRouter_Explore_LoggedInUsesNoStoreAndCategoryFilter(t *testing.T) {
 		_ = database.Close()
 	}()
 
-	ownerUserID, _, _ := registerAccessUser(t, serve, "explore-owner@example.com")
+	ownerUserID, _, ownerToken := registerAccessUser(t, serve, "explore-owner@example.com")
 	viewerUserID, _, viewerToken := registerAccessUser(t, serve, "explore-viewer@example.com")
 	categoryID := "01homecate000000000000000010"
 	emptyCategoryID := "01homecate000000000000000011"
@@ -235,7 +235,7 @@ func TestRouter_Explore_LoggedInUsesNoStoreAndCategoryFilter(t *testing.T) {
 	}
 
 	body := rec.Body.String()
-	if !strings.Contains(body, "Test User") || !strings.Contains(body, "后台管理") || !strings.Contains(body, "退出登录") {
+	if !strings.Contains(body, "Test User") || strings.Contains(body, "我的空间") || strings.Contains(body, "后台管理") || !strings.Contains(body, "退出登录") {
 		t.Fatalf("expected logged-in nav dropdown items, body=%s", body)
 	}
 	if !strings.Contains(body, "Public In Category") ||
@@ -245,6 +245,22 @@ func TestRouter_Explore_LoggedInUsesNoStoreAndCategoryFilter(t *testing.T) {
 	}
 	if strings.Contains(body, "Public In Other Category") {
 		t.Fatalf("expected category page filter by category id, body=%s", body)
+	}
+
+	if strings.Contains(body, "data-space-manage-url") {
+		t.Fatal("space management triggers must be hidden from non-owners")
+	}
+	for _, path := range []string{"/", "/explore/" + categoryID} {
+		ownerReq := httptest.NewRequest(http.MethodGet, path, nil)
+		ownerReq.Header.Set("Authorization", "Bearer "+ownerToken)
+		ownerRec := serve(ownerReq)
+		ownerBody := ownerRec.Body.String()
+		if ownerRec.Code != http.StatusOK ||
+			!strings.Contains(ownerBody, `class="yt-card-manage" data-space-manage-url="`) ||
+			!strings.Contains(ownerBody, `?space=01homeexplorespace000000000001&amp;manage=dialog`) ||
+			!strings.Contains(ownerBody, `<dialog id="space-management-dialog"`) {
+			t.Fatalf("expected an owner-only trigger and management dialog on %s, status=%d", path, ownerRec.Code)
+		}
 	}
 
 	emptyReq := httptest.NewRequest(http.MethodGet, "/explore/"+emptyCategoryID, nil)
@@ -380,28 +396,31 @@ func TestRouter_HomePages_RenderFooterWithSiteFilingNumber(t *testing.T) {
 		}
 
 		body := rec.Body.String()
-		if !strings.Contains(body, "Acme Docs") {
-			t.Fatalf("expected footer contains configured site name on %s, body=%s", path, body)
+		_, afterFooterStart, hasFooter := strings.Cut(body, `<footer class="yt-footer"`)
+		footer, _, hasFooterEnd := strings.Cut(afterFooterStart, "</footer>")
+		if !hasFooter || !hasFooterEnd {
+			t.Fatalf("expected footer with filing information on %s", path)
 		}
-		if !strings.Contains(body, "一个适合中小团队文档在线管理系统") {
-			t.Fatalf("expected footer contains site description on %s, body=%s", path, body)
+		if strings.Contains(footer, "Acme Docs") || strings.Contains(footer, "PlainDoc") ||
+			strings.Contains(footer, "一个适合中小团队文档在线管理系统") {
+			t.Fatalf("expected no branding or description in footer on %s, footer=%s", path, footer)
 		}
-		if !strings.Contains(body, "沪ICP备2026000001号") {
-			t.Fatalf("expected footer contains filing number on %s, body=%s", path, body)
+		if !strings.Contains(footer, "沪ICP备2026000001号") {
+			t.Fatalf("expected footer contains filing number on %s, footer=%s", path, footer)
 		}
-		if !strings.Contains(body, "https://beian.miit.gov.cn/") {
-			t.Fatalf("expected footer filing link exists on %s, body=%s", path, body)
+		if !strings.Contains(footer, "https://beian.miit.gov.cn/") {
+			t.Fatalf("expected footer filing link exists on %s, footer=%s", path, footer)
 		}
 	}
 }
 
-func TestRouter_HomePages_EmptySiteNameUsesTemplateFallbackTitle(t *testing.T) {
+func TestRouter_HomePages_OmitFooterWhenNoFilingNumber(t *testing.T) {
 	database, serve := setupAuthTestRouter(t)
 	defer func() {
 		_ = database.Close()
 	}()
 
-	seedHomepageSiteConfig(t, database, "", "沪ICP备2026000009号", "https://beian.miit.gov.cn/")
+	seedHomepageSiteConfig(t, database, "Acme Docs", "", "https://beian.miit.gov.cn/")
 
 	paths := []string{"/", "/explore/all", "/search"}
 	for _, path := range paths {
@@ -411,18 +430,8 @@ func TestRouter_HomePages_EmptySiteNameUsesTemplateFallbackTitle(t *testing.T) {
 			t.Fatalf("expected status 200 for %s, got %d body=%s", path, rec.Code, rec.Body.String())
 		}
 
-		body := rec.Body.String()
-		if !strings.Contains(body, `href="https://www.iminho.me"`) {
-			t.Fatalf("expected footer uses template fallback title link when siteName is empty on %s, body=%s", path, body)
-		}
-		if !strings.Contains(body, ">PlainDoc<") {
-			t.Fatalf("expected footer contains template fallback title when siteName is empty on %s, body=%s", path, body)
-		}
-		if !strings.Contains(body, "沪ICP备2026000009号") {
-			t.Fatalf("expected footer contains filing number on %s, body=%s", path, body)
-		}
-		if !strings.Contains(body, "https://beian.miit.gov.cn/") {
-			t.Fatalf("expected footer filing link exists on %s, body=%s", path, body)
+		if strings.Contains(rec.Body.String(), `<footer class="yt-footer"`) {
+			t.Fatalf("expected no footer without a filing number on %s", path)
 		}
 	}
 }

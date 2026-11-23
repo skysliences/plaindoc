@@ -107,7 +107,7 @@ func (h *adminSpaceExportHandler) Download(c *gin.Context) {
 	if !ok {
 		return
 	}
-	download, err := h.exportService.ConsumeDownloadToken(c.Param("jobId"), actorUserID, c.Query("token"))
+	download, err := h.exportService.ConsumeDownloadToken(c.Request.Context(), c.Param("jobId"), actorUserID, c.Query("token"))
 	if err != nil {
 		writeAdminSpaceExportError(c, err)
 		return

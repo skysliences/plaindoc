@@ -230,6 +230,9 @@ func (h *workspaceDocumentShareHandler) ensureDocumentWritable(
 	if _, err := h.workspace.ensureSpaceWritable(c.Request.Context(), spaceID, actorUserID); err != nil {
 		return "", err
 	}
+	if err := h.workspace.visibilityService.AuthorizeDocumentWrite(c.Request.Context(), documentID, actorUserID); err != nil {
+		return "", err
+	}
 	return spaceID, nil
 }
 
@@ -237,6 +240,8 @@ func (h *workspaceDocumentShareHandler) writeWorkspacePermissionError(c *gin.Con
 	switch {
 	case errors.Is(err, service.ErrDocumentNotFound):
 		response.WorkspaceErrDocumentNotFound.Write(c)
+	case errors.Is(err, service.ErrDocumentAccessDenied):
+		response.WorkspaceErrInsufficientDocumentPermission.Write(c)
 	case errors.Is(err, service.ErrSpaceNotFound):
 		response.WorkspaceErrSpaceNotFound.Write(c)
 	case errors.Is(err, service.ErrSpaceAccessDenied):

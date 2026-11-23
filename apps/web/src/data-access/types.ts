@@ -1,5 +1,6 @@
 export type Role = "owner" | "collaborator" | "reader";
 export type NodeType = "folder" | "doc";
+export type ImportedFileKind = "text" | "image" | "unsupported";
 export type DocumentFormat = "markdown" | "docx" | "xlsx";
 export type AdminRole = "platform_admin" | "space_admin";
 export type EntityStatus = "active" | "banned" | "deleted";
@@ -84,10 +85,15 @@ export interface AuthPasswordResetConfirmInput {
 }
 
 export interface Space {
+  canCreateNodes?: boolean;
   id: string;
   name: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface CreatedSpace extends Space {
+  exampleDocumentId: string;
 }
 
 export interface TreeNode {
@@ -96,6 +102,7 @@ export interface TreeNode {
   documentIdentifier?: string;
   documentRouteKey?: string;
   documentFormat?: DocumentFormat;
+  importedFileKind?: ImportedFileKind;
   spaceId: string;
   parentId: string | null;
   type: NodeType;
@@ -106,6 +113,9 @@ export interface TreeNode {
 }
 
 export interface Document {
+  copyDenied?: boolean;
+  importedFileKind?: ImportedFileKind;
+  importedImageUrl?: string;
   id: string;
   nodeId: string;
   themeId: string;
@@ -231,11 +241,17 @@ export interface CreateNodeResult {
   docId?: string;
 }
 
+export interface WorkspaceFolderManifest {
+  paths: string[];
+  directories?: string[];
+}
+
 export interface ImportWorkspaceDocumentsInput {
   spaceId: string;
   targetNodeId: string | null;
   files: File[];
   autoExtractTitle: boolean;
+  folderManifest?: WorkspaceFolderManifest;
 }
 
 export interface ImportedWorkspaceNode {
@@ -245,6 +261,7 @@ export interface ImportedWorkspaceNode {
   title: string;
   type: NodeType;
   format?: DocumentFormat;
+  importedFileKind?: ImportedFileKind;
 }
 
 export interface ImportWorkspaceItemResult {
@@ -358,10 +375,39 @@ export interface AuthGateway {
   logout(): Promise<void>;
 }
 
+export type WorkspaceMemberRole = "reader" | "collaborator";
+export type WorkspaceDocumentAccess = "inherit" | "read" | "edit" | "read_no_copy" | "edit_no_copy" | "denied";
+export type WorkspaceDocumentPermissionUpdate =
+  | { access: WorkspaceDocumentAccess; exportDenied?: boolean }
+  | { access?: never; exportDenied: boolean };
+
+export interface ParticipantSpace {
+  id: string;
+  name: string;
+  canManage: boolean;
+  canEdit: boolean;
+  visibility: Visibility;
+}
+
+export interface WorkspaceMember {
+  userId: string;
+  name: string;
+  email: string;
+  role: WorkspaceMemberRole | "owner";
+  access?: WorkspaceDocumentAccess;
+  exportDenied?: boolean;
+}
+
 export interface WorkspaceGateway {
+  listParticipantSpaces(): Promise<ParticipantSpace[]>;
+  renameSpace(spaceId: string, name: string): Promise<void>;
+  listSpaceMembers(spaceId: string, documentId?: string): Promise<WorkspaceMember[]>;
+  inviteSpaceMember(spaceId: string, email: string, role: WorkspaceMemberRole): Promise<void>;
+  removeSpaceMember(spaceId: string, userId: string): Promise<void>;
+  updateDocumentMemberPermission(docId: string, userId: string, changes: WorkspaceDocumentPermissionUpdate): Promise<void>;
   listSpaces(): Promise<Space[]>;
   getSpace(spaceId: string): Promise<Space>;
-  createSpace(input: CreateSpaceInput): Promise<Space>;
+  createSpace(input: CreateSpaceInput): Promise<CreatedSpace>;
   getTree(spaceId: string): Promise<TreeNode[]>;
   createNode(input: CreateNodeInput): Promise<CreateNodeResult>;
   importDocuments(input: ImportWorkspaceDocumentsInput): Promise<ImportWorkspaceDocumentsResult>;
@@ -374,6 +420,7 @@ export interface WorkspaceGateway {
 }
 
 export interface DocumentGateway {
+  reportCopy?(docId: string): Promise<void>;
   getDocument(docId: string): Promise<Document>;
   saveDocument(input: SaveDocumentInput): Promise<SaveDocumentResult>;
   getOnlyOfficeEditConfig(docId: string): Promise<OnlyOfficeEditConfig>;
@@ -1160,9 +1207,10 @@ export type AdminAuditModule =
   | "document"
   | "document_template"
   | "document_template_scene"
+  | "document_activity"
   | "theme"
   | "system_config";
-export type AdminAuditAction = "create" | "update" | "delete";
+export type AdminAuditAction = "create" | "update" | "delete" | "read" | "edit" | "copy";
 
 export interface AdminAuditLog {
   id: number;

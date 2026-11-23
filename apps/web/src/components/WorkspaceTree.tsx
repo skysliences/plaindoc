@@ -2,16 +2,20 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
+  Ellipsis,
   FileCode2,
+  FileImage,
+  FileQuestionMark,
   FileSpreadsheet,
   FileText,
   FilePlus2,
   FileUp,
+  Folder,
   FolderPlus,
+  FolderUp,
   Globe,
   Link2,
   Lock,
-  LockOpen,
   LoaderCircle,
   PencilLine,
   Plus,
@@ -53,9 +57,12 @@ import type {
   NodeType,
   TreeNode,
   UpdateDocumentShareInput,
-  Visibility
+  Visibility,
+  WorkspaceFolderManifest
 } from "../data-access";
 import { formatError } from "../editor/status-utils";
+import { validateDocumentIdentifier } from "../workspace/document-identifier";
+import { FolderUploadPicker, getWorkspaceFolderName, type FolderUploadSelection } from "../workspace/FolderUploadPicker";
 import { useConfirmDialog } from "./ConfirmDialog";
 import {
   DropdownMenu,
@@ -70,9 +77,6 @@ const WORKSPACE_TREE_ID = "workspace-doc-tree";
 const WORKSPACE_TREE_ROOT_ID = "__workspace_doc_tree_root__";
 const DEFAULT_DOCUMENT_TITLE = "未命名文档";
 const DEFAULT_FOLDER_TITLE = "未命名目录";
-const MAX_DOCUMENT_IDENTIFIER_LENGTH = 80;
-const DOCUMENT_IDENTIFIER_PATTERN = /^[a-z0-9-]+$/;
-const RESERVED_DOCUMENT_IDENTIFIERS = new Set(["admin", "api", "explore", "login", "register", "search"]);
 const DOCUMENT_FORMAT_OPTIONS: Array<{
   value: DocumentFormat;
   label: string;
@@ -153,6 +157,7 @@ interface WorkspaceTreeRenderItemProps {
 
 // 目录树组件入参：接收当前空间树结构与节点操作动作。
 interface WorkspaceTreeProps {
+  onCreateDocumentRequestHandled?: () => void;
   nodes: TreeNode[];
   activeDocId: string | null;
   officeCreationEnabled: boolean;
@@ -164,11 +169,13 @@ interface WorkspaceTreeProps {
     documentIdentifier?: string;
     templateId?: string;
     format?: DocumentFormat;
+    focusEditor?: boolean;
   }) => Promise<CreateNodeResult>;
   onImportDocuments: (input: {
     targetNodeId: string | null;
     files: File[];
     autoExtractTitle: boolean;
+    folderManifest?: WorkspaceFolderManifest;
   }) => Promise<ImportWorkspaceDocumentsResult>;
   onListDocumentTemplates: () => Promise<DocumentTemplateSummary[]>;
   onGetDocumentTemplate: (templateId: string) => Promise<DocumentTemplateDetail>;
@@ -216,39 +223,15 @@ interface EditDocumentShareDialogState {
 interface ImportDialogState {
   targetNodeId: string | null;
   targetTitle: string;
+  mode: "files" | "folder";
   files: File[];
+  folderManifest?: WorkspaceFolderManifest;
   autoExtractTitle: boolean;
   result: ImportWorkspaceDocumentsResult | null;
 }
 
 function mergeClassNames(...classNames: Array<string | false | null | undefined>): string {
   return classNames.filter(Boolean).join(" ");
-}
-
-function validateDocumentIdentifier(rawValue: string, options: { allowEmpty: boolean }): {
-  value: string | null;
-  error: string | null;
-} {
-  const normalizedValue = rawValue.trim().toLowerCase();
-  if (!normalizedValue) {
-    if (options.allowEmpty) {
-      return { value: null, error: null };
-    }
-    return { value: null, error: "文档标识不能为空" };
-  }
-  if (normalizedValue.length > MAX_DOCUMENT_IDENTIFIER_LENGTH) {
-    return { value: null, error: `文档标识长度不能超过 ${MAX_DOCUMENT_IDENTIFIER_LENGTH} 个字符` };
-  }
-  if (!DOCUMENT_IDENTIFIER_PATTERN.test(normalizedValue)) {
-    return { value: null, error: "文档标识仅支持小写字母、数字和连字符（-）" };
-  }
-  if (normalizedValue.startsWith("-") || normalizedValue.endsWith("-")) {
-    return { value: null, error: "文档标识不能以连字符（-）开头或结尾" };
-  }
-  if (RESERVED_DOCUMENT_IDENTIFIERS.has(normalizedValue)) {
-    return { value: null, error: "该标识为系统保留词，请更换其他标识" };
-  }
-  return { value: normalizedValue, error: null };
 }
 
 function toLocalDateTimeInputValue(value: string | null | undefined): string {
@@ -496,28 +479,29 @@ function findWorkspaceSiblingIndex(
   return parentNode.children.findIndex((candidateNode) => candidateNode.id === nodeID);
 }
 
-function resolveVisibilityMarkerConfig(
-  visibilityInput: Visibility | undefined
-): { label: string; variant: "public" | "authenticated" | "member"; className: string } {
-  const visibility = visibilityInput ?? "member";
-  if (visibility === "public") {
-    return {
-      label: "公开",
-      variant: "public",
-      className: "text-[#166534]"
-    };
+function resolveTreeDocumentId(node: TreeNode | null | undefined): string {
+  if (node?.type !== "doc" || node.importedFileKind === "unsupported") {
+    return "";
   }
-  if (visibility === "authenticated") {
-    return {
-      label: "登录可见",
-      variant: "authenticated",
-      className: "text-[#1d4ed8]"
-    };
+  return (node.documentId ?? node.id).trim();
+}
+
+function getTreeNodeIcon(node: TreeNode | null, format: DocumentFormat) {
+  if (node?.type === "folder") {
+    return { label: "文件夹", icon: <Folder size={14} /> };
+  }
+  if (node?.importedFileKind === "unsupported") {
+    return { label: "不支持的文件", icon: <FileQuestionMark size={14} /> };
+  }
+  if (node?.importedFileKind === "text") {
+    return { label: "文本文件", icon: <FileText size={14} /> };
+  }
+  if (node?.importedFileKind === "image") {
+    return { label: "图片", icon: <FileImage size={14} /> };
   }
   return {
-    label: "成员可见",
-    variant: "member",
-    className: "text-[#334155]"
+    label: `文档格式：${resolveDocumentFormatLabel(format)}`,
+    icon: renderDocumentFormatIcon(format)
   };
 }
 
@@ -570,6 +554,7 @@ function mergeDraftNodesIntoTree(
 
 // 目录树容器：使用 React Complex Tree 承载交互和可扩展能力。
 export const WorkspaceTree = memo(function WorkspaceTree({
+  onCreateDocumentRequestHandled,
   nodes,
   activeDocId,
   officeCreationEnabled,
@@ -605,7 +590,7 @@ export const WorkspaceTree = memo(function WorkspaceTree({
       if (node.type !== "doc") {
         continue;
       }
-      if ((node.documentId ?? node.id) === activeDocId) {
+      if (resolveTreeDocumentId(node) === activeDocId) {
         return nodeId;
       }
     }
@@ -633,6 +618,7 @@ export const WorkspaceTree = memo(function WorkspaceTree({
   const actionMenuRootRef = useRef<HTMLDivElement | null>(null);
   const inlineEditInputRef = useRef<HTMLInputElement | null>(null);
   const importFileInputRef = useRef<HTMLInputElement | null>(null);
+  const importPendingRef = useRef(false);
   const pendingInlineEditFocusNodeIdRef = useRef<string | null>(null);
   const isCommittingInlineEditRef = useRef(false);
   const documentTemplateDetailsRef = useRef<Record<string, DocumentTemplateDetail>>({});
@@ -646,6 +632,8 @@ export const WorkspaceTree = memo(function WorkspaceTree({
   const [creatingDraftNodeIds, setCreatingDraftNodeIds] = useState<string[]>([]);
   const [createNodeDialog, setCreateNodeDialog] = useState<CreateNodeDialogState | null>(null);
   const [isCreateNodeDialogSubmitting, setIsCreateNodeDialogSubmitting] = useState(false);
+  const [isQuickCreatingDocument, setIsQuickCreatingDocument] = useState(false);
+  const quickCreatePendingRef = useRef(false);
   const [importDialog, setImportDialog] = useState<ImportDialogState | null>(null);
   const [isImportDialogSubmitting, setIsImportDialogSubmitting] = useState(false);
   const [documentTemplates, setDocumentTemplates] = useState<DocumentTemplateSummary[]>([]);
@@ -1147,29 +1135,35 @@ export const WorkspaceTree = memo(function WorkspaceTree({
     );
   }, [nodeById]);
 
-  // 主操作仅用于打开文档；目录展开收起交给箭头交互管理。
-  const handlePrimaryAction = useCallback(
-    (item: TreeItem<WorkspaceTreeItemData>) => {
-      if (item.data.type !== "doc" || !item.data.nodeId) {
-        return;
-      }
-      const currentNode = nodeById.get(item.data.nodeId);
-      if (!currentNode || currentNode.type !== "doc") {
-        return;
-      }
-      if (draftNodeByID.has(currentNode.id)) {
-        return;
-      }
-      const documentID = (currentNode.documentId ?? currentNode.id ?? "").trim();
-      if (!documentID) {
+  const openTreeDocument = useCallback(
+    (nodeId: string) => {
+      const currentNode = nodeById.get(nodeId);
+      if (!currentNode || draftNodeByID.has(nodeId)) {
         return;
       }
       setOpenActionNodeId(null);
+      if (currentNode.importedFileKind === "unsupported") {
+        toast.error("无法打开此文件");
+        return;
+      }
+      const documentID = resolveTreeDocumentId(currentNode);
+      if (!documentID) {
+        return;
+      }
       void onOpenDocument(documentID).catch(() => {
         // 上层会统一更新状态与路由，这里吞掉 Promise rejection 避免控制台噪音。
       });
     },
     [draftNodeByID, nodeById, onOpenDocument]
+  );
+
+  const handlePrimaryAction = useCallback(
+    (item: TreeItem<WorkspaceTreeItemData>) => {
+      if (item.data.type === "doc" && item.data.nodeId) {
+        openTreeDocument(item.data.nodeId);
+      }
+    },
+    [openTreeDocument]
   );
 
   const handleCreateChildDocument = useCallback(
@@ -1272,7 +1266,7 @@ export const WorkspaceTree = memo(function WorkspaceTree({
       if (currentNode.type !== "doc") {
         throw new Error("仅文档支持可见性设置");
       }
-      const documentID = (currentNode.documentId ?? currentNode.id ?? "").trim();
+      const documentID = resolveTreeDocumentId(currentNode);
       if (!documentID) {
         throw new Error("文档 ID 不存在");
       }
@@ -1290,7 +1284,7 @@ export const WorkspaceTree = memo(function WorkspaceTree({
     [nodeById, onUpdateDocumentVisibility, updatingVisibilityNodeIdSet]
   );
 
-  const handleCreateRootDocument = useCallback(async (format: DocumentFormat = "markdown") => {
+  const openCreateRootDocumentDialog = useCallback((format: DocumentFormat = "markdown") => {
     const normalizedFormat = normalizeDocumentFormat(format);
     setCreateNodeDialog({
       parentId: null,
@@ -1305,6 +1299,34 @@ export const WorkspaceTree = memo(function WorkspaceTree({
     }
   }, [loadDocumentTemplates]);
 
+  useEffect(() => {
+    if (onCreateDocumentRequestHandled) {
+      openCreateRootDocumentDialog();
+      onCreateDocumentRequestHandled();
+    }
+  }, [onCreateDocumentRequestHandled, openCreateRootDocumentDialog]);
+
+  const handleQuickCreateDocument = useCallback(async () => {
+    if (quickCreatePendingRef.current) {
+      return;
+    }
+    quickCreatePendingRef.current = true;
+    setIsQuickCreatingDocument(true);
+    try {
+      await onCreateNode({
+        parentId: null,
+        type: "doc",
+        title: DEFAULT_DOCUMENT_TITLE,
+        focusEditor: true
+      });
+    } catch (error) {
+      toast.error(`创建失败：${formatError(error)}`);
+    } finally {
+      quickCreatePendingRef.current = false;
+      setIsQuickCreatingDocument(false);
+    }
+  }, [onCreateNode]);
+
   const closeCreateNodeDialog = useCallback(() => {
     if (isCreateNodeDialogSubmitting) {
       return;
@@ -1313,12 +1335,16 @@ export const WorkspaceTree = memo(function WorkspaceTree({
   }, [isCreateNodeDialogSubmitting]);
 
   const openImportDialog = useCallback(
-    (nodeId: string | null) => {
+    (nodeId: string | null, mode: ImportDialogState["mode"] = "files") => {
+      if (importPendingRef.current) {
+        return;
+      }
       const currentNode = nodeId ? nodeById.get(nodeId) ?? null : null;
       const targetTitle = currentNode?.title?.trim() || "当前目录";
       setImportDialog({
         targetNodeId: nodeId,
         targetTitle,
+        mode,
         files: [],
         autoExtractTitle: false,
         result: null
@@ -1351,20 +1377,30 @@ export const WorkspaceTree = memo(function WorkspaceTree({
     );
   }, []);
 
+  const handleImportDialogFolderSelection = useCallback(({ files, folderManifest }: FolderUploadSelection) => {
+    setImportDialog((previousDialog) =>
+      previousDialog?.mode === "folder"
+        ? { ...previousDialog, files, folderManifest }
+        : previousDialog
+    );
+  }, []);
+
   const handleImportByDialog = useCallback(async () => {
-    if (!importDialog || isImportDialogSubmitting) {
+    if (!importDialog || importDialog.result || importPendingRef.current) {
       return;
     }
-    if (importDialog.files.length === 0) {
+    if (importDialog.files.length === 0 && !importDialog.folderManifest?.directories?.length) {
       toast.error("请先选择至少一个文件");
       return;
     }
+    importPendingRef.current = true;
     setIsImportDialogSubmitting(true);
     try {
       const result = await onImportDocuments({
         targetNodeId: importDialog.targetNodeId,
         files: importDialog.files,
-        autoExtractTitle: importDialog.autoExtractTitle
+        autoExtractTitle: importDialog.autoExtractTitle,
+        ...(importDialog.folderManifest ? { folderManifest: importDialog.folderManifest } : {})
       });
       setImportDialog((previousDialog) =>
         previousDialog
@@ -1377,12 +1413,19 @@ export const WorkspaceTree = memo(function WorkspaceTree({
       if (result.failedCount > 0) {
         toast.error(`导入完成，存在 ${result.failedCount} 个失败项`);
       }
+      const targetNodeId = importDialog.targetNodeId;
+      if (targetNodeId && result.createdNodes.length > 0) {
+        setManuallyExpandedNodeIds((previousNodeIds) =>
+          previousNodeIds.includes(targetNodeId) ? previousNodeIds : [...previousNodeIds, targetNodeId]
+        );
+      }
     } catch (error) {
       toast.error(`导入失败：${formatError(error)}`);
     } finally {
+      importPendingRef.current = false;
       setIsImportDialogSubmitting(false);
     }
-  }, [importDialog, isImportDialogSubmitting, onImportDocuments]);
+  }, [importDialog, onImportDocuments]);
 
   const handleCreateNodeByDialog = useCallback(async () => {
     if (!createNodeDialog || isCreateNodeDialogSubmitting) {
@@ -1405,7 +1448,7 @@ export const WorkspaceTree = memo(function WorkspaceTree({
 
     setIsCreateNodeDialogSubmitting(true);
     try {
-      const created = await onCreateNode({
+      await onCreateNode({
         parentId: createNodeDialog.parentId,
         type: createNodeDialog.type,
         title: normalizedTitle,
@@ -1413,18 +1456,13 @@ export const WorkspaceTree = memo(function WorkspaceTree({
         templateId: normalizedFormat === "markdown" ? createNodeDialog.templateId || undefined : undefined,
         format: createNodeDialog.type === "doc" && normalizedFormat !== "markdown" ? normalizedFormat : undefined
       });
-      if (created.docId) {
-        void onOpenDocument(created.docId).catch(() => {
-          // 上层会统一更新状态与路由，这里吞掉 Promise rejection 避免控制台噪音。
-        });
-      }
       setCreateNodeDialog(null);
     } catch (error) {
       toast.error(`创建失败：${formatError(error)}`);
     } finally {
       setIsCreateNodeDialogSubmitting(false);
     }
-  }, [createNodeDialog, isCreateNodeDialogSubmitting, onCreateNode, onOpenDocument]);
+  }, [createNodeDialog, isCreateNodeDialogSubmitting, onCreateNode]);
 
   const openEditDocumentIdentifierDialog = useCallback(
     (nodeId: string) => {
@@ -1433,7 +1471,7 @@ export const WorkspaceTree = memo(function WorkspaceTree({
         toast.error("仅文档支持设置标识");
         return;
       }
-      const documentID = (currentNode.documentId ?? currentNode.id ?? "").trim();
+      const documentID = resolveTreeDocumentId(currentNode);
       if (!documentID) {
         toast.error("文档 ID 不存在");
         return;
@@ -1530,7 +1568,7 @@ export const WorkspaceTree = memo(function WorkspaceTree({
     if (!currentNode || currentNode.type !== "doc") {
       return;
     }
-    const documentID = (currentNode.documentId ?? currentNode.id ?? "").trim();
+    const documentID = resolveTreeDocumentId(currentNode);
     if (!documentID) {
       return;
     }
@@ -1555,7 +1593,7 @@ export const WorkspaceTree = memo(function WorkspaceTree({
         toast.error("仅文档支持分享设置");
         return;
       }
-      const documentID = (currentNode.documentId ?? currentNode.id ?? "").trim();
+      const documentID = resolveTreeDocumentId(currentNode);
       if (!documentID) {
         toast.error("文档 ID 不存在");
         return;
@@ -1699,6 +1737,9 @@ export const WorkspaceTree = memo(function WorkspaceTree({
       if (!moveTarget.targetParentId) {
         return true;
       }
+      if (nodeById.get(moveTarget.targetParentId)?.importedFileKind === "unsupported") {
+        return false;
+      }
 
       const descendantNodeIdSet = new Set(collectDescendantNodeIds(draggingNodeID, nodeById));
       return !descendantNodeIdSet.has(moveTarget.targetParentId);
@@ -1721,6 +1762,9 @@ export const WorkspaceTree = memo(function WorkspaceTree({
         return;
       }
       if (moveTarget.targetParentId) {
+        if (nodeById.get(moveTarget.targetParentId)?.importedFileKind === "unsupported") {
+          return;
+        }
         const descendantNodeIdSet = new Set(collectDescendantNodeIds(draggingNodeID, nodeById));
         if (descendantNodeIdSet.has(moveTarget.targetParentId)) {
           return;
@@ -1785,10 +1829,10 @@ export const WorkspaceTree = memo(function WorkspaceTree({
         );
       }
       const currentNode = nodeById.get(nodeId) ?? null;
-      const currentDocumentID =
-        currentNode?.type === "doc" ? (currentNode.documentId ?? currentNode.id ?? "").trim() : "";
+      const currentDocumentID = resolveTreeDocumentId(currentNode);
       const isFolder = item.data.type === "folder" || item.isFolder;
-      const isActive = nodeId === activeDocId || (currentDocumentID !== "" && currentDocumentID === activeDocId);
+      const isUnsupportedFile = currentNode?.importedFileKind === "unsupported";
+      const isActive = !!currentDocumentID && (nodeId === activeDocId || currentDocumentID === activeDocId);
       const isActionMenuOpen = openActionNodeId === nodeId;
       const isInlineEditing = editingNodeId === nodeId;
       const isDraftNode = draftNodeByID.has(nodeId);
@@ -1804,6 +1848,7 @@ export const WorkspaceTree = memo(function WorkspaceTree({
       const isCurrentDocumentShared = currentShareConfig?.enabled === true;
       const currentDocumentFormat =
         currentNode?.type === "doc" ? normalizeDocumentFormat(currentNode.documentFormat) : "markdown";
+      const typeIcon = getTreeNodeIcon(currentNode, currentDocumentFormat);
       const currentDocumentVisibility: Visibility =
         currentNode?.type === "doc" ? currentNode.visibility ?? "member" : "member";
       const nodeTitleText = (currentNode?.title ?? item.data.title ?? "").trim() || "未命名文档";
@@ -1819,16 +1864,6 @@ export const WorkspaceTree = memo(function WorkspaceTree({
       const interactiveType = context.isRenaming || isInlineEditing ? undefined : "button";
       const InteractiveComponent = context.isRenaming || isInlineEditing ? "div" : "button";
       const treeInteractiveElementProps = !isInlineEditing ? ((context.interactiveElementProps as any) ?? {}) : {};
-
-      const openCurrentDocument = () => {
-        if (!currentDocumentID || isDraftNode) {
-          return;
-        }
-        setOpenActionNodeId(null);
-        void onOpenDocument(currentDocumentID).catch(() => {
-          // 上层会统一更新状态与路由，这里吞掉 Promise rejection 避免控制台噪音。
-        });
-      };
 
       return (
         <li {...(context.itemContainerWithChildrenProps as any)} className="m-0 p-0">
@@ -1862,19 +1897,23 @@ export const WorkspaceTree = memo(function WorkspaceTree({
                   ? (event: MouseEvent<HTMLElement>) => {
                       event.preventDefault();
                       event.stopPropagation();
-                      openCurrentDocument();
+                      openTreeDocument(nodeId);
                     }
                   : treeInteractiveElementProps.onClick
               }
               onKeyDown={
-                !isInlineEditing && currentNode?.type === "doc"
+                !isInlineEditing && currentNode
                   ? (event: ReactKeyboardEvent<HTMLElement>) => {
                       if (event.key !== "Enter" && event.key !== " ") {
                         return;
                       }
                       event.preventDefault();
                       event.stopPropagation();
-                      openCurrentDocument();
+                      if (currentNode.type === "folder") {
+                        context.toggleExpandedState();
+                      } else {
+                        openTreeDocument(nodeId);
+                      }
                     }
                   : treeInteractiveElementProps.onKeyDown
               }
@@ -1917,67 +1956,20 @@ export const WorkspaceTree = memo(function WorkspaceTree({
                 />
               ) : (
                 <>
-                  {currentNode?.type === "doc" ? (
-                    <Tooltip delayDuration={120}>
-                      <TooltipTrigger asChild>
-                        <span
-                          className={mergeClassNames(
-                            "mr-1 inline-flex h-[18px] w-[18px] shrink-0 items-center justify-center",
-                            resolveDocumentFormatIconClassName(currentDocumentFormat)
-                          )}
-                          aria-label={`文档格式：${resolveDocumentFormatLabel(currentDocumentFormat)}`}
-                        >
-                          {renderDocumentFormatIcon(currentDocumentFormat)}
-                        </span>
-                      </TooltipTrigger>
-                      <TooltipContent side="top">
-                        文档格式：{resolveDocumentFormatLabel(currentDocumentFormat)}
-                      </TooltipContent>
-                    </Tooltip>
-                  ) : null}
-                  {currentNode?.type === "doc" ? (
-                    (() => {
-                      const marker = resolveVisibilityMarkerConfig(currentDocumentVisibility);
-                      if (isUpdatingVisibility) {
-                        return (
-                          <Tooltip delayDuration={120}>
-                            <TooltipTrigger asChild>
-                              <span
-                                className="mr-1 inline-flex h-[18px] w-[18px] shrink-0 items-center justify-center text-[#64748b]"
-                                aria-label="正在更新可见性"
-                              >
-                                <LoaderCircle size={14} className="animate-spin" />
-                              </span>
-                            </TooltipTrigger>
-                            <TooltipContent side="top">正在更新可见性...</TooltipContent>
-                          </Tooltip>
-                        );
-                      }
-                      return (
-                        <Tooltip delayDuration={120}>
-                          <TooltipTrigger asChild>
-                            <span
-                              className={mergeClassNames(
-                                "mr-1 inline-flex h-[18px] w-[18px] shrink-0 items-center justify-center",
-                                marker.className
-                              )}
-                              aria-label={`可见性：${marker.label}`}
-                            >
-                              {marker.variant === "member" ? <Lock size={14} /> : null}
-                              {marker.variant === "authenticated" ? <LockOpen size={14} /> : null}
-                              {marker.variant === "public" ? (
-                                <span className="relative inline-flex h-[14px] w-[14px] items-center justify-center">
-                                  <Lock size={14} />
-                                  <span className="pointer-events-none absolute h-[2px] w-[15px] rotate-[-35deg] rounded-full bg-current" />
-                                </span>
-                              ) : null}
-                            </span>
-                          </TooltipTrigger>
-                          <TooltipContent side="top">可见性：{marker.label}</TooltipContent>
-                        </Tooltip>
-                      );
-                    })()
-                  ) : null}
+                  <Tooltip delayDuration={120}>
+                    <TooltipTrigger asChild>
+                      <span
+                        className={mergeClassNames(
+                          "mr-1 inline-flex h-[18px] w-[18px] shrink-0 items-center justify-center",
+                          resolveDocumentFormatIconClassName(currentDocumentFormat)
+                        )}
+                        aria-label={typeIcon.label}
+                      >
+                        {typeIcon.icon}
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent side="top">{typeIcon.label}</TooltipContent>
+                  </Tooltip>
                   <Tooltip delayDuration={120}>
                     <TooltipTrigger asChild>
                       <span
@@ -2032,59 +2024,78 @@ export const WorkspaceTree = memo(function WorkspaceTree({
                     role="menu"
                     aria-label="文档操作菜单"
                   >
-                    <button
-                      type="button"
-                      className="inline-flex min-h-[34px] w-full items-center gap-2 rounded-[8px] border-0 bg-transparent px-2.5 text-left text-[13px] text-[#2f2f30] hover:bg-[#f0f2f4] focus-visible:outline-none"
-                      role="menuitem"
-                      onMouseDown={stopTreeItemEvent}
-                      onClick={(event) => {
-                        stopTreeItemEvent(event);
-                        void handleCreateChildDocument(nodeId);
-                      }}
-                    >
-                      <FilePlus2 size={14} />
-                      <span>新建子文档</span>
-                    </button>
-                    <button
-                      type="button"
-                      className="inline-flex min-h-[34px] w-full items-center gap-2 rounded-[8px] border-0 bg-transparent px-2.5 text-left text-[13px] text-[#2f2f30] hover:bg-[#f0f2f4] focus-visible:outline-none"
-                      role="menuitem"
-                      onMouseDown={stopTreeItemEvent}
-                      onClick={(event) => {
-                        stopTreeItemEvent(event);
-                        void handleCreateSiblingDocument(nodeId);
-                      }}
-                    >
-                      <FilePlus2 size={14} />
-                      <span>新建同级文档</span>
-                    </button>
-                    <button
-                      type="button"
-                      className="inline-flex min-h-[34px] w-full items-center gap-2 rounded-[8px] border-0 bg-transparent px-2.5 text-left text-[13px] text-[#2f2f30] hover:bg-[#f0f2f4] focus-visible:outline-none"
-                      role="menuitem"
-                      onMouseDown={stopTreeItemEvent}
-                      onClick={(event) => {
-                        stopTreeItemEvent(event);
-                        void handleCreateChildFolder(nodeId);
-                      }}
-                    >
-                      <FolderPlus size={14} />
-                      <span>新建子目录</span>
-                    </button>
-                    <button
-                      type="button"
-                      className="inline-flex min-h-[34px] w-full items-center gap-2 rounded-[8px] border-0 bg-transparent px-2.5 text-left text-[13px] text-[#2f2f30] hover:bg-[#f0f2f4] focus-visible:outline-none"
-                      role="menuitem"
-                      onMouseDown={stopTreeItemEvent}
-                      onClick={(event) => {
-                        stopTreeItemEvent(event);
-                        openImportDialog(nodeId);
-                      }}
-                    >
-                      <FileUp size={14} />
-                      <span>导入</span>
-                    </button>
-                    {currentNode?.type === "doc" ? (
+                    {!isUnsupportedFile ? (
+                      <>
+                        <button
+                          type="button"
+                          className="inline-flex min-h-[34px] w-full items-center gap-2 rounded-[8px] border-0 bg-transparent px-2.5 text-left text-[13px] text-[#2f2f30] hover:bg-[#f0f2f4] focus-visible:outline-none"
+                          role="menuitem"
+                          onMouseDown={stopTreeItemEvent}
+                          onClick={(event) => {
+                            stopTreeItemEvent(event);
+                            void handleCreateChildDocument(nodeId);
+                          }}
+                        >
+                          <FilePlus2 size={14} />
+                          <span>新建子文档</span>
+                        </button>
+                        <button
+                          type="button"
+                          className="inline-flex min-h-[34px] w-full items-center gap-2 rounded-[8px] border-0 bg-transparent px-2.5 text-left text-[13px] text-[#2f2f30] hover:bg-[#f0f2f4] focus-visible:outline-none"
+                          role="menuitem"
+                          onMouseDown={stopTreeItemEvent}
+                          onClick={(event) => {
+                            stopTreeItemEvent(event);
+                            void handleCreateSiblingDocument(nodeId);
+                          }}
+                        >
+                          <FilePlus2 size={14} />
+                          <span>新建同级文档</span>
+                        </button>
+                        <button
+                          type="button"
+                          className="inline-flex min-h-[34px] w-full items-center gap-2 rounded-[8px] border-0 bg-transparent px-2.5 text-left text-[13px] text-[#2f2f30] hover:bg-[#f0f2f4] focus-visible:outline-none"
+                          role="menuitem"
+                          onMouseDown={stopTreeItemEvent}
+                          onClick={(event) => {
+                            stopTreeItemEvent(event);
+                            void handleCreateChildFolder(nodeId);
+                          }}
+                        >
+                          <FolderPlus size={14} />
+                          <span>新建子目录</span>
+                        </button>
+                        <button
+                          type="button"
+                          className="inline-flex min-h-[34px] w-full items-center gap-2 rounded-[8px] border-0 bg-transparent px-2.5 text-left text-[13px] text-[#2f2f30] hover:bg-[#f0f2f4] focus-visible:outline-none"
+                          role="menuitem"
+                          onMouseDown={stopTreeItemEvent}
+                          onClick={(event) => {
+                            stopTreeItemEvent(event);
+                            openImportDialog(nodeId);
+                          }}
+                        >
+                          <FileUp size={14} />
+                          <span>导入</span>
+                        </button>
+                        {currentNode?.type === "folder" ? (
+                          <button
+                            type="button"
+                            className="inline-flex min-h-[34px] w-full items-center gap-2 rounded-[8px] border-0 bg-transparent px-2.5 text-left text-[13px] text-[#2f2f30] hover:bg-[#f0f2f4] focus-visible:outline-none"
+                            role="menuitem"
+                            onMouseDown={stopTreeItemEvent}
+                            onClick={(event) => {
+                              stopTreeItemEvent(event);
+                              openImportDialog(nodeId, "folder");
+                            }}
+                          >
+                            <FolderUp size={14} />
+                            <span>上传文件夹</span>
+                          </button>
+                        ) : null}
+                      </>
+                    ) : null}
+                    {currentDocumentID ? (
                       <>
                         <div className="my-1 h-px bg-[#eceff3]" />
                         <button
@@ -2246,6 +2257,7 @@ export const WorkspaceTree = memo(function WorkspaceTree({
       documentShareConfigByDocumentID,
       editingNodeId,
       nodeById,
+      openTreeDocument,
       removeDraftNode,
       editingNodeTitle,
       loadingDocumentShareDocumentIDSet,
@@ -2257,6 +2269,9 @@ export const WorkspaceTree = memo(function WorkspaceTree({
       updatingVisibilityNodeIdSet
     ]
   );
+
+  const isFolderImport = importDialog?.mode === "folder";
+  const uploadedFolderName = importDialog?.folderManifest ? getWorkspaceFolderName(importDialog.folderManifest) : "";
 
   return (
     <TooltipProvider delayDuration={120}>
@@ -2272,92 +2287,122 @@ export const WorkspaceTree = memo(function WorkspaceTree({
           }}
         >
           <div
-            className="w-full max-w-[680px] rounded-[14px] bg-white p-5 shadow-[0_22px_48px_rgba(15,23,42,0.28)]"
+            className="max-h-[calc(100dvh-2rem)] w-full max-w-[680px] overflow-auto rounded-[14px] bg-white p-5 shadow-[0_22px_48px_rgba(15,23,42,0.28)]"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="workspace-import-dialog-title"
+            onKeyDown={(event) => {
+              if (event.key === "Escape") {
+                closeImportDialog();
+              }
+            }}
             onMouseDown={(event) => {
               event.stopPropagation();
             }}
           >
-            <input
-              ref={importFileInputRef}
-              type="file"
-              multiple
-              className="hidden"
-              accept=".md,.markdown,.txt,.html,.htm,.docx,.xlsx,.zip"
-              onChange={(event) => {
-                handleImportDialogFileSelection(event.target.files);
-                event.target.value = "";
-              }}
-            />
             <div className="mb-4">
-              <h3 className="m-0 text-[16px] font-semibold text-[#1f2328]">导入</h3>
+              <h3 id="workspace-import-dialog-title" className="m-0 text-[16px] font-semibold text-[#1f2328]">
+                {isFolderImport ? "上传文件夹" : "导入"}
+              </h3>
               <p className="mt-1 mb-0 text-[13px] leading-[1.55] text-[#5f6468]">
                 导入到：<span className="font-medium text-[#1f2328]">{importDialog.targetTitle}</span>
               </p>
-              <p className="mt-1 mb-0 text-[12px] text-[#6b7280]">
-                支持 `docx`、`xlsx`、`md`、`txt`、`html`、`zip`。ZIP 会按目录结构展开处理。
-              </p>
             </div>
-            <label className="mb-4 flex cursor-pointer items-start gap-3 rounded-[12px] border border-[#e5e7eb] bg-[#f8fafc] px-4 py-3">
-              <input
-                type="checkbox"
-                className="mt-[2px] h-4 w-4 rounded border-[#cbd5e1] text-[#2563eb] focus:ring-[#93c5fd]"
-                checked={importDialog.autoExtractTitle}
-                disabled={isImportDialogSubmitting}
-                onChange={(event) => {
-                  const checked = event.target.checked;
-                  setImportDialog((previousDialog) =>
-                    previousDialog
-                      ? {
-                          ...previousDialog,
-                          autoExtractTitle: checked
-                        }
-                      : previousDialog
-                  );
-                }}
-              />
-              <span className="min-w-0">
-                <span className="block text-[13px] font-medium text-[#1f2328]">自动提取文件名</span>
-                <span className="mt-1 block text-[12px] leading-[1.55] text-[#64748b]">
-                  HTML 优先取 `title`，其次 `h1`；Markdown 取第一个一级标题；其他文件仍使用文件名。
-                </span>
-              </span>
-            </label>
-            <div className="rounded-[12px] border border-dashed border-[#cbd5e1] bg-[#f8fafc] p-4">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div>
-                  <p className="m-0 text-[13px] font-medium text-[#1f2328]">选择要导入的文件</p>
-                  <p className="mt-1 mb-0 text-[12px] text-[#64748b]">
-                    当前请求内处理完成后会直接返回成功结果和失败清单。
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  className="inline-flex h-9 items-center gap-1.5 rounded-[9px] border border-[#d0d5db] bg-white px-3 text-[13px] text-[#344054] hover:bg-[#f8fafc] focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+            {!importDialog.result && !isFolderImport ? (
+              <label className="mb-4 flex cursor-pointer items-start gap-3 rounded-[12px] border border-[#e5e7eb] bg-[#f8fafc] px-4 py-3">
+                <input
+                  type="checkbox"
+                  className="mt-[2px] h-4 w-4 rounded border-[#cbd5e1] text-[#2563eb] focus:ring-[#93c5fd]"
+                  checked={importDialog.autoExtractTitle}
                   disabled={isImportDialogSubmitting}
-                  onClick={() => {
-                    importFileInputRef.current?.click();
+                  onChange={(event) => {
+                    const checked = event.target.checked;
+                    setImportDialog((previousDialog) =>
+                      previousDialog
+                        ? {
+                            ...previousDialog,
+                            autoExtractTitle: checked
+                          }
+                        : previousDialog
+                    );
                   }}
-                >
-                  <Upload size={14} />
-                  <span>选择文件</span>
-                </button>
+                />
+                <span className="min-w-0">
+                  <span className="block text-[13px] font-medium text-[#1f2328]">自动提取文件名</span>
+                  <span className="mt-1 block text-[12px] leading-[1.55] text-[#64748b]">
+                    HTML 优先取 `title`，其次 `h1`；Markdown 取第一个一级标题；其他文件仍使用文件名。
+                  </span>
+                </span>
+              </label>
+            ) : null}
+            {!importDialog.result ? (
+              <div className="rounded-[12px] border border-dashed border-[#cbd5e1] bg-[#f8fafc] p-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <p className="m-0 text-[13px] font-medium text-[#1f2328]">
+                      {isFolderImport ? "选择要导入的文件夹" : "选择要导入的文件"}
+                    </p>
+                    <p className="mt-1 mb-0 text-[12px] text-[#64748b]">
+                      {isFolderImport
+                        ? "保留原来的文件名和目录结构。"
+                        : "支持 docx、xlsx、md、txt、html 和 zip。"}
+                    </p>
+                  </div>
+                  {isFolderImport ? (
+                    <FolderUploadPicker
+                      disabled={isImportDialogSubmitting}
+                      onSelect={handleImportDialogFolderSelection}
+                    />
+                  ) : (
+                    <>
+                      <input
+                        ref={importFileInputRef}
+                        type="file"
+                        multiple
+                        className="hidden"
+                        accept=".md,.markdown,.txt,.html,.htm,.docx,.xlsx,.zip"
+                        onChange={(event) => {
+                          handleImportDialogFileSelection(event.target.files);
+                          event.target.value = "";
+                        }}
+                      />
+                      <button
+                        type="button"
+                        className="inline-flex h-9 items-center gap-1.5 rounded-[9px] border border-[#d0d5db] bg-white px-3 text-[13px] text-[#344054] hover:bg-[#f8fafc] focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+                        disabled={isImportDialogSubmitting}
+                        onClick={() => importFileInputRef.current?.click()}
+                      >
+                        <Upload size={14} />
+                        <span>选择文件</span>
+                      </button>
+                    </>
+                  )}
+                </div>
+                {uploadedFolderName ? (
+                  <p className="mt-4 mb-0 flex items-center gap-2 text-[13px] font-medium text-[#344054]">
+                    <Folder size={14} className="shrink-0" aria-hidden />
+                    <span className="truncate" title={uploadedFolderName}>{uploadedFolderName}</span>
+                    <span className="shrink-0 text-[12px] font-normal text-[#64748b]">{importDialog.files.length} 个文件</span>
+                  </p>
+                ) : importDialog.files.length > 0 ? (
+                  <ul className="mt-4 max-h-[180px] space-y-2 overflow-auto p-0">
+                    {importDialog.files.map((file, index) => (
+                      <li
+                        key={`${file.name}-${index}`}
+                        className="flex items-center justify-between gap-3 rounded-[10px] bg-white px-3 py-2 text-[12px] text-[#344054]"
+                      >
+                        <span className="min-w-0 truncate">{file.name}</span>
+                        <span className="shrink-0 text-[#64748b]">{Math.max(1, Math.round(file.size / 1024))} KB</span>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="mt-4 mb-0 text-[12px] text-[#8a8d90]">
+                    {isFolderImport ? "尚未选择文件夹。" : "尚未选择文件。"}
+                  </p>
+                )}
               </div>
-              {importDialog.files.length > 0 ? (
-                <ul className="mt-4 max-h-[180px] space-y-2 overflow-auto p-0">
-                  {importDialog.files.map((file) => (
-                    <li
-                      key={`${file.name}-${file.size}-${file.lastModified}`}
-                      className="flex items-center justify-between gap-3 rounded-[10px] bg-white px-3 py-2 text-[12px] text-[#344054]"
-                    >
-                      <span className="min-w-0 truncate">{file.name}</span>
-                      <span className="shrink-0 text-[#64748b]">{Math.max(1, Math.round(file.size / 1024))} KB</span>
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <p className="mt-4 mb-0 text-[12px] text-[#8a8d90]">尚未选择文件。</p>
-              )}
-            </div>
+            ) : null}
             {importDialog.result ? (
               <div className="mt-4 rounded-[12px] border border-[#e5e7eb] bg-[#fcfcfd] p-4">
                 <div className="flex flex-wrap items-center gap-3 text-[13px]">
@@ -2401,16 +2446,18 @@ export const WorkspaceTree = memo(function WorkspaceTree({
               >
                 {importDialog.result ? "关闭" : "取消"}
               </button>
-              <button
-                type="button"
-                className="inline-flex h-8 items-center rounded-[8px] border-0 bg-[#3b82f6] px-3 text-[13px] font-medium text-white hover:bg-[#2563eb] focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-60"
-                onClick={() => {
-                  void handleImportByDialog();
-                }}
-                disabled={isImportDialogSubmitting || importDialog.files.length === 0}
-              >
-                {isImportDialogSubmitting ? "导入中..." : "开始导入"}
-              </button>
+              {!importDialog.result ? (
+                <button
+                  type="button"
+                  className="inline-flex h-8 items-center rounded-[8px] border-0 bg-[#3b82f6] px-3 text-[13px] font-medium text-white hover:bg-[#2563eb] focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+                  onClick={() => {
+                    void handleImportByDialog();
+                  }}
+                  disabled={isImportDialogSubmitting || (importDialog.files.length === 0 && !uploadedFolderName)}
+                >
+                  {isImportDialogSubmitting ? "导入中..." : "开始导入"}
+                </button>
+              ) : null}
             </div>
           </div>
         </div>
@@ -2864,67 +2911,86 @@ export const WorkspaceTree = memo(function WorkspaceTree({
       ) : null}
       <div className="mb-2 flex h-11 items-center justify-between border-b border-[#d9dade] px-2">
         <span className="text-[18px] font-semibold text-[#1f2328]">目录</span>
-        <DropdownMenu modal={false}>
-          <DropdownMenuTrigger asChild>
-            <button
-              type="button"
-              className="inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-[8px] border-0 bg-transparent text-[#1f2328] transition-colors hover:bg-[#e7e8ea] data-[state=open]:bg-[#e7e8ea] focus:outline-none focus-visible:outline-none"
-              aria-label="打开目录快捷菜单"
-              disabled={isCreateNodeDialogSubmitting}
-            >
-              <Plus size={18} />
-            </button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent
-            align="end"
-            className="min-w-[148px]"
-            onCloseAutoFocus={(event) => {
-              // 弹窗创建关闭后不强制把焦点归回触发按钮，避免焦点跳动。
-              event.preventDefault();
-            }}
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            className="inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg text-[#1f2328] transition-colors hover:bg-[#e7e8ea] focus-visible:outline-2 focus-visible:outline-blue-700 disabled:opacity-60"
+            aria-label="新建文档"
+            title="新建文档"
+            disabled={isQuickCreatingDocument || isCreateNodeDialogSubmitting}
+            onClick={() => { void handleQuickCreateDocument(); }}
           >
-            <DropdownMenuItem
-              className="cursor-pointer"
-              onSelect={() => {
-                void handleCreateRootDocument();
+            <FilePlus2 size={18} />
+          </button>
+          <DropdownMenu modal={false}>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                className="inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-[8px] border-0 bg-transparent text-[#1f2328] transition-colors hover:bg-[#e7e8ea] data-[state=open]:bg-[#e7e8ea] focus:outline-none focus-visible:outline-none"
+                aria-label="打开目录快捷菜单"
+                disabled={isCreateNodeDialogSubmitting}
+              >
+                <Ellipsis size={18} />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent
+              align="end"
+              className="min-w-[148px]"
+              onCloseAutoFocus={(event) => {
+                // 弹窗创建关闭后不强制把焦点归回触发按钮，避免焦点跳动。
+                event.preventDefault();
               }}
             >
-              <FilePlus2 size={14} className="mr-2" />
-              <span>新建文档</span>
-            </DropdownMenuItem>
-            {officeCreationEnabled ? (
               <DropdownMenuItem
                 className="cursor-pointer"
                 onSelect={() => {
-                  void handleCreateRootDocument("docx");
+                  openCreateRootDocumentDialog();
                 }}
               >
-                <FileText size={14} className="mr-2" />
-                <span>新建 Word</span>
+                <FilePlus2 size={14} className="mr-2" />
+                <span>从模板新建</span>
               </DropdownMenuItem>
-            ) : null}
-            {officeCreationEnabled ? (
+              {officeCreationEnabled ? (
+                <DropdownMenuItem
+                  className="cursor-pointer"
+                  onSelect={() => {
+                    openCreateRootDocumentDialog("docx");
+                  }}
+                >
+                  <FileText size={14} className="mr-2" />
+                  <span>新建 Word</span>
+                </DropdownMenuItem>
+              ) : null}
+              {officeCreationEnabled ? (
+                <DropdownMenuItem
+                  className="cursor-pointer"
+                  onSelect={() => {
+                    openCreateRootDocumentDialog("xlsx");
+                  }}
+                >
+                <FileSpreadsheet size={14} className="mr-2" />
+                <span>新建表格</span>
+              </DropdownMenuItem>
+              ) : null}
               <DropdownMenuItem
                 className="cursor-pointer"
                 onSelect={() => {
-                  void handleCreateRootDocument("xlsx");
+                  openImportDialog(null);
                 }}
               >
-              <FileSpreadsheet size={14} className="mr-2" />
-              <span>新建表格</span>
-            </DropdownMenuItem>
-            ) : null}
-            <DropdownMenuItem
-              className="cursor-pointer"
-              onSelect={() => {
-                openImportDialog(null);
-              }}
-            >
-              <Upload size={14} className="mr-2" />
-              <span>导入</span>
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+                <Upload size={14} className="mr-2" />
+                <span>导入</span>
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                className="cursor-pointer"
+                onSelect={() => openImportDialog(null, "folder")}
+              >
+                <FolderUp size={14} className="mr-2" />
+                <span>上传文件夹</span>
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
       </div>
       {mergedNodes.length === 0 ? (
         <div className="mt-2.5 mr-2 mb-0 ml-2 flex min-h-[168px] flex-col items-center justify-end gap-3 pb-5 text-center">
@@ -2934,12 +3000,12 @@ export const WorkspaceTree = memo(function WorkspaceTree({
               type="button"
               className="inline-flex h-9 w-fit items-center gap-1.5 rounded-full border-0 bg-[#e1e4e8] px-4 text-[13px] font-medium text-[#2f2f30] transition-colors hover:bg-[#cfd4da] focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-60"
               onClick={() => {
-                void handleCreateRootDocument();
+                void handleQuickCreateDocument();
               }}
-              disabled={isCreateNodeDialogSubmitting}
+              disabled={isQuickCreatingDocument || isCreateNodeDialogSubmitting}
             >
               <FilePlus2 size={14} />
-              <span>{isCreateNodeDialogSubmitting ? "创建中..." : "新建第一篇文档"}</span>
+              <span>{isQuickCreatingDocument ? "创建中..." : "新建第一篇文档"}</span>
             </button>
             <button
               type="button"
@@ -2960,7 +3026,7 @@ export const WorkspaceTree = memo(function WorkspaceTree({
           getItemTitle={(item) => item.data.title}
           viewState={viewState}
           autoFocus={false}
-          defaultInteractionMode={InteractionMode.ClickArrowToExpand}
+          defaultInteractionMode={InteractionMode.ClickItemToExpand}
           canDragAndDrop={isDesktopDragEnabled}
           canDropOnFolder
           canDropOnNonFolder

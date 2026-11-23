@@ -132,6 +132,7 @@ type DocumentShareService struct {
 	documentAttachmentRepo repository.DocumentAttachmentRepository
 	spaceRepo              repository.SpaceRepository
 	imageHostingService    *ImageHostingService
+	visibilityService      *VisibilityService
 	nowFn                  func() time.Time
 }
 
@@ -142,6 +143,7 @@ func NewDocumentShareService(
 	documentAttachmentRepo repository.DocumentAttachmentRepository,
 	spaceRepo repository.SpaceRepository,
 	imageHostingService *ImageHostingService,
+	visibilityService *VisibilityService,
 ) *DocumentShareService {
 	resolvedShareRepo := shareRepo
 	if resolvedShareRepo == nil && db != nil {
@@ -154,6 +156,7 @@ func NewDocumentShareService(
 		documentAttachmentRepo: documentAttachmentRepo,
 		spaceRepo:              spaceRepo,
 		imageHostingService:    imageHostingService,
+		visibilityService:      visibilityService,
 		nowFn:                  time.Now,
 	}
 }
@@ -421,11 +424,28 @@ func (s *DocumentShareService) VerifyPassword(
 	return resolved, nil
 }
 
+func (s *DocumentShareService) DocumentCopyAllowed(ctx context.Context, documentID, viewerID string) (bool, error) {
+	return s.visibilityService.DocumentCopyAllowed(ctx, documentID, viewerID)
+}
+
+func (s *DocumentShareService) DocumentExportAllowed(ctx context.Context, documentID, viewerID string) (bool, error) {
+	return s.visibilityService.DocumentExportAllowed(ctx, documentID, viewerID)
+}
+
+func (s *DocumentShareService) CheckViewer(ctx context.Context, documentID, viewerID string) error {
+	denied, err := s.visibilityService.IsDocumentExplicitlyDenied(ctx, documentID, viewerID)
+	if denied {
+		return ErrDocumentShareAccessDenied
+	}
+	return err
+}
+
 // BuildReaderPageByRouteKey 构建分享阅读页数据。
 func (s *DocumentShareService) BuildReaderPageByRouteKey(
 	ctx context.Context,
 	spaceID string,
 	docKey string,
+	viewerID string,
 ) (DocumentSharePageResult, error) {
 	if s == nil || s.readerPageRepo == nil {
 		return DocumentSharePageResult{}, errors.New("document share service dependencies are nil")
@@ -437,6 +457,7 @@ func (s *DocumentShareService) BuildReaderPageByRouteKey(
 
 	readerSvc := &ReaderPageService{
 		readerPageRepo:         s.readerPageRepo,
+		visibilityService:      s.visibilityService,
 		documentAttachmentRepo: s.documentAttachmentRepo,
 	}
 	documentRow, err := readerSvc.loadDocumentRow(ctx, resolvedShare.DocumentID)
@@ -450,7 +471,7 @@ func (s *DocumentShareService) BuildReaderPageByRouteKey(
 		return DocumentSharePageResult{}, ErrDocumentShareNotFound
 	}
 
-	tree, err := readerSvc.loadTree(ctx, spaceID)
+	tree, err := readerSvc.loadTree(ctx, spaceID, viewerID)
 	if err != nil {
 		return DocumentSharePageResult{}, err
 	}
@@ -480,32 +501,50 @@ func (s *DocumentShareService) BuildReaderPageByRouteKey(
 	documentIdentifier := normalizeReaderOptionalString(documentRow.ReaderSlug)
 	documentRouteKey := resolveReaderDocumentRouteKey(documentIDValue, documentRow.ReaderSlug)
 
+	copyAllowed, err := s.DocumentCopyAllowed(ctx, documentIDValue, viewerID)
+	if err != nil {
+		return DocumentSharePageResult{}, err
+	}
+	exportAllowed, err := s.DocumentExportAllowed(ctx, documentIDValue, viewerID)
+	if err != nil {
+		return DocumentSharePageResult{}, err
+	}
+
+	imageURL := ""
+	if documentRow.ImportedFileKind == models.ImportedFileKindImage {
+		imageURL = buildSharedImportedImageURL(strings.TrimSpace(spaceID), documentRouteKey)
+	}
+
 	page := ReaderPageViewModel{
+		CopyDenied:   !copyAllowed,
+		ExportDenied: !exportAllowed,
 		Space: ReaderSpaceViewModel{
 			ID:    strings.TrimSpace(spaceID),
 			Name:  spaceName,
 			Title: pageTitle,
 		},
 		Document: ReaderDocumentViewModel{
-			ID:             documentIDValue,
-			NodeID:         strings.TrimSpace(documentRow.NodeID),
-			Identifier:     normalizeReaderString(documentIdentifier),
-			RouteKey:       documentRouteKey,
-			ThemeID:        strings.TrimSpace(documentRow.ThemeID),
-			Format:         models.NormalizeDocumentFormat(documentRow.Format),
-			Visibility:     normalizeReaderVisibility(documentRow.Visibility),
-			Title:          documentTitle,
-			ContentMD:      documentRow.ContentMD,
-			RenderStatus:   models.NormalizeDocumentRenderStatus(documentRow.RenderStatus),
-			RenderError:    strings.TrimSpace(documentRow.RenderError),
-			RenderedAt:     formatReaderOptionalTime(documentRow.RenderedAt),
-			Version:        documentRow.Version,
-			SourceBlobID:   normalizeReaderOptionalString(documentRow.SourceBlobID),
-			SourceFileName: normalizeReaderOptionalString(documentRow.SourceFileName),
-			SourceMimeType: normalizeReaderOptionalString(documentRow.SourceMimeType),
-			ContentVersion: normalizeReaderContentVersion(documentRow.ContentVersion, documentRow.Version),
-			AuthorNickname: normalizeReaderAuthorNickname(documentRow.AuthorNickname),
-			UpdatedAt:      formatReaderTime(documentRow.UpdatedAt),
+			ID:               documentIDValue,
+			NodeID:           strings.TrimSpace(documentRow.NodeID),
+			Identifier:       normalizeReaderString(documentIdentifier),
+			RouteKey:         documentRouteKey,
+			ThemeID:          strings.TrimSpace(documentRow.ThemeID),
+			Format:           models.NormalizeDocumentFormat(documentRow.Format),
+			ImportedFileKind: documentRow.ImportedFileKind,
+			ImportedImageURL: imageURL,
+			Visibility:       normalizeReaderVisibility(documentRow.Visibility),
+			Title:            documentTitle,
+			ContentMD:        documentRow.ContentMD,
+			RenderStatus:     models.NormalizeDocumentRenderStatus(documentRow.RenderStatus),
+			RenderError:      strings.TrimSpace(documentRow.RenderError),
+			RenderedAt:       formatReaderOptionalTime(documentRow.RenderedAt),
+			Version:          documentRow.Version,
+			SourceBlobID:     normalizeReaderOptionalString(documentRow.SourceBlobID),
+			SourceFileName:   normalizeReaderOptionalString(documentRow.SourceFileName),
+			SourceMimeType:   normalizeReaderOptionalString(documentRow.SourceMimeType),
+			ContentVersion:   normalizeReaderContentVersion(documentRow.ContentVersion, documentRow.Version),
+			AuthorNickname:   normalizeReaderAuthorNickname(documentRow.AuthorNickname),
+			UpdatedAt:        formatReaderTime(documentRow.UpdatedAt),
 		},
 		Attachments: attachments,
 		Tree:        tree,
@@ -545,7 +584,8 @@ func (s *DocumentShareService) BuildAttachmentAccessURLByRouteKey(
 		return DocumentShareAttachmentAccessResult{}, err
 	}
 	if strings.TrimSpace(targetAttachment.DocumentID) != resolvedShare.DocumentID ||
-		targetAttachment.Status == models.EntityStatusDeleted {
+		targetAttachment.Status == models.EntityStatusDeleted ||
+		models.IsImportedImageObjectKey(targetAttachment.ObjectKey) {
 		return DocumentShareAttachmentAccessResult{}, ErrDocumentShareNotFound
 	}
 

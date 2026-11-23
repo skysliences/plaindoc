@@ -100,6 +100,15 @@ func (p *DatabaseProvider) Search(ctx context.Context, request SearchRequest) (S
 		return SearchResponse{Total: 0, Hits: []SearchHit{}}, nil
 	}
 
+	if len(request.ExcludedDocumentIDs) > 0 {
+		visible := rows[:0]
+		for _, row := range rows {
+			if _, excluded := request.ExcludedDocumentIDs[strings.TrimSpace(row.DocumentID)]; !excluded {
+				visible = append(visible, row)
+			}
+		}
+		rows = visible
+	}
 	filteredRows, err := p.filterRowsByRole(ctx, request, rows)
 	if err != nil {
 		return SearchResponse{}, err

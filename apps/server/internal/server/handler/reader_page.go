@@ -21,10 +21,12 @@ import (
 	"github.com/lifei6671/plaindoc/apps/server/internal/ssr/pool"
 	"github.com/lifei6671/plaindoc/apps/server/internal/ssr/protocol"
 	"github.com/lifei6671/plaindoc/apps/server/internal/storage/models"
+	"github.com/lifei6671/plaindoc/apps/server/internal/storage/repository"
 	"github.com/oklog/ulid/v2"
 )
 
 type readerPageHandler struct {
+	activityRepo                 repository.AuditLogRepository
 	authService                  *service.AuthService
 	readerPageService            *service.ReaderPageService
 	dispatcher                   *pool.Dispatcher
@@ -43,16 +45,21 @@ type readerPageViewerIdentity struct {
 }
 
 type readerPagePayload struct {
-	Space           service.ReaderSpaceViewModel                `json:"space"`
-	Document        service.ReaderDocumentViewModel             `json:"document"`
-	Attachments     []service.ReaderDocumentAttachmentViewModel `json:"attachments"`
-	Tree            []service.ReaderTreeNodeViewModel           `json:"tree"`
-	ActiveDocID     string                                      `json:"activeDocId"`
-	RequestOrigin   string                                      `json:"requestOrigin,omitempty"`
-	Viewer          readerPageViewerIdentity                    `json:"viewer"`
-	OfficeRendering readerPageOfficeRenderingState              `json:"officeRendering"`
-	Access          *readerPageAccessState                      `json:"access,omitempty"`
-	Share           *readerPageShareState                       `json:"share,omitempty"`
+	ExportDenied          bool                                        `json:"exportDenied,omitempty"`
+	CopyDenied            bool                                        `json:"copyDenied,omitempty"`
+	TrackDocumentActivity bool                                        `json:"trackDocumentActivity,omitempty"`
+	CreateDocumentURL     string                                      `json:"createDocumentUrl,omitempty"`
+	EditURL               string                                      `json:"editUrl,omitempty"`
+	Space                 service.ReaderSpaceViewModel                `json:"space"`
+	Document              service.ReaderDocumentViewModel             `json:"document"`
+	Attachments           []service.ReaderDocumentAttachmentViewModel `json:"attachments"`
+	Tree                  []service.ReaderTreeNodeViewModel           `json:"tree"`
+	ActiveDocID           string                                      `json:"activeDocId"`
+	RequestOrigin         string                                      `json:"requestOrigin,omitempty"`
+	Viewer                readerPageViewerIdentity                    `json:"viewer"`
+	OfficeRendering       readerPageOfficeRenderingState              `json:"officeRendering"`
+	Access                *readerPageAccessState                      `json:"access,omitempty"`
+	Share                 *readerPageShareState                       `json:"share,omitempty"`
 }
 
 type readerPageAccessState struct {
@@ -106,7 +113,7 @@ func NewReaderPageHandler(
 	}
 }
 
-// Space 渲染空间阅读入口：自动跳转到首篇可读文档。
+// Space 将访客引导到空间内首篇可读文档。
 func (h *readerPageHandler) Space(c *gin.Context) {
 	if h == nil || h.readerPageService == nil {
 		c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(readerFallbackUnavailableHTML))
@@ -124,6 +131,10 @@ func (h *readerPageHandler) Space(c *gin.Context) {
 		return
 	}
 
+	appendVaryHeader(c, "Authorization")
+	appendVaryHeader(c, "Cookie")
+	c.Header("Cache-Control", "private, no-store, max-age=0")
+
 	viewer := h.resolveOptionalViewerIdentity(c)
 	documentID, err := h.readerPageService.ResolveLandingDocumentID(
 		c.Request.Context(),
@@ -131,6 +142,13 @@ func (h *readerPageHandler) Space(c *gin.Context) {
 		viewer.UserID,
 	)
 	if err != nil {
+		if viewer.Authenticated && errors.Is(err, service.ErrDocumentNotFound) {
+			canCreate, permissionErr := h.readerPageService.CanCreateDocument(c.Request.Context(), spaceID, viewer.UserID)
+			if permissionErr == nil && canCreate {
+				c.Redirect(http.StatusSeeOther, h.webOrigin+"/editor/"+url.PathEscape(spaceID)+"?from=reader&create=document")
+				return
+			}
+		}
 		switch {
 		case errors.Is(err, service.ErrSpaceNotFound), errors.Is(err, service.ErrDocumentNotFound):
 			h.renderFriendlyErrorPage(
@@ -255,15 +273,25 @@ func (h *readerPageHandler) Page(c *gin.Context) {
 	}
 
 	payload := readerPagePayload{
-		Space:           viewModel.Space,
-		Document:        viewModel.Document,
-		Attachments:     viewModel.Attachments,
-		Tree:            viewModel.Tree,
-		ActiveDocID:     viewModel.ActiveDocID,
-		RequestOrigin:   resolveRequestOrigin(c),
-		Viewer:          viewer,
-		OfficeRendering: h.resolveOfficeRenderingState(c.Request.Context()),
+		CopyDenied:            viewModel.CopyDenied,
+		ExportDenied:          viewModel.ExportDenied,
+		TrackDocumentActivity: viewer.Authenticated,
+		Space:                 viewModel.Space,
+		Document:              viewModel.Document,
+		Attachments:           viewModel.Attachments,
+		Tree:                  viewModel.Tree,
+		ActiveDocID:           viewModel.ActiveDocID,
+		RequestOrigin:         resolveRequestOrigin(c),
+		Viewer:                viewer,
+		OfficeRendering:       h.resolveOfficeRenderingState(c.Request.Context()),
 	}
+	if viewModel.CanCreateDocument {
+		payload.CreateDocumentURL = h.webOrigin + "/editor/" + url.PathEscape(spaceID) + "?from=reader&create=document"
+	}
+	if viewModel.CanEdit {
+		payload.EditURL = h.webOrigin + "/editor/" + url.PathEscape(spaceID) + "/" + url.PathEscape(viewModel.Document.ID) + "?from=reader"
+	}
+	recordDocumentActivity(c, h.activityRepo, viewer.UserID, viewModel.Document.ID, "read")
 	h.renderReaderPayload(c, http.StatusOK, spaceID, documentID, payload, true)
 }
 
@@ -316,8 +344,11 @@ func (h *readerPageHandler) GetOnlyOfficeViewConfig(c *gin.Context) {
 		h.onlyOfficeConfigService,
 		h.onlyOfficeTokenService,
 		viewModel.Document,
+		!viewModel.CopyDenied,
+		!viewModel.ExportDenied,
 		viewer.UserID,
 		viewer.Name,
+		false,
 	)
 	if err != nil {
 		h.logError("reader onlyoffice view config resolve failed", err, "space_id", spaceID, "document_id", documentID)
@@ -379,10 +410,15 @@ func (h *readerPageHandler) CreateOfficeSourceAccessLink(c *gin.Context) {
 		return
 	}
 
+	if viewModel.ExportDenied {
+		writeDocumentExportForbidden(c)
+		return
+	}
 	downloadURL, fileName, expiresAt, err := buildOfficeSourceAccessLink(
 		h.onlyOfficeTokenService,
 		viewModel.Document,
 		viewer.UserID,
+		false,
 	)
 	if err != nil {
 		h.logError("reader office source access link resolve failed", err, "space_id", spaceID, "document_id", documentID)
@@ -854,6 +890,10 @@ func buildReaderFallbackHTML(payload readerPagePayload) string {
 	}
 
 	bodyContent := fmt.Sprintf("<pre>%s</pre>", escapedDocument)
+	if payload.Document.ImportedFileKind == models.ImportedFileKindImage && payload.Document.ImportedImageURL != "" {
+		bodyContent = fmt.Sprintf(`<img class="reader-fallback-image" src="%s" alt="%s" />`,
+			template.HTMLEscapeString(payload.Document.ImportedImageURL), escapedDocumentTitle)
+	}
 	headerContent := fmt.Sprintf(
 		`<p class="reader-meta">空间：%s</p><h1 class="reader-title">%s</h1>`,
 		escapedSpaceName,
@@ -876,6 +916,23 @@ func buildReaderFallbackHTML(payload readerPagePayload) string {
 		)
 	}
 
+	homeNav := ""
+	if payload.Share == nil || !payload.Share.Enabled {
+		homeNav = `<nav aria-label="空间导航"><a class="reader-home-link" href="/"><span aria-hidden="true">←</span> 返回首页</a>`
+		if payload.CreateDocumentURL != "" && !isAccessDenied {
+			homeNav += ` <a class="reader-home-link" href="` + template.HTMLEscapeString(payload.CreateDocumentURL) + `" aria-label="新建文档" title="新建文档">+</a>`
+		}
+		if payload.EditURL != "" && !isAccessDenied {
+			homeNav += ` <a class="reader-home-link" href="` + template.HTMLEscapeString(payload.EditURL) + `">编辑文档</a>`
+		}
+		homeNav += "</nav>"
+	}
+
+	printPolicy := ""
+	if payload.ExportDenied {
+		printPolicy = `<style>@media print { .reader-shell { display: none !important; } }</style>`
+	}
+
 	return fmt.Sprintf(`<!doctype html>
 <html lang="zh-CN">
   <head>
@@ -883,29 +940,36 @@ func buildReaderFallbackHTML(payload readerPagePayload) string {
     <meta name="viewport" content="width=device-width, initial-scale=1" />
 %s
     <title>%s</title>
+    %s
     <link rel="preload" href="/assets/google-sans-code-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin />
     <link rel="stylesheet" href="/assets/font-google-sans-code.css?v=20260224" />
     <style>
       body { margin: 0; font-family: "Google Sans Code", "PingFang SC", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif; background: #f5f7fb; color: #1f2937; }
       .reader-shell { max-width: 980px; margin: 24px auto; background: #fff; border: 1px solid #dbe2ea; border-radius: 14px; padding: 20px; box-shadow: 0 10px 30px rgba(15, 23, 42, 0.06); }
       .reader-meta { font-size: 12px; color: #6b7280; margin-bottom: 12px; }
+      .reader-home-link { display: inline-block; margin-bottom: 10px; padding: 7px 10px; border: 1px solid #cbd5e1; border-radius: 8px; color: #334155; font-size: 14px; font-weight: 600; text-decoration: none; }
+      .reader-home-link:hover { background: #eef4fb; }
+      @media print { .reader-home-link { display: none; } }
       .reader-title { font-size: 28px; font-weight: 700; margin: 0 0 18px; }
       .reader-fallback-notice { margin: 0 0 14px; color: #92400e; background: #fff7ed; border: 1px solid #fed7aa; border-radius: 8px; padding: 10px 12px; }
       .reader-fallback-denied { margin: 0; border: 1px solid #e2e8f0; background: #f8fafc; border-radius: 12px; padding: 16px; }
       .reader-fallback-denied h2 { margin: 0; color: #0f172a; font-size: 18px; line-height: 1.4; }
       .reader-fallback-denied p { margin: 8px 0 0; color: #475569; font-size: 14px; line-height: 1.7; }
+      .reader-fallback-image { display: block; max-width: 100%%; height: auto; margin: 0 auto; }
       pre { white-space: pre-wrap; word-break: break-word; margin: 0; font-size: 14px; line-height: 1.7; font-family: "Google Sans Code", "SFMono-Regular", Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
     </style>
   </head>
   <body>
     <main class="reader-shell">
       %s
+      %s
       <p class="reader-fallback-notice">SSR 渲染暂时不可用，已降级为基础阅读模式。</p>
       %s
     </main>
     <script id="plaindoc-reader-initial-state" type="application/json">%s</script>
+    <script src="/assets/document-copy.js" defer></script>
   </body>
-</html>`, robotsMeta, escapedPageTitle, headerContent, bodyContent, stateJSON)
+</html>`, robotsMeta, escapedPageTitle, printPolicy, homeNav, headerContent, bodyContent, stateJSON)
 }
 
 func escapeJSONForHTMLScript(rawJSON string) string {

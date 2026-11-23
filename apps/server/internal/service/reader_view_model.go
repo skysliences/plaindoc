@@ -1,9 +1,22 @@
 package service
 
-import "github.com/lifei6671/plaindoc/apps/server/internal/storage/models"
+import (
+	"net/url"
+
+	"github.com/lifei6671/plaindoc/apps/server/internal/storage/models"
+)
+
+func BuildDocumentImportedImageURL(documentID string) string {
+	return "/api/docs/" + url.PathEscape(documentID) + "/imported-image"
+}
+
+func buildSharedImportedImageURL(spaceID, docKey string) string {
+	return "/api/shares/" + url.PathEscape(spaceID) + "/" + url.PathEscape(docKey) + "/imported-image"
+}
 
 // ReaderTreeNodeViewModel 表示阅读页目录树节点。
 type ReaderTreeNodeViewModel struct {
+	ImportedFileKind   models.ImportedFileKind   `json:"importedFileKind,omitempty"`
 	ID                 string                    `json:"id"`
 	DocumentID         *string                   `json:"documentId,omitempty"`
 	DocumentIdentifier *string                   `json:"documentIdentifier,omitempty"`
@@ -19,25 +32,27 @@ type ReaderTreeNodeViewModel struct {
 
 // ReaderDocumentViewModel 表示阅读页正文数据。
 type ReaderDocumentViewModel struct {
-	ID             string                      `json:"id"`
-	NodeID         string                      `json:"nodeId"`
-	Identifier     string                      `json:"identifier,omitempty"`
-	RouteKey       string                      `json:"routeKey"`
-	ThemeID        string                      `json:"themeId"`
-	Format         models.DocumentFormat       `json:"format"`
-	Visibility     models.Visibility           `json:"visibility"`
-	Title          string                      `json:"title"`
-	ContentMD      string                      `json:"contentMd"`
-	RenderStatus   models.DocumentRenderStatus `json:"renderStatus"`
-	RenderError    string                      `json:"renderError"`
-	RenderedAt     string                      `json:"renderedAt,omitempty"`
-	Version        int                         `json:"version"`
-	SourceBlobID   *string                     `json:"sourceBlobId,omitempty"`
-	SourceFileName *string                     `json:"sourceFileName,omitempty"`
-	SourceMimeType *string                     `json:"sourceMimeType,omitempty"`
-	ContentVersion int                         `json:"contentVersion"`
-	AuthorNickname string                      `json:"authorNickname"`
-	UpdatedAt      string                      `json:"updatedAt"`
+	ImportedFileKind models.ImportedFileKind     `json:"importedFileKind,omitempty"`
+	ImportedImageURL string                      `json:"importedImageUrl,omitempty"`
+	ID               string                      `json:"id"`
+	NodeID           string                      `json:"nodeId"`
+	Identifier       string                      `json:"identifier,omitempty"`
+	RouteKey         string                      `json:"routeKey"`
+	ThemeID          string                      `json:"themeId"`
+	Format           models.DocumentFormat       `json:"format"`
+	Visibility       models.Visibility           `json:"visibility"`
+	Title            string                      `json:"title"`
+	ContentMD        string                      `json:"contentMd"`
+	RenderStatus     models.DocumentRenderStatus `json:"renderStatus"`
+	RenderError      string                      `json:"renderError"`
+	RenderedAt       string                      `json:"renderedAt,omitempty"`
+	Version          int                         `json:"version"`
+	SourceBlobID     *string                     `json:"sourceBlobId,omitempty"`
+	SourceFileName   *string                     `json:"sourceFileName,omitempty"`
+	SourceMimeType   *string                     `json:"sourceMimeType,omitempty"`
+	ContentVersion   int                         `json:"contentVersion"`
+	AuthorNickname   string                      `json:"authorNickname"`
+	UpdatedAt        string                      `json:"updatedAt"`
 }
 
 // ReaderDocumentAttachmentViewModel 表示阅读页附件元数据。
@@ -60,9 +75,13 @@ type ReaderSpaceViewModel struct {
 
 // ReaderPageViewModel 表示阅读页 SSR 所需完整输入。
 type ReaderPageViewModel struct {
-	Space       ReaderSpaceViewModel                `json:"space"`
-	Document    ReaderDocumentViewModel             `json:"document"`
-	Attachments []ReaderDocumentAttachmentViewModel `json:"attachments"`
-	Tree        []ReaderTreeNodeViewModel           `json:"tree"`
-	ActiveDocID string                              `json:"activeDocId"`
+	ExportDenied      bool                                `json:"-"`
+	CopyDenied        bool                                `json:"-"`
+	CanCreateDocument bool                                `json:"-"`
+	CanEdit           bool                                `json:"-"`
+	Space             ReaderSpaceViewModel                `json:"space"`
+	Document          ReaderDocumentViewModel             `json:"document"`
+	Attachments       []ReaderDocumentAttachmentViewModel `json:"attachments"`
+	Tree              []ReaderTreeNodeViewModel           `json:"tree"`
+	ActiveDocID       string                              `json:"activeDocId"`
 }

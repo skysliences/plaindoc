@@ -1,11 +1,9 @@
 {{ define "space_cover_card" }}
-<a class="space-card" data-space-id="{{ .SpaceID }}" href="/r/{{ .SpaceID }}" target="_blank" rel="noopener noreferrer" aria-label="进入空间 {{ .Name }}">
+<a class="space-card" data-space-id="{{ .SpaceID }}" href="/r/{{ .SpaceID }}" aria-label="进入空间 {{ .Name }}">
   {{ if .CoverURL }}
     <img class="space-cover-image" src="{{ .CoverURL }}" alt="{{ .Name }} 封面" loading="lazy" />
   {{ else }}
-    <div class="space-cover-placeholder" aria-label="{{ .Name }} 无封面">
-      <span>暂无封面</span>
-    </div>
+    <img class="space-cover-image" src="/space-covers/{{ .SpaceID }}" alt="{{ .Name }} 封面" loading="lazy" />
   {{ end }}
 </a>
 {{ end }}

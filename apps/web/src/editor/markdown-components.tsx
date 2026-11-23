@@ -203,12 +203,14 @@ function CodeBlockCopyButton({ codeText }: CodeBlockCopyButtonProps) {
     };
   }, []);
 
-  const handleClick = async () => {
-    if (!codeText) {
+  const handleClick = async (event: React.MouseEvent<HTMLButtonElement>) => {
+    const button = event.currentTarget;
+    if (button.closest("[data-document-copy-denied]") || !codeText) {
       return;
     }
     try {
       await copyTextToClipboard(codeText);
+      button.dispatchEvent(new CustomEvent("plaindoc:clipboard-copy", { bubbles: true }));
       setCopyState("success");
       if (resetTimerRef.current !== null) {
         window.clearTimeout(resetTimerRef.current);

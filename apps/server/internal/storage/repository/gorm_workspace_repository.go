@@ -162,6 +162,19 @@ func (r *gormWorkspaceRepository) CreateSpace(ctx context.Context, space *models
 	return r.db.WithContext(ctx).Create(space).Error
 }
 
+func (r *gormWorkspaceRepository) CreateSpaceWithDocument(
+	ctx context.Context, space *models.Space, initial WorkspaceCreateNodeParams,
+) error {
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		writer := *r
+		writer.db = tx
+		if err := writer.CreateSpace(ctx, space); err != nil {
+			return err
+		}
+		return writer.CreateNode(ctx, initial)
+	})
+}
+
 func (r *gormWorkspaceRepository) GetSpacePermissionSnapshot(
 	ctx context.Context,
 	spaceID string,
@@ -261,16 +274,17 @@ func (r *gormWorkspaceRepository) ListTreeNodesBySpaceID(
 	}
 
 	type nodeRow struct {
-		NodeID             string          `gorm:"column:node_id"`
-		DocumentID         *string         `gorm:"column:document_id"`
-		ReaderSlug         *string         `gorm:"column:reader_slug"`
-		SpaceID            string          `gorm:"column:space_id"`
-		ParentNodeID       *string         `gorm:"column:parent_node_id"`
-		Type               models.NodeType `gorm:"column:type"`
-		Title              string          `gorm:"column:title"`
-		Sort               int             `gorm:"column:sort"`
-		DocumentVisibility *string         `gorm:"column:document_visibility"`
-		DocumentFormat     *string         `gorm:"column:document_format"`
+		NodeID             string                  `gorm:"column:node_id"`
+		DocumentID         *string                 `gorm:"column:document_id"`
+		ReaderSlug         *string                 `gorm:"column:reader_slug"`
+		SpaceID            string                  `gorm:"column:space_id"`
+		ParentNodeID       *string                 `gorm:"column:parent_node_id"`
+		Type               models.NodeType         `gorm:"column:type"`
+		Title              string                  `gorm:"column:title"`
+		Sort               int                     `gorm:"column:sort"`
+		DocumentVisibility *string                 `gorm:"column:document_visibility"`
+		DocumentFormat     *string                 `gorm:"column:document_format"`
+		ImportedFileKind   models.ImportedFileKind `gorm:"column:imported_file_kind"`
 	}
 
 	var rows []nodeRow
@@ -283,6 +297,7 @@ func (r *gormWorkspaceRepository) ListTreeNodesBySpaceID(
 			qualifiedColumn("n", models.NodeColumns.SpaceID),
 			qualifiedColumn("n", models.NodeColumns.ParentNodeID),
 			qualifiedColumn("n", models.NodeColumns.Type),
+			qualifiedColumn("n", models.NodeColumns.ImportedFileKind),
 			qualifiedColumn("n", models.NodeColumns.Title),
 			qualifiedColumn("n", models.NodeColumns.Sort),
 			qualifiedColumn("d", models.DocumentColumns.Visibility)+" AS document_visibility",
@@ -291,8 +306,9 @@ func (r *gormWorkspaceRepository) ListTreeNodesBySpaceID(
 		Joins("LEFT JOIN "+tableName(models.Document{})+" AS d ON "+qualifiedColumn("d", models.DocumentColumns.NodeID)+" = "+qualifiedColumn("n", models.NodeColumns.NodeID)).
 		Where(qualifiedColumn("n", models.NodeColumns.SpaceID)+" = ?", strings.TrimSpace(spaceID)).
 		Where(
-			"("+qualifiedColumn("n", models.NodeColumns.Type)+" <> ? OR ("+qualifiedColumn("d", models.DocumentColumns.DocumentID)+" IS NOT NULL AND "+qualifiedColumn("d", models.DocumentColumns.DeletedAt)+" IS NULL AND "+qualifiedColumn("d", models.DocumentColumns.Status)+" <> ?))",
+			"("+qualifiedColumn("n", models.NodeColumns.Type)+" <> ? OR "+qualifiedColumn("n", models.NodeColumns.ImportedFileKind)+" = ? OR ("+qualifiedColumn("d", models.DocumentColumns.DocumentID)+" IS NOT NULL AND "+qualifiedColumn("d", models.DocumentColumns.DeletedAt)+" IS NULL AND "+qualifiedColumn("d", models.DocumentColumns.Status)+" <> ?))",
 			models.NodeTypeDoc,
+			models.ImportedFileKindUnsupported,
 			models.EntityStatusDeleted,
 		).
 		Order(qualifiedColumn("n", models.NodeColumns.ParentNodeID) + " ASC, " + qualifiedColumn("n", models.NodeColumns.Sort) + " ASC, " + qualifiedColumn("n", models.NodeColumns.ID) + " ASC").
@@ -313,6 +329,7 @@ func (r *gormWorkspaceRepository) ListTreeNodesBySpaceID(
 			Sort:               row.Sort,
 			DocumentVisibility: trimOptionalString(row.DocumentVisibility),
 			DocumentFormat:     normalizeOptionalDocumentFormat(row.DocumentFormat),
+			ImportedFileKind:   row.ImportedFileKind,
 		})
 	}
 
@@ -328,13 +345,14 @@ func (r *gormWorkspaceRepository) GetNodeByNodeID(
 	}
 
 	type nodeRow struct {
-		NodeID       string          `gorm:"column:node_id"`
-		SpaceID      string          `gorm:"column:space_id"`
-		ParentNodeID *string         `gorm:"column:parent_node_id"`
-		ReaderSlug   *string         `gorm:"column:reader_slug"`
-		Type         models.NodeType `gorm:"column:type"`
-		Title        string          `gorm:"column:title"`
-		Sort         int             `gorm:"column:sort"`
+		NodeID           string                  `gorm:"column:node_id"`
+		SpaceID          string                  `gorm:"column:space_id"`
+		ParentNodeID     *string                 `gorm:"column:parent_node_id"`
+		ReaderSlug       *string                 `gorm:"column:reader_slug"`
+		Type             models.NodeType         `gorm:"column:type"`
+		ImportedFileKind models.ImportedFileKind `gorm:"column:imported_file_kind"`
+		Title            string                  `gorm:"column:title"`
+		Sort             int                     `gorm:"column:sort"`
 	}
 
 	var row nodeRow
@@ -346,6 +364,7 @@ func (r *gormWorkspaceRepository) GetNodeByNodeID(
 			qualifiedColumn("", models.NodeColumns.ParentNodeID),
 			qualifiedColumn("", models.NodeColumns.ReaderSlug),
 			qualifiedColumn("", models.NodeColumns.Type),
+			qualifiedColumn("", models.NodeColumns.ImportedFileKind),
 			qualifiedColumn("", models.NodeColumns.Title),
 			qualifiedColumn("", models.NodeColumns.Sort),
 		)).
@@ -360,13 +379,14 @@ func (r *gormWorkspaceRepository) GetNodeByNodeID(
 	}
 
 	return &WorkspaceNodeRecord{
-		NodeID:       strings.TrimSpace(row.NodeID),
-		SpaceID:      strings.TrimSpace(row.SpaceID),
-		ParentNodeID: trimOptionalString(row.ParentNodeID),
-		ReaderSlug:   trimOptionalString(row.ReaderSlug),
-		Type:         nodeType,
-		Title:        strings.TrimSpace(row.Title),
-		Sort:         row.Sort,
+		NodeID:           strings.TrimSpace(row.NodeID),
+		SpaceID:          strings.TrimSpace(row.SpaceID),
+		ParentNodeID:     trimOptionalString(row.ParentNodeID),
+		ReaderSlug:       trimOptionalString(row.ReaderSlug),
+		Type:             nodeType,
+		ImportedFileKind: row.ImportedFileKind,
+		Title:            strings.TrimSpace(row.Title),
+		Sort:             row.Sort,
 	}, nil
 }
 
@@ -461,6 +481,16 @@ func (r *gormWorkspaceRepository) CreateNode(
 		}
 		if params.FileRevision != nil {
 			if err := tx.Create(params.FileRevision).Error; err != nil {
+				return err
+			}
+		}
+		if params.AttachmentBlob != nil {
+			if err := tx.Create(params.AttachmentBlob).Error; err != nil {
+				return err
+			}
+		}
+		if params.Attachment != nil {
+			if err := tx.Create(params.Attachment).Error; err != nil {
 				return err
 			}
 		}
@@ -700,7 +730,7 @@ func (r *gormWorkspaceRepository) DeleteNode(
 			return gorm.ErrRecordNotFound
 		}
 
-		if scope.Root.Type == models.NodeTypeDoc {
+		if scope.Root.Type == models.NodeTypeDoc && scope.Root.ImportedFileKind != models.ImportedFileKindUnsupported {
 			documentIDs := scope.DocumentIDs
 			if len(documentIDs) == 0 {
 				documentIDs = []string{normalizedNodeID}
@@ -710,7 +740,7 @@ func (r *gormWorkspaceRepository) DeleteNode(
 					return err
 				}
 			}
-		} else {
+		} else if scope.Root.Type == models.NodeTypeFolder {
 			spaceForRebuild := normalizedSpaceID
 			if strings.TrimSpace(spaceForRebuild) == "" {
 				spaceForRebuild = strings.TrimSpace(scope.Root.SpaceID)
@@ -745,23 +775,24 @@ func (r *gormWorkspaceRepository) GetDocumentByDocumentID(
 	}
 
 	type documentRow struct {
-		DocumentID     string                      `gorm:"column:document_id"`
-		NodeID         string                      `gorm:"column:node_id"`
-		ReaderSlug     *string                     `gorm:"column:reader_slug"`
-		ThemeID        string                      `gorm:"column:theme_id"`
-		Format         models.DocumentFormat       `gorm:"column:format"`
-		Title          string                      `gorm:"column:title"`
-		ContentMD      string                      `gorm:"column:content_md"`
-		RenderStatus   models.DocumentRenderStatus `gorm:"column:render_status"`
-		RenderError    string                      `gorm:"column:render_error"`
-		RenderedAtRaw  *string                     `gorm:"column:rendered_at"`
-		Version        int                         `gorm:"column:version"`
-		SourceBlobID   *string                     `gorm:"column:source_blob_id"`
-		SourceFileName *string                     `gorm:"column:source_file_name"`
-		SourceMimeType *string                     `gorm:"column:source_mime_type"`
-		ContentVersion int                         `gorm:"column:content_version"`
-		SpaceID        string                      `gorm:"column:space_id"`
-		UpdatedAtRaw   string                      `gorm:"column:updated_at"`
+		DocumentID       string                      `gorm:"column:document_id"`
+		NodeID           string                      `gorm:"column:node_id"`
+		ReaderSlug       *string                     `gorm:"column:reader_slug"`
+		ThemeID          string                      `gorm:"column:theme_id"`
+		Format           models.DocumentFormat       `gorm:"column:format"`
+		ImportedFileKind models.ImportedFileKind     `gorm:"column:imported_file_kind"`
+		Title            string                      `gorm:"column:title"`
+		ContentMD        string                      `gorm:"column:content_md"`
+		RenderStatus     models.DocumentRenderStatus `gorm:"column:render_status"`
+		RenderError      string                      `gorm:"column:render_error"`
+		RenderedAtRaw    *string                     `gorm:"column:rendered_at"`
+		Version          int                         `gorm:"column:version"`
+		SourceBlobID     *string                     `gorm:"column:source_blob_id"`
+		SourceFileName   *string                     `gorm:"column:source_file_name"`
+		SourceMimeType   *string                     `gorm:"column:source_mime_type"`
+		ContentVersion   int                         `gorm:"column:content_version"`
+		SpaceID          string                      `gorm:"column:space_id"`
+		UpdatedAtRaw     string                      `gorm:"column:updated_at"`
 	}
 
 	var row documentRow
@@ -772,6 +803,7 @@ func (r *gormWorkspaceRepository) GetDocumentByDocumentID(
 			qualifiedColumn("d", models.DocumentColumns.NodeID),
 			qualifiedColumn("n", models.NodeColumns.ReaderSlug),
 			qualifiedColumn("d", models.DocumentColumns.ThemeID),
+			qualifiedColumn("n", models.NodeColumns.ImportedFileKind),
 			qualifiedColumn("d", models.DocumentColumns.Format),
 			qualifiedColumn("d", models.DocumentColumns.Title),
 			qualifiedColumn("d", models.DocumentColumns.ContentMD),
@@ -793,23 +825,24 @@ func (r *gormWorkspaceRepository) GetDocumentByDocumentID(
 	}
 
 	return &WorkspaceDocumentRecord{
-		DocumentID:     strings.TrimSpace(row.DocumentID),
-		NodeID:         strings.TrimSpace(row.NodeID),
-		ReaderSlug:     trimOptionalString(row.ReaderSlug),
-		ThemeID:        strings.TrimSpace(row.ThemeID),
-		Format:         models.NormalizeDocumentFormat(row.Format),
-		Title:          strings.TrimSpace(row.Title),
-		ContentMD:      row.ContentMD,
-		RenderStatus:   models.NormalizeDocumentRenderStatus(row.RenderStatus),
-		RenderError:    strings.TrimSpace(row.RenderError),
-		RenderedAt:     parseNullableRecordTime(row.RenderedAtRaw),
-		Version:        row.Version,
-		SourceBlobID:   trimOptionalString(row.SourceBlobID),
-		SourceFileName: trimOptionalString(row.SourceFileName),
-		SourceMimeType: trimOptionalString(row.SourceMimeType),
-		ContentVersion: normalizeContentVersion(row.ContentVersion, row.Version),
-		SpaceID:        strings.TrimSpace(row.SpaceID),
-		UpdatedAtRaw:   row.UpdatedAtRaw,
+		DocumentID:       strings.TrimSpace(row.DocumentID),
+		NodeID:           strings.TrimSpace(row.NodeID),
+		ReaderSlug:       trimOptionalString(row.ReaderSlug),
+		ThemeID:          strings.TrimSpace(row.ThemeID),
+		Format:           models.NormalizeDocumentFormat(row.Format),
+		ImportedFileKind: row.ImportedFileKind,
+		Title:            strings.TrimSpace(row.Title),
+		ContentMD:        row.ContentMD,
+		RenderStatus:     models.NormalizeDocumentRenderStatus(row.RenderStatus),
+		RenderError:      strings.TrimSpace(row.RenderError),
+		RenderedAt:       parseNullableRecordTime(row.RenderedAtRaw),
+		Version:          row.Version,
+		SourceBlobID:     trimOptionalString(row.SourceBlobID),
+		SourceFileName:   trimOptionalString(row.SourceFileName),
+		SourceMimeType:   trimOptionalString(row.SourceMimeType),
+		ContentVersion:   normalizeContentVersion(row.ContentVersion, row.Version),
+		SpaceID:          strings.TrimSpace(row.SpaceID),
+		UpdatedAtRaw:     row.UpdatedAtRaw,
 	}, nil
 }
 
@@ -1250,19 +1283,20 @@ type workspaceRevisionSummaryRow struct {
 }
 
 type workspaceRevisionDetailRow struct {
-	RevisionID     string                `gorm:"column:revision_id"`
-	DocumentID     string                `gorm:"column:document_id"`
-	Version        int                   `gorm:"column:version"`
-	BaseVersion    int                   `gorm:"column:base_version"`
-	Format         models.DocumentFormat `gorm:"column:format"`
-	FileName       *string               `gorm:"column:file_name"`
-	MimeType       *string               `gorm:"column:mime_type"`
-	EditorUserID   *string               `gorm:"column:editor_user_id"`
-	EditorUserName *string               `gorm:"column:editor_user_name"`
-	Source         models.RevisionSource `gorm:"column:source"`
-	CreatedAtRaw   string                `gorm:"column:created_at"`
-	ContentMD      *string               `gorm:"column:content_md"`
-	BlobID         *string               `gorm:"column:blob_id"`
+	ImportedFileKind models.ImportedFileKind `gorm:"column:imported_file_kind"`
+	RevisionID       string                  `gorm:"column:revision_id"`
+	DocumentID       string                  `gorm:"column:document_id"`
+	Version          int                     `gorm:"column:version"`
+	BaseVersion      int                     `gorm:"column:base_version"`
+	Format           models.DocumentFormat   `gorm:"column:format"`
+	FileName         *string                 `gorm:"column:file_name"`
+	MimeType         *string                 `gorm:"column:mime_type"`
+	EditorUserID     *string                 `gorm:"column:editor_user_id"`
+	EditorUserName   *string                 `gorm:"column:editor_user_name"`
+	Source           models.RevisionSource   `gorm:"column:source"`
+	CreatedAtRaw     string                  `gorm:"column:created_at"`
+	ContentMD        *string                 `gorm:"column:content_md"`
+	BlobID           *string                 `gorm:"column:blob_id"`
 }
 
 func (r *gormWorkspaceRepository) listMarkdownRevisionSummaries(
@@ -1346,12 +1380,14 @@ func (r *gormWorkspaceRepository) getMarkdownRevisionDetail(
 			qualifiedColumn("dr", models.DocumentRevisionColumns.BaseVersion)+" AS base_version",
 			qualifiedColumn("d", models.DocumentColumns.Format)+" AS format",
 			qualifiedColumn("dr", models.DocumentRevisionColumns.ContentMD)+" AS content_md",
+			qualifiedColumn("n", models.NodeColumns.ImportedFileKind),
 			qualifiedColumn("dr", models.DocumentRevisionColumns.EditorUserID)+" AS editor_user_id",
 			qualifiedColumn("u", models.UserColumns.Name)+" AS editor_user_name",
 			qualifiedColumn("dr", models.DocumentRevisionColumns.Source)+" AS source",
 			qualifiedColumn("dr", models.DocumentRevisionColumns.CreatedAt)+" AS created_at",
 		)).
 		Joins("JOIN "+tableWithAlias(models.Document{}, "d")+" ON "+qualifiedColumn("d", models.DocumentColumns.DocumentID)+" = "+qualifiedColumn("dr", models.DocumentRevisionColumns.DocumentID)).
+		Joins("JOIN "+tableWithAlias(models.Node{}, "n")+" ON "+qualifiedColumn("n", models.NodeColumns.NodeID)+" = "+qualifiedColumn("d", models.DocumentColumns.NodeID)).
 		Joins("LEFT JOIN "+tableWithAlias(models.User{}, "u")+" ON "+qualifiedColumn("u", models.UserColumns.UserID)+" = "+qualifiedColumn("dr", models.DocumentRevisionColumns.EditorUserID)).
 		Where(qualifiedColumn("dr", models.DocumentRevisionColumns.DocumentID)+" = ?", documentID).
 		Where(qualifiedColumn("dr", models.DocumentRevisionColumns.DocumentRevisionID)+" = ?", revisionID).
@@ -1431,9 +1467,14 @@ func mapWorkspaceRevisionDetailRow(row workspaceRevisionDetailRow) *WorkspaceRev
 		Source:         row.Source,
 		CreatedAtRaw:   row.CreatedAtRaw,
 	}
+	content := row.ContentMD
+	if row.ImportedFileKind != models.ImportedFileKindText {
+		content = trimOptionalString(content)
+	}
 	return &WorkspaceRevisionDetailRecord{
 		WorkspaceRevisionSummaryRecord: mapWorkspaceRevisionSummaryRow(summary),
-		ContentMD:                      trimOptionalString(row.ContentMD),
+		ContentMD:                      content,
+		ImportedFileKind:               row.ImportedFileKind,
 		BlobID:                         trimOptionalString(row.BlobID),
 	}
 }
@@ -1617,9 +1658,10 @@ func ensureWorkspaceMoveParentPathValid(
 	targetParentNodeID string,
 ) error {
 	type parentRow struct {
-		NodeID       string  `gorm:"column:node_id"`
-		SpaceID      string  `gorm:"column:space_id"`
-		ParentNodeID *string `gorm:"column:parent_node_id"`
+		ImportedFileKind models.ImportedFileKind `gorm:"column:imported_file_kind"`
+		NodeID           string                  `gorm:"column:node_id"`
+		SpaceID          string                  `gorm:"column:space_id"`
+		ParentNodeID     *string                 `gorm:"column:parent_node_id"`
 	}
 
 	visitedNodeIDs := make(map[string]struct{})
@@ -1640,6 +1682,7 @@ func ensureWorkspaceMoveParentPathValid(
 				qualifiedColumn("", models.NodeColumns.NodeID),
 				qualifiedColumn("", models.NodeColumns.SpaceID),
 				qualifiedColumn("", models.NodeColumns.ParentNodeID),
+				qualifiedColumn("", models.NodeColumns.ImportedFileKind),
 			)).
 			Where(qualifiedColumn("", models.NodeColumns.NodeID)+" = ?", currentNodeID).
 			Take(&parent).Error; err != nil {
@@ -1647,6 +1690,10 @@ func ensureWorkspaceMoveParentPathValid(
 				return ErrWorkspaceMoveTargetParentNotFound
 			}
 			return err
+		}
+
+		if parent.ImportedFileKind == models.ImportedFileKindUnsupported {
+			return ErrWorkspaceMoveTargetParentNotFound
 		}
 
 		if strings.TrimSpace(parent.SpaceID) != strings.TrimSpace(spaceID) {

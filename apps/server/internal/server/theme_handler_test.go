@@ -147,22 +147,12 @@ func TestRouter_UpdateDocumentTheme(t *testing.T) {
 	}()
 
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	userID := "01h0themeuser000000000000001"
+	userID, _, token := registerAccessUser(t, serve, "theme@example.com")
 	spaceID := "01h0themespace00000000000002"
 	nodeID := "01h0themenode000000000000003"
 	documentID := "01h0themedoc0000000000000004"
 	customThemeID := "custom-tech"
 
-	if err := database.ORM.Table("users").Create(map[string]any{
-		"user_id":       userID,
-		"email":         "theme@example.com",
-		"password_hash": "hashed",
-		"name":          "tester",
-		"created_at":    now,
-		"updated_at":    now,
-	}).Error; err != nil {
-		t.Fatalf("insert user failed: %v", err)
-	}
 	if err := database.ORM.Table("spaces").Create(map[string]any{
 		"space_id":      spaceID,
 		"name":          "default",
@@ -217,6 +207,7 @@ func TestRouter_UpdateDocumentTheme(t *testing.T) {
 	requestBody := []byte(`{"themeId":"custom-tech"}`)
 	req := httptest.NewRequest(http.MethodPut, "/api/docs/"+documentID+"/theme", bytes.NewReader(requestBody))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
 	rec := serve(req)
 
 	if rec.Code != http.StatusOK {

@@ -2,7 +2,7 @@
 <header class="top-nav">
   <div class="top-nav-inner">
     <a href="/" class="top-nav-logo" aria-label="{{ .SiteName }} 首页">
-      <img src="/assets/favicon.png" alt="{{ .SiteName }} Logo" class="top-nav-logo-image" loading="eager" decoding="async">
+      <img src="/assets/favicon.png?v=bugo" alt="BUGO" class="top-nav-logo-image" loading="eager" decoding="async">
     </a>
 
     <div class="top-nav-actions">
@@ -20,7 +20,8 @@
             <span class="nav-user-arrow">▾</span>
           </summary>
           <div class="nav-user-menu">
-            <a href="{{ .AdminURL }}" class="nav-user-menu-item">后台管理</a>
+            <a href="{{ .WorkspaceURL }}?create=1" class="nav-user-menu-item">新建空间</a>
+            {{ if .CanAccessAdmin }}<a href="{{ .AdminURL }}" class="nav-user-menu-item">后台管理</a>{{ end }}
             <form method="post" action="{{ .LogoutURL }}">
               <button type="submit" class="nav-user-menu-item nav-user-menu-button">退出登录</button>
             </form>

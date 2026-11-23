@@ -43,6 +43,7 @@ type SearchQueryResult struct {
 type SearchQueryService struct {
 	searchConfigService  *SearchConfigService
 	searchVisibilityRepo repository.SearchVisibilityRepository
+	documentPermissions  repository.DocumentPermissionRepository
 	providers            map[searchcfg.ProviderName]searchprovider.Provider
 }
 
@@ -76,6 +77,10 @@ func (s *SearchQueryService) SetSearchVisibilityRepository(
 		return
 	}
 	s.searchVisibilityRepo = searchVisibilityRepo
+}
+
+func (s *SearchQueryService) SetDocumentPermissionRepository(permissions repository.DocumentPermissionRepository) {
+	s.documentPermissions = permissions
 }
 
 // Search 执行统一检索请求。
@@ -167,6 +172,19 @@ func (s *SearchQueryService) Search(
 		NeedHighlight:     input.NeedHighlight,
 		DictVersion:       strings.TrimSpace(analyzeOutput.DictVersion),
 		NormalizerVersion: searchNormalizerVersion,
+	}
+
+	if normalizedViewerUserID != "" && s.documentPermissions != nil {
+		permissions, err := s.documentPermissions.List(ctx, normalizedSpaceID, "", normalizedViewerUserID)
+		if err != nil {
+			return SearchQueryResult{}, err
+		}
+		request.ExcludedDocumentIDs = make(map[string]struct{})
+		for _, permission := range permissions {
+			if permission.AccessDenied {
+				request.ExcludedDocumentIDs[permission.DocumentID] = struct{}{}
+			}
+		}
 	}
 
 	providerName, response, err := s.searchWithRuntimeFallback(

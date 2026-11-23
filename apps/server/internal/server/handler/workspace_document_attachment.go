@@ -119,6 +119,9 @@ func (h *workspaceHandler) ListDocumentAttachments(c *gin.Context) {
 
 	items := make([]workspaceDocumentAttachmentResponse, 0, len(attachments))
 	for _, attachment := range attachments {
+		if models.IsImportedImageObjectKey(attachment.ObjectKey) {
+			continue
+		}
 		publicDownloadURL := ""
 		if publicReadable {
 			resolvedURL, resolvedURLErr := h.resolveAttachmentPublicDownloadURL(
@@ -175,17 +178,7 @@ func (h *workspaceHandler) UploadDocumentAttachment(c *gin.Context) {
 	}
 
 	spaceID := strings.TrimSpace(currentRecord.SpaceID)
-	if _, err := h.ensureSpaceWritable(c.Request.Context(), spaceID, actorUserID); err != nil {
-		setRequestErrmsg(c, err, "验证空间权限失败")
-		switch {
-		case errors.Is(err, service.ErrSpaceNotFound):
-			response.WorkspaceErrSpaceNotFound.Write(c)
-		case errors.Is(err, service.ErrSpaceAccessDenied):
-			response.WorkspaceErrInsufficientSpacePermission.Write(c)
-		default:
-			setRequestErrmsg(c, err, "验证空间权限失败")
-			response.InternalError(c)
-		}
+	if !h.requireDocumentWrite(c, documentID, actorUserID) {
 		return
 	}
 
@@ -452,27 +445,7 @@ func (h *workspaceHandler) DeleteDocumentAttachment(c *gin.Context) {
 		return
 	}
 
-	currentRecord, err := h.workspaceRepo.GetDocumentByDocumentID(c.Request.Context(), documentID)
-	if err != nil {
-		setRequestErrmsg(c, err, "查询文档失败")
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			response.WorkspaceErrDocumentNotFound.Write(c)
-			return
-		}
-		response.InternalError(c)
-		return
-	}
-	spaceID := strings.TrimSpace(currentRecord.SpaceID)
-	if _, err := h.ensureSpaceWritable(c.Request.Context(), spaceID, actorUserID); err != nil {
-		setRequestErrmsg(c, err, "验证空间权限失败")
-		switch {
-		case errors.Is(err, service.ErrSpaceNotFound):
-			response.WorkspaceErrSpaceNotFound.Write(c)
-		case errors.Is(err, service.ErrSpaceAccessDenied):
-			response.WorkspaceErrInsufficientSpacePermission.Write(c)
-		default:
-			response.InternalError(c)
-		}
+	if !h.requireDocumentWrite(c, documentID, actorUserID) {
 		return
 	}
 
@@ -486,7 +459,7 @@ func (h *workspaceHandler) DeleteDocumentAttachment(c *gin.Context) {
 		response.InternalError(c)
 		return
 	}
-	if strings.TrimSpace(attachment.DocumentID) != documentID {
+	if strings.TrimSpace(attachment.DocumentID) != documentID || models.IsImportedImageObjectKey(attachment.ObjectKey) {
 		response.DocumentAttachmentErrAttachmentNotFound.Write(c)
 		return
 	}
@@ -611,7 +584,8 @@ func (h *workspaceHandler) RedirectDocumentAttachmentDownload(c *gin.Context) {
 		response.InternalError(c)
 		return
 	}
-	if strings.TrimSpace(attachment.DocumentID) != documentID || attachment.Status == models.EntityStatusDeleted {
+	if strings.TrimSpace(attachment.DocumentID) != documentID || attachment.Status == models.EntityStatusDeleted ||
+		models.IsImportedImageObjectKey(attachment.ObjectKey) {
 		response.DocumentAttachmentErrAttachmentNotFound.Write(c)
 		return
 	}
@@ -704,7 +678,8 @@ func (h *workspaceHandler) CreateDocumentAttachmentAccessLink(c *gin.Context) {
 		response.InternalError(c)
 		return
 	}
-	if strings.TrimSpace(attachment.DocumentID) != documentID || attachment.Status == models.EntityStatusDeleted {
+	if strings.TrimSpace(attachment.DocumentID) != documentID || attachment.Status == models.EntityStatusDeleted ||
+		models.IsImportedImageObjectKey(attachment.ObjectKey) {
 		response.DocumentAttachmentErrAttachmentNotFound.Write(c)
 		return
 	}
@@ -824,7 +799,8 @@ func (h *workspaceHandler) ServeDocumentAttachmentByToken(c *gin.Context) {
 		response.InternalError(c)
 		return
 	}
-	if strings.TrimSpace(attachment.DocumentID) != strings.TrimSpace(claims.DocumentID) || attachment.Status == models.EntityStatusDeleted {
+	if strings.TrimSpace(attachment.DocumentID) != strings.TrimSpace(claims.DocumentID) ||
+		attachment.Status == models.EntityStatusDeleted || models.IsImportedImageObjectKey(attachment.ObjectKey) {
 		response.DocumentAttachmentErrAttachmentNotFound.Write(c)
 		return
 	}
@@ -1203,6 +1179,9 @@ func buildDocumentAttachmentObjectKey(
 	}
 	if !strings.HasPrefix(cleanObjectKey, "attachments/") {
 		return "", errors.New("attachment object key must start with attachments/")
+	}
+	if models.IsImportedImageObjectKey(cleanObjectKey) {
+		return "", errors.New("attachment object key uses the reserved folder image path")
 	}
 	if len(cleanObjectKey) > 512 {
 		return "", errors.New("attachment object key is too long")

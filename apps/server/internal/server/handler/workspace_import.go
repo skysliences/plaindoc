@@ -92,12 +92,13 @@ type workspaceImportItemResponse struct {
 }
 
 type workspaceImportCreatedNodeResponse struct {
-	NodeID     string                 `json:"nodeId"`
-	DocumentID *string                `json:"documentId,omitempty"`
-	ParentID   *string                `json:"parentId,omitempty"`
-	Title      string                 `json:"title"`
-	Type       models.NodeType        `json:"type"`
-	Format     *models.DocumentFormat `json:"format,omitempty"`
+	ImportedFileKind models.ImportedFileKind `json:"importedFileKind,omitempty"`
+	NodeID           string                  `json:"nodeId"`
+	DocumentID       *string                 `json:"documentId,omitempty"`
+	ParentID         *string                 `json:"parentId,omitempty"`
+	Title            string                  `json:"title"`
+	Type             models.NodeType         `json:"type"`
+	Format           *models.DocumentFormat  `json:"format,omitempty"`
 }
 
 type workspaceImportedSource struct {
@@ -126,13 +127,15 @@ type workspaceImportRuntime struct {
 }
 
 type workspaceImportConversionResult struct {
-	Format         models.DocumentFormat
-	Title          string
-	ContentMD      string
-	SourceContent  []byte
-	SourceFileName string
-	SourceMimeType string
-	DetectedType   string
+	ImportedFileKind models.ImportedFileKind
+	ImageSource      *workspaceFolderImageSource
+	Format           models.DocumentFormat
+	Title            string
+	ContentMD        string
+	SourceContent    []byte
+	SourceFileName   string
+	SourceMimeType   string
+	DetectedType     string
 }
 
 // ImportDocuments 在当前工作区目录树中执行一次性导入。
@@ -172,6 +175,8 @@ func (h *workspaceHandler) ImportDocuments(c *gin.Context) {
 		return
 	}
 
+	defer c.Request.MultipartForm.RemoveAll()
+
 	targetNodeID := strings.TrimSpace(c.PostForm("targetNodeId"))
 	autoExtractTitle, err := parseWorkspaceImportBoolFormValue(c.PostForm("autoExtractTitle"))
 	if err != nil {
@@ -191,11 +196,16 @@ func (h *workspaceHandler) ImportDocuments(c *gin.Context) {
 		return
 	}
 
+	if !h.requireNodePermission(c, spaceID, actorUserID, rootParentID, false) {
+		return
+	}
+
 	fileHeaders := c.Request.MultipartForm.File["files"]
 	if len(fileHeaders) == 0 {
 		fileHeaders = c.Request.MultipartForm.File["file"]
 	}
-	if len(fileHeaders) == 0 {
+	folderManifest, importFolder := c.GetPostForm("folderManifest")
+	if len(fileHeaders) == 0 && !importFolder {
 		setRequestErrmsg(c, errWorkspaceImportNoFiles, "导入文件为空")
 		response.Error(c, http.StatusBadRequest, response.CodeInvalidRequest, "至少选择一个导入文件")
 		return
@@ -242,6 +252,22 @@ func (h *workspaceHandler) ImportDocuments(c *gin.Context) {
 	}
 	if !models.IsValidVisibility(runtimeState.defaultDocumentVisibility) {
 		runtimeState.defaultDocumentVisibility = models.VisibilityMember
+	}
+
+	if importFolder {
+		folder, err := collectWorkspaceFolderImport(folderManifest, fileHeaders)
+		if err != nil {
+			setRequestErrmsg(c, err, "解析上传文件夹失败")
+			if errors.Is(err, errWorkspaceImportFolderManifest) || errors.Is(err, errWorkspaceImportFileTooLarge) {
+				response.Error(c, http.StatusBadRequest, response.CodeInvalidRequest, err.Error())
+			} else {
+				response.InternalError(c)
+			}
+			return
+		}
+		items := h.importWorkspaceFolder(c.Request.Context(), &runtimeState, folder)
+		response.JSON(c, http.StatusOK, buildWorkspaceImportResponse(items, runtimeState.createdNodes))
+		return
 	}
 
 	sources, assetSources, skippedItems, err := h.collectWorkspaceImportedSources(fileHeaders)
@@ -297,6 +323,10 @@ func (h *workspaceHandler) ImportDocuments(c *gin.Context) {
 		items = append(items, item)
 	}
 
+	response.JSON(c, http.StatusOK, buildWorkspaceImportResponse(items, runtimeState.createdNodes))
+}
+
+func buildWorkspaceImportResponse(items []workspaceImportItemResponse, createdNodes []workspaceImportCreatedNodeResponse) workspaceImportResponse {
 	failureItems := make([]workspaceImportItemResponse, 0)
 	successCount := 0
 	failedCount := 0
@@ -311,14 +341,14 @@ func (h *workspaceHandler) ImportDocuments(c *gin.Context) {
 		}
 	}
 
-	response.JSON(c, http.StatusOK, workspaceImportResponse{
+	return workspaceImportResponse{
 		TotalCount:   len(items),
 		SuccessCount: successCount,
 		FailedCount:  failedCount,
 		Items:        items,
 		FailureItems: failureItems,
-		CreatedNodes: runtimeState.createdNodes,
-	})
+		CreatedNodes: createdNodes,
+	}
 }
 
 func parseWorkspaceImportBoolFormValue(rawValue string) (bool, error) {
@@ -347,7 +377,7 @@ func (h *workspaceHandler) resolveWorkspaceImportParentID(
 	if err != nil {
 		return nil, err
 	}
-	if strings.TrimSpace(node.SpaceID) != normalizedSpaceID {
+	if strings.TrimSpace(node.SpaceID) != normalizedSpaceID || node.ImportedFileKind == models.ImportedFileKindUnsupported {
 		return nil, errWorkspaceImportInvalidTargetNode
 	}
 	return &node.NodeID, nil
@@ -1726,17 +1756,18 @@ func (h *workspaceHandler) createWorkspaceImportedMarkdownDocument(
 		nodeID = strings.ToLower(ulid.Make().String())
 		documentID = nodeID
 		node := &models.Node{
-			NodeID:          nodeID,
-			SpaceID:         runtimeState.spaceID,
-			ParentNodeID:    parentNodeID,
-			ReaderSlug:      readerSlug,
-			Type:            models.NodeTypeDoc,
-			Title:           title,
-			Sort:            maxSort + 1,
-			CreatedByUserID: &runtimeState.actorUserID,
-			UpdatedByUserID: &runtimeState.actorUserID,
-			CreatedAt:       now,
-			UpdatedAt:       now,
+			NodeID:           nodeID,
+			SpaceID:          runtimeState.spaceID,
+			ParentNodeID:     parentNodeID,
+			ReaderSlug:       readerSlug,
+			Type:             models.NodeTypeDoc,
+			ImportedFileKind: conversion.ImportedFileKind,
+			Title:            title,
+			Sort:             maxSort + 1,
+			CreatedByUserID:  &runtimeState.actorUserID,
+			UpdatedByUserID:  &runtimeState.actorUserID,
+			CreatedAt:        now,
+			UpdatedAt:        now,
 		}
 		document := &models.Document{
 			DocumentID:      documentID,
@@ -1764,13 +1795,20 @@ func (h *workspaceHandler) createWorkspaceImportedMarkdownDocument(
 			Source:             models.RevisionSourceRemote,
 			CreatedAt:          now,
 		}
-		if err := h.workspaceRepo.CreateNode(ctx, repository.WorkspaceCreateNodeParams{
+		params := repository.WorkspaceCreateNodeParams{
 			Node:       node,
 			Document:   document,
 			Revision:   revision,
 			TouchSpace: runtimeState.spaceID,
 			TouchedAt:  now,
-		}); err != nil {
+		}
+		if conversion.ImageSource != nil {
+			params.AttachmentBlob = conversion.ImageSource.blob
+			params.Attachment = buildWorkspaceFolderImageAttachment(
+				documentID, conversion.Title, runtimeState, conversion.ImageSource.blob, now,
+			)
+		}
+		if err := h.workspaceRepo.CreateNode(ctx, params); err != nil {
 			if readerSlug != nil && isWorkspaceUniqueConstraintError(err) {
 				randomized := buildWorkspaceImportRandomIdentifier(derefOptionalString(readerSlug))
 				readerSlug, _ = normalizeWorkspaceDocumentIdentifier(&randomized)
@@ -1784,7 +1822,8 @@ func (h *workspaceHandler) createWorkspaceImportedMarkdownDocument(
 	if !created {
 		return nil, nil, errors.New("create imported markdown document exhausted identifier retries")
 	}
-	if h.documentImageAssetService != nil {
+	if h.documentImageAssetService != nil && conversion.ImportedFileKind != models.ImportedFileKindText &&
+		conversion.ImportedFileKind != models.ImportedFileKindImage {
 		_ = h.documentImageAssetService.SyncDocumentImageAssets(ctx, service.SyncDocumentImageAssetsInput{
 			DocumentID:   documentID,
 			SpaceID:      runtimeState.spaceID,
@@ -1793,12 +1832,13 @@ func (h *workspaceHandler) createWorkspaceImportedMarkdownDocument(
 		})
 	}
 	runtimeState.createdNodes = append(runtimeState.createdNodes, workspaceImportCreatedNodeResponse{
-		NodeID:     nodeID,
-		DocumentID: &documentID,
-		ParentID:   parentNodeID,
-		Title:      title,
-		Type:       models.NodeTypeDoc,
-		Format:     ptrDocumentFormat(models.DocumentFormatMarkdown),
+		NodeID:           nodeID,
+		DocumentID:       &documentID,
+		ParentID:         parentNodeID,
+		Title:            title,
+		Type:             models.NodeTypeDoc,
+		ImportedFileKind: conversion.ImportedFileKind,
+		Format:           ptrDocumentFormat(models.DocumentFormatMarkdown),
 	})
 	return &nodeID, &documentID, nil
 }

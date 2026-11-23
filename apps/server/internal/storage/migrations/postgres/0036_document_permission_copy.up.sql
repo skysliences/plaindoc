@@ -1,0 +1,1 @@
+ALTER TABLE document_permissions ADD COLUMN copy_denied BOOLEAN NOT NULL DEFAULT FALSE;

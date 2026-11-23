@@ -47,7 +47,7 @@ type imageHostingHandler struct {
 	authService            *service.AuthService
 	imageHostingService    *service.ImageHostingService
 	documentAttachmentRepo repository.DocumentAttachmentRepository
-	spaceRepo              repository.SpaceRepository
+	visibilityService      *service.VisibilityService
 	localImageRootDir      string
 }
 
@@ -67,13 +67,13 @@ func NewImageHostingHandler(
 	authService *service.AuthService,
 	imageHostingService *service.ImageHostingService,
 	documentAttachmentRepo repository.DocumentAttachmentRepository,
-	spaceRepo repository.SpaceRepository,
+	visibilityService *service.VisibilityService,
 ) *imageHostingHandler {
 	return &imageHostingHandler{
 		authService:            authService,
 		imageHostingService:    imageHostingService,
 		documentAttachmentRepo: documentAttachmentRepo,
-		spaceRepo:              spaceRepo,
+		visibilityService:      visibilityService,
 		localImageRootDir:      defaultLocalImageStorageRoot,
 	}
 }
@@ -111,7 +111,7 @@ func mapImageHostingClientConfig(config service.ImageHostingConfig) imageHosting
 
 // IssueImageObjectKey 由后端统一分配图片对象 key，避免前端自行拼接文件名。
 func (h *imageHostingHandler) IssueImageObjectKey(c *gin.Context) {
-	if h == nil || h.authService == nil || h.imageHostingService == nil || h.spaceRepo == nil {
+	if h == nil || h.authService == nil || h.imageHostingService == nil || h.visibilityService == nil {
 		setRequestErrmsgText(c, "图片对象 key 分配失败: handler or dependencies is nil")
 		response.InternalError(c)
 		return
@@ -129,7 +129,7 @@ func (h *imageHostingHandler) IssueImageObjectKey(c *gin.Context) {
 		return
 	}
 
-	hasWriterAccess, err := h.spaceRepo.HasWriterAccess(c.Request.Context(), spaceID, actorUserID)
+	hasWriterAccess, err := h.visibilityService.CanUploadImage(c.Request.Context(), spaceID, strings.TrimSpace(requestPayload.DocumentID), actorUserID)
 	if err != nil {
 		setRequestErrmsg(c, err, "校验图片对象 key 分配空间权限失败")
 		response.InternalError(c)
@@ -199,7 +199,7 @@ type issueImageObjectKeyRequest struct {
 
 // UploadImage 接收本地图片上传并返回可访问地址。
 func (h *imageHostingHandler) UploadImage(c *gin.Context) {
-	if h == nil || h.authService == nil || h.imageHostingService == nil || h.spaceRepo == nil || h.documentAttachmentRepo == nil {
+	if h == nil || h.authService == nil || h.imageHostingService == nil || h.visibilityService == nil || h.documentAttachmentRepo == nil {
 		response.InternalError(c)
 		return
 	}
@@ -223,8 +223,7 @@ func (h *imageHostingHandler) UploadImage(c *gin.Context) {
 		response.ImageHostingInvalidSpaceID(c)
 		return
 	}
-	// 上传入口按“空间写权限”做鉴权，避免越权写入。
-	hasWriterAccess, err := h.spaceRepo.HasWriterAccess(c.Request.Context(), spaceID, actorUserID)
+	hasWriterAccess, err := h.visibilityService.CanUploadImage(c.Request.Context(), spaceID, documentID, actorUserID)
 	if err != nil {
 		setRequestErrmsg(c, err, "验证图片上传空间权限失败")
 		response.InternalError(c)
@@ -472,6 +471,10 @@ func (h *imageHostingHandler) ServeLocalImage(c *gin.Context) {
 	// 兼容历史公开路径 /uploads/local/*：统一映射到本地存储根 uploads/local。
 	cleanPath = strings.TrimPrefix(cleanPath, "local/")
 	if cleanPath == "local" {
+		response.ImageHostingFileNotFound(c)
+		return
+	}
+	if models.IsImportedImageObjectKey(strings.TrimPrefix(strings.ToLower(cleanPath), "local/")) {
 		response.ImageHostingFileNotFound(c)
 		return
 	}

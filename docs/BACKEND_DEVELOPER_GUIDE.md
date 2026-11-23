@@ -317,6 +317,14 @@
 16. `GET /api/docs/:docId/onlyoffice/edit-config`
 17. `GET /api/docs/:docId/onlyoffice/source`
 18. `POST /api/docs/:docId/onlyoffice/callback`
+19. `POST /api/spaces/:spaceId/imports`
+
+工作区文件夹导入：
+
+1. 使用现有工作区导入权限与 `multipart/form-data` 入口。可选字段 `folderManifest` 包含 `paths`（按顺序对应 `files`）与 `directories`（浏览器可提供的目录路径）。所有路径都包含同一个上传根目录，服务端校验路径与目标目录。省略 `folderManifest` 时使用原有单文件和压缩包导入流程。
+2. 导入按相对路径创建目录树并保留文件名。Markdown 和受支持的 Office 文件复用各自的文档存储。纯文本沿用 Markdown 文档的版本和编辑接口，同时通过 `importedFileKind: "text"` 标记正文按原样显示。
+3. 无法读取或不支持的文件作为 `type: "doc"`、`importedFileKind: "unsupported"` 的目录条目保留名称，没有文档 ID。工作区和阅读页树都返回 `importedFileKind`。SQLite、MySQL 和 PostgreSQL 的迁移为现有节点保留空标记。
+4. 可解码的 PNG、JPEG、GIF、WebP 和 BMP 导入为 `importedFileKind: "image"`。文档和阅读页数据通过 `importedImageUrl` 提供同源预览地址，预览路由按文档或分享链接的读权限返回图片。早期导入为不支持条目的图片需要重新上传原文件。
 
 ONLYOFFICE 一等文档规则：
 
@@ -395,9 +403,11 @@ ONLYOFFICE 一等文档规则：
 ### 6.4 页面与静态资源
 
 1. `GET /`、`GET /explore/:categoryId`（Go Template SSR）
-2. `GET /r/:spaceId`、`GET /r/:spaceId/:docId`（阅读 SSR）
+2. `GET /r/:spaceId` 跳转到首篇可读文档。空空间向有创建权限的用户提供新建文档入口。
+   - `GET /r/:spaceId/:docId` 渲染指定文档的阅读 SSR，空间导航根据登录用户参与的空间生成。匿名访客可以在当前空间的文档之间切换。
+   - `GET /space-covers/:spaceId` 按空间名称生成 SVG 标题封面。该接口沿用空间可见性校验，响应禁止缓存。
 3. `GET /uploads/*path`
-4. `/login`、`/register`、`/editor/*`、`/admin/*`（SPA 托管）
+4. `/login`、`/register`、`/editor`、`/editor/*`、`/admin/*`（SPA 托管）
 
 ---
 
@@ -556,6 +566,17 @@ ONLYOFFICE 一等文档规则：
 5. 生产必须替换 `JWT_SECRET` 与关键环境变量。
 6. LDAP 优先使用 `ldaps/starttls`；`plain` 仅建议在受控内网环境下使用。
 
+### 10.1 空间自助协作
+
+- 登录用户可调用 `POST /api/spaces` 创建仅成员可见的空间。示例 Markdown 文档、初始修订和空间在同一事务中创建，响应带有 `exampleDocumentId`。首页弹窗通过 `POST /spaces` 提交表单，成功后在当前标签页打开示例文档。登录用户可在有空间写权限时通过 `POST /api/spaces/:spaceId/nodes` 添加多篇文档。`GET /api/my-spaces` 返回本人拥有或加入的空间及编辑和管理能力。 创建成功后跳转到示例文档的阅读 URL。阅读 SSR 根据现有文档写权限生成可选的 editUrl。
+- 空间所有者可通过 `PATCH /api/spaces/:spaceId` 改名，通过 `GET /api/spaces/:spaceId/members` 查看成员，通过 `PUT /api/spaces/:spaceId/members` 按注册邮箱添加成员或更新角色，通过 `DELETE /api/spaces/:spaceId/members/:userId` 移除成员。
+- 单文档权限新增 `read_no_copy` 和 `edit_no_copy`，旧授权默认允许复制。复制限制覆盖阅读页、Markdown 编辑器的剪贴板操作和代码按钮，Office iframe 通过 ONLYOFFICE 的 copy 权限配置。复制与导出分别配置。
+- 文档成员权限请求可单独提交 `exportDenied`。未设置时允许导出，继承空间角色的成员也可单独禁用导出。阅读页和分享页的 Markdown/PDF 按钮执行前调用导出权限接口。Office 原文件链接签发和使用时会校验导出权限，ONLYOFFICE 配置同步禁用下载和打印。批量空间导出也会检查操作者对空间内文档的导出限制。
+- `document_activity` 复用平台管理员审计列表与保留周期。阅读按成功打开阅读页、分享页或读取正文计数，编辑按成功保存或恢复的 Markdown 和 Office 版本计数，复制按登录用户的产品内剪贴板事件计数。审计不存储剪贴板内容，匿名访问和 ONLYOFFICE iframe 内复制不计入用户统计。
+- 成员列表传入 `documentId` 可查看该文档的权限配置。空间所有者可通过 `PUT /api/docs/:docId/permissions/:userId` 设置 `access` 为 `inherit`、`read`、`edit` 或 `denied`。单篇编辑授权要求用户仍在空间内。目录结构操作仍需空间写权限。
+- `denied` 限制对应的登录账号，覆盖该账号在阅读、搜索、编辑和已有分享链接中的访问。匿名访问继续由空间及文档的可见性和分享设置决定。数据库迁移 0035 为现有文档权限表增加拒绝标记。
+- `TestRouter_WorkspaceCollaboration` 使用 SQLite 覆盖注册、邀请、授权、撤销、编辑及检索。`TestRouter_HomeCreateSpaceStartsWithExampleDocument` 验证首页表单提交、示例文档与初始修订。MySQL 和 PostgreSQL 部署也需运行迁移 0035。
+
 ---
 
 ## 11. 高频坑与排障
@@ -666,10 +687,7 @@ flowchart TD
 
 1. `effective_visibility = max(space_visibility, document_visibility)`（取更严格一侧）。
 
-检索权限必须满足“单调性”：
-
-1. 登录用户结果集必须包含匿名用户结果集。
-2. 即 `VisibleDocs(logged_in) ⊇ VisibleDocs(anonymous)`。
+检索先按空间与文档可见性生成候选结果。登录账号的候选范围包含匿名可见文档，再从结果中排除该账号被明确禁止访问的文档。
 
 空间可见性矩阵：
 

@@ -330,29 +330,31 @@ type HomeSearchRepository interface {
 
 // ReaderPageDocumentRecord 阅读页文档详情聚合记录。
 type ReaderPageDocumentRecord struct {
-	DocumentID     string
-	NodeID         string
-	ReaderSlug     *string
-	ThemeID        string
-	Format         models.DocumentFormat
-	Visibility     string
-	Title          string
-	ContentMD      string
-	RenderStatus   models.DocumentRenderStatus
-	RenderError    string
-	RenderedAt     *time.Time
-	Version        int
-	SourceBlobID   *string
-	SourceFileName *string
-	SourceMimeType *string
-	ContentVersion int
-	AuthorNickname string
-	UpdatedAt      time.Time
-	SpaceID        string
+	ImportedFileKind models.ImportedFileKind
+	DocumentID       string
+	NodeID           string
+	ReaderSlug       *string
+	ThemeID          string
+	Format           models.DocumentFormat
+	Visibility       string
+	Title            string
+	ContentMD        string
+	RenderStatus     models.DocumentRenderStatus
+	RenderError      string
+	RenderedAt       *time.Time
+	Version          int
+	SourceBlobID     *string
+	SourceFileName   *string
+	SourceMimeType   *string
+	ContentVersion   int
+	AuthorNickname   string
+	UpdatedAt        time.Time
+	SpaceID          string
 }
 
 // ReaderPageTreeNodeRecord 阅读页目录树节点记录。
 type ReaderPageTreeNodeRecord struct {
+	ImportedFileKind   models.ImportedFileKind
 	NodeID             string
 	DocumentID         *string
 	ReaderSlug         *string
@@ -588,6 +590,7 @@ type WorkspaceSpacePermissionSnapshot struct {
 
 // WorkspaceTreeNodeRecord 工作区目录树节点记录。
 type WorkspaceTreeNodeRecord struct {
+	ImportedFileKind   models.ImportedFileKind
 	NodeID             string
 	DocumentID         *string
 	ReaderSlug         *string
@@ -602,34 +605,36 @@ type WorkspaceTreeNodeRecord struct {
 
 // WorkspaceNodeRecord 工作区节点记录。
 type WorkspaceNodeRecord struct {
-	NodeID       string
-	SpaceID      string
-	ParentNodeID *string
-	ReaderSlug   *string
-	Type         models.NodeType
-	Title        string
-	Sort         int
+	ImportedFileKind models.ImportedFileKind
+	NodeID           string
+	SpaceID          string
+	ParentNodeID     *string
+	ReaderSlug       *string
+	Type             models.NodeType
+	Title            string
+	Sort             int
 }
 
 // WorkspaceDocumentRecord 工作区文档记录。
 type WorkspaceDocumentRecord struct {
-	DocumentID     string
-	NodeID         string
-	ReaderSlug     *string
-	ThemeID        string
-	Format         models.DocumentFormat
-	Title          string
-	ContentMD      string
-	RenderStatus   models.DocumentRenderStatus
-	RenderError    string
-	RenderedAt     *time.Time
-	Version        int
-	SourceBlobID   *string
-	SourceFileName *string
-	SourceMimeType *string
-	ContentVersion int
-	SpaceID        string
-	UpdatedAtRaw   string
+	ImportedFileKind models.ImportedFileKind
+	DocumentID       string
+	NodeID           string
+	ReaderSlug       *string
+	ThemeID          string
+	Format           models.DocumentFormat
+	Title            string
+	ContentMD        string
+	RenderStatus     models.DocumentRenderStatus
+	RenderError      string
+	RenderedAt       *time.Time
+	Version          int
+	SourceBlobID     *string
+	SourceFileName   *string
+	SourceMimeType   *string
+	ContentVersion   int
+	SpaceID          string
+	UpdatedAtRaw     string
 }
 
 // WorkspaceRevisionRecord 工作区文档修订记录。
@@ -669,6 +674,7 @@ type WorkspaceRevisionSummaryRecord struct {
 
 // WorkspaceRevisionDetailRecord 工作区单个历史版本详情记录。
 type WorkspaceRevisionDetailRecord struct {
+	ImportedFileKind models.ImportedFileKind
 	WorkspaceRevisionSummaryRecord
 	ContentMD *string
 	BlobID    *string
@@ -676,12 +682,14 @@ type WorkspaceRevisionDetailRecord struct {
 
 // WorkspaceCreateNodeParams 工作区创建节点参数。
 type WorkspaceCreateNodeParams struct {
-	Node         *models.Node
-	Document     *models.Document
-	Revision     *models.DocumentRevision
-	FileRevision *models.DocumentFileRevision
-	TouchSpace   string
-	TouchedAt    time.Time
+	Node           *models.Node
+	Document       *models.Document
+	Revision       *models.DocumentRevision
+	FileRevision   *models.DocumentFileRevision
+	AttachmentBlob *models.DocumentAttachmentBlob
+	Attachment     *models.DocumentAttachment
+	TouchSpace     string
+	TouchedAt      time.Time
 }
 
 // WorkspaceUpdateNodeParams 工作区更新节点参数。
@@ -744,6 +752,7 @@ type WorkspaceUpdateDocumentIdentifierParams struct {
 
 // WorkspaceRepository 编辑器工作区仓储接口。
 type WorkspaceRepository interface {
+	CreateSpaceWithDocument(ctx context.Context, space *models.Space, initial WorkspaceCreateNodeParams) error
 	ListSpacesByActor(ctx context.Context, actorUserID string) ([]WorkspaceSpaceListRecord, error)
 	GetDefaultCategory(ctx context.Context) (*models.SpaceCategory, error)
 	CreateSpace(ctx context.Context, space *models.Space) error

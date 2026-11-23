@@ -81,7 +81,162 @@ describe("renderSpaceReader", () => {
     expect(result.html).not.toContain('meta name="robots" content="noindex, nofollow"');
     expect(result.html).toContain('data-reader-export-action="markdown"');
     expect(result.html).toContain('data-reader-export-action="pdf"');
+    const reader = new DOMParser().parseFromString(result.html, "text/html");
+    expect(reader.querySelector('.reader-sidebar__navigation > a.reader-home-link[href="/"]:first-child')).not.toBeNull();
+    expect(reader.querySelector('.reader-mobile-bar > a.reader-home-link[href="/"]')).not.toBeNull();
+    expect(reader.querySelector('.reader-article-shell a.reader-home-link')).toBeNull();
     expect(result.html).not.toContain('data-reader-office-editor="1"');
+  });
+
+  it.each(["markdown", "docx"] as const)("keeps %s readable while hiding export actions", (format) => {
+    const payload = { ...createPayload(format), exportDenied: true };
+    const { html } = renderSpaceReader(payload);
+    const reader = new DOMParser().parseFromString(html, "text/html");
+    expect(reader.body.hasAttribute("data-document-export-denied")).toBe(true);
+    expect(reader.querySelector('[data-reader-hook="article-shell"]')).not.toBeNull();
+    expect(reader.querySelector("[data-reader-export-action], [data-reader-office-download]")).toBeNull();
+  });
+
+  it("keeps navigation within the current document directory", () => {
+    const { html } = renderSpaceReader(createPayload("markdown"));
+    const reader = new DOMParser().parseFromString(html, "text/html");
+    const sidebar = reader.querySelector('[data-reader-hook="sidebar"]');
+    expect(sidebar?.querySelector('[aria-label="空间文件夹"]')).toBeNull();
+    expect(sidebar?.querySelector('.reader-sidebar__documents')).not.toBeNull();
+    expect(sidebar?.textContent).not.toContain("本文档使用");
+    expect(sidebar?.querySelector('a[href="/"]')?.textContent).toContain("返回首页");
+  });
+
+  it("shows folder and file icons and keeps unsupported files out of document navigation", () => {
+    const payload = createPayload("markdown");
+    payload.tree = [{
+      id: "folder",
+      type: "folder",
+      title: "项目资料",
+      sort: 0,
+      children: [
+        {
+          id: payload.document.nodeId,
+          documentId: payload.document.id,
+          type: "doc",
+          title: "说明.md",
+          visibility: "member",
+          sort: 0,
+          children: []
+        },
+        {
+          id: "unreadable-file",
+          type: "doc",
+          title: "备份.zip",
+          importedFileKind: "unsupported",
+          sort: 1,
+          children: []
+        }
+      ]
+    }];
+
+    const reader = new DOMParser().parseFromString(renderSpaceReader(payload).html, "text/html");
+    const sidebar = reader.querySelector('[data-reader-hook="sidebar"]');
+    expect(sidebar?.querySelector('details > summary svg.lucide-folder')).not.toBeNull();
+    expect(sidebar?.querySelector('details > ul a[data-reader-doc-link="1"] svg.lucide-file-text')).not.toBeNull();
+    expect(sidebar?.querySelector('.reader-visibility-marker')).toBeNull();
+
+    const unsupportedFile = sidebar?.querySelector('details > ul button[data-reader-unsupported-file="备份.zip"]');
+    expect(unsupportedFile?.textContent).toContain("备份.zip");
+    expect(unsupportedFile?.querySelector('svg.lucide-file')).not.toBeNull();
+    expect(unsupportedFile?.closest('[data-reader-doc-link]')).toBeNull();
+    expect(reader.querySelector('dialog[data-reader-unsupported-file-dialog]')?.textContent).toContain("无法打开文件");
+  });
+
+  it("shows imported plain text without interpreting its heading or HTML", () => {
+    const payload = createPayload("markdown");
+    payload.document.importedFileKind = "text";
+    payload.document.contentMd = "\n# 原文\n\n<b>保留标签</b>\n\t下一行";
+    payload.editUrl = "/editor/space-reader-test/doc-reader-test?from=reader";
+
+    const reader = new DOMParser().parseFromString(renderSpaceReader(payload).html, "text/html");
+    const body = reader.querySelector("pre#plaindoc-preview-body");
+    expect(body?.textContent).toBe(payload.document.contentMd);
+    expect(body?.querySelector("b")).toBeNull();
+    expect(reader.querySelector('[data-reader-hook="outline"]')).toBeNull();
+    expect(reader.querySelector("[data-reader-inline-edit]")).not.toBeNull();
+  });
+
+  it("opens an imported image from its tree row and displays it in the preview body", () => {
+    const payload = createPayload("markdown");
+    const source = "/api/docs/doc-reader-test/imported-image";
+    payload.document = {
+      ...payload.document,
+      title: "图表.png",
+      importedFileKind: "image",
+      importedImageUrl: source
+    };
+    payload.editUrl = "/editor/space-reader-test/doc-reader-test?from=reader";
+    payload.tree = [{
+      id: payload.document.nodeId,
+      documentId: payload.document.id,
+      title: payload.document.title,
+      type: "doc",
+      importedFileKind: "image",
+      sort: 1,
+      children: []
+    }];
+
+    const reader = new DOMParser().parseFromString(renderSpaceReader(payload).html, "text/html");
+    expect(reader.querySelector('a[data-reader-doc-link="1"] svg.lucide-image')).not.toBeNull();
+    const preview = reader.querySelector("#plaindoc-preview-body button[data-reader-imported-image-preview]");
+    expect(preview?.getAttribute("aria-label")).toBe("放大图片 图表.png");
+    expect(preview?.querySelector("img")?.getAttribute("src")).toBe(source);
+    expect(preview?.querySelector("img")?.getAttribute("alt")).toBe("图表.png");
+    expect(reader.querySelector("[data-reader-inline-edit], [data-reader-export-action]")).toBeNull();
+    expect(reader.querySelector('[data-reader-hook="outline"]')).toBeNull();
+  });
+
+  it("renders the permission-scoped share image URL and handles an unavailable source", () => {
+    const payload = createPayload("markdown", { shareEnabled: true });
+    const source = "/api/shares/space-reader-test/doc-reader-test/imported-image";
+    payload.document.importedFileKind = "image";
+    payload.document.importedImageUrl = source;
+
+    const read = () => new DOMParser().parseFromString(renderSpaceReader(payload).html, "text/html");
+    expect(read().querySelector("#plaindoc-preview-body img")?.getAttribute("src")).toBe(source);
+    expect(read().querySelector(".reader-imported-image__error")?.hasAttribute("hidden")).toBe(true);
+
+    payload.document.importedImageUrl = undefined;
+    const unavailable = read();
+    expect(unavailable.querySelector("#plaindoc-preview-body img")).toBeNull();
+    expect(unavailable.querySelector(".reader-imported-image__error")?.hasAttribute("hidden")).toBe(false);
+  });
+
+  it("renders authorized Markdown editing as a local action", () => {
+    const editUrl = "/editor/space-reader-test/doc-reader-test?from=reader";
+    const editEntry = (payload: ReaderPagePayload) => {
+      const { html } = renderSpaceReader(payload);
+      const reader = new DOMParser().parseFromString(html, "text/html");
+      return reader.querySelector(".reader-article-actions [data-reader-inline-edit]");
+    };
+
+    const markdownEntry = editEntry({ ...createPayload("markdown"), editUrl });
+    expect(markdownEntry?.tagName).toBe("BUTTON");
+    expect(markdownEntry?.getAttribute("data-reader-inline-edit")).toBe(editUrl);
+    expect(editEntry(createPayload("markdown"))).toBeNull();
+    expect(editEntry({ ...createPayload("markdown", { shareEnabled: true }), editUrl })).toBeNull();
+    expect(editEntry({ ...createPayload("docx"), editUrl })).toBeNull();
+  });
+
+  it("only renders the sidebar creation button when the reader payload permits it", () => {
+    const createDocumentUrl = "/editor/space-reader-test?from=reader&create=document";
+    const getCreateButton = (payload: ReaderPagePayload) => {
+      const { html } = renderSpaceReader(payload);
+      return new DOMParser().parseFromString(html, "text/html")
+        .querySelector('.reader-sidebar button[aria-label="新建文档"]');
+    };
+
+    expect(getCreateButton(createPayload("markdown"))).toBeNull();
+    expect(getCreateButton({ ...createPayload("markdown"), createDocumentUrl })?.getAttribute("data-reader-create-document"))
+      .toBe(createDocumentUrl);
+    expect(getCreateButton({ ...createPayload("markdown", { shareEnabled: true }), createDocumentUrl }))
+      .toBeNull();
   });
 
   it("renders share page with office read-only shell and no markdown export actions", () => {
@@ -90,6 +245,7 @@ describe("renderSpaceReader", () => {
     expect(result.html).toContain('meta name="robots" content="noindex, nofollow"');
     expect(result.html).toContain('data-reader-office-editor="1"');
     expect(result.html).not.toContain('data-reader-export-action="markdown"');
+    expect(result.html).not.toContain('<a href="/" class="reader-home-link">');
     expect(result.html).not.toContain('data-reader-export-action="pdf"');
   });
 

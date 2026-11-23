@@ -10,6 +10,12 @@ export const READER_ASYNC_ENHANCEMENT_SCRIPT = `(() => {
   const TREE_LABEL_ACTIVE_SELECTOR = "[data-reader-hook='tree-label'][data-reader-label-active='1']";
   const ARTICLE_SHELL_SELECTOR = "[data-reader-hook='article-shell']";
   const MAIN_SELECTOR = "[data-reader-hook='main']";
+  const CREATE_DOCUMENT_TRIGGER_SELECTOR = "button[data-reader-create-document]";
+  const UNSUPPORTED_FILE_TRIGGER_SELECTOR = "button[data-reader-unsupported-file]";
+  const UNSUPPORTED_FILE_DIALOG_SELECTOR = "dialog[data-reader-unsupported-file-dialog='1']";
+  const TREE_SCROLL_SELECTOR = ".reader-sidebar__tree-scroll";
+  const INLINE_EDIT_TRIGGER_SELECTOR = ".reader-article-actions > button[data-reader-inline-edit]";
+  const INLINE_CLOSE_TRIGGER_SELECTOR = "button[data-reader-inline-close='1']";
   const MOBILE_SIDEBAR_OPEN_TRIGGER_SELECTOR = "[data-reader-hook='mobile-sidebar-open']";
   const MOBILE_SIDEBAR_CLOSE_TRIGGER_SELECTOR = "[data-reader-hook='mobile-sidebar-close']";
   const MOBILE_SIDEBAR_OVERLAY_SELECTOR = "[data-reader-hook='mobile-overlay']";
@@ -22,6 +28,7 @@ export const READER_ASYNC_ENHANCEMENT_SCRIPT = `(() => {
   const MERMAID_BLOCK_SELECTOR = "[data-reader-hook='mermaid']";
   const IMAGE_VIEWER_CANDIDATE_SELECTOR =
     "#plaindoc-preview-body img, #plaindoc-preview-body svg, [data-reader-hook='mermaid']";
+  const IMPORTED_IMAGE_PREVIEW_SELECTOR = "button[data-reader-imported-image-preview='1']";
   const TREE_ROW_ACTIVE_CLASS = "reader-tree__row--active";
   const TREE_LABEL_ACTIVE_CLASS = "reader-tree__label--active";
   const STATE_SCRIPT_SELECTOR = "#plaindoc-reader-state";
@@ -176,9 +183,23 @@ export const READER_ASYNC_ENHANCEMENT_SCRIPT = `(() => {
     await runtimeModule.renderReaderMermaidBlocks(document);
   };
 
+  const showImportedImageLoadError = (image) => {
+    const preview = image.closest(IMPORTED_IMAGE_PREVIEW_SELECTOR);
+    const message = preview?.nextElementSibling;
+    if (message instanceof HTMLElement) {
+      message.hidden = false;
+      preview.remove();
+    }
+  };
+
   const syncReaderImageViewerRegistry = async () => {
-    if (!document.querySelector(PREVIEW_BODY_SELECTOR)) {
+    const previewBody = document.querySelector(PREVIEW_BODY_SELECTOR);
+    if (!previewBody) {
       return;
+    }
+    const importedImage = previewBody.querySelector(IMPORTED_IMAGE_PREVIEW_SELECTOR + " img");
+    if (importedImage instanceof HTMLImageElement && importedImage.complete && importedImage.naturalWidth === 0) {
+      showImportedImageLoadError(importedImage);
     }
     const hasGalleryCandidate = Boolean(document.querySelector(IMAGE_VIEWER_CANDIDATE_SELECTOR));
     const existingRuntime = getReaderImageViewerRuntime();
@@ -250,7 +271,7 @@ export const READER_ASYNC_ENHANCEMENT_SCRIPT = `(() => {
   };
 
   const handleCodeCopyAction = async (buttonNode) => {
-    if (!(buttonNode instanceof HTMLButtonElement)) {
+    if (!(buttonNode instanceof HTMLButtonElement) || buttonNode.closest("[data-document-copy-denied]")) {
       return;
     }
     const shellNode = buttonNode.closest(".code-block-copy-shell");
@@ -264,6 +285,7 @@ export const READER_ASYNC_ENHANCEMENT_SCRIPT = `(() => {
     }
     try {
       await copyTextToClipboard(codeText);
+      buttonNode.dispatchEvent(new CustomEvent("plaindoc:clipboard-copy", { bubbles: true }));
       setCodeCopyButtonState(buttonNode, "success");
       scheduleCodeCopyReset(buttonNode);
     } catch {
@@ -1407,17 +1429,45 @@ export const READER_ASYNC_ENHANCEMENT_SCRIPT = `(() => {
     }
   };
 
-  const handleExportAction = (actionButton) => {
-    if (!(actionButton instanceof HTMLButtonElement)) {
-      return;
-    }
-    const exportAction = (actionButton.getAttribute("data-reader-export-action") || "").trim().toLowerCase();
-    if (exportAction === "markdown") {
-      handleMarkdownExport(actionButton);
-      return;
-    }
-    if (exportAction === "pdf") {
-      handlePdfExport(actionButton);
+  const handleExportAction = async (actionButton) => {
+    if (!(actionButton instanceof HTMLButtonElement) || actionButton.disabled) return;
+    const payload = resolveReaderStatePayload();
+    if (!payload?.document?.id || !payload.space?.id || payload.exportDenied) return;
+    const action = actionButton.getAttribute("data-reader-export-action");
+    if (action !== "markdown" && action !== "pdf") return;
+    const spaceID = encodeURIComponent(payload.space.id);
+    const path = payload.share?.enabled
+      ? "/api/shares/" + spaceID + "/" + encodeURIComponent(payload.share.documentRouteKey)
+      : "/api/reader/spaces/" + spaceID + "/docs/" + encodeURIComponent(payload.document.id);
+    const showStatus = (message) => {
+      const actions = actionButton.parentElement;
+      if (!actions) return;
+      let status = actions.querySelector("[data-reader-export-status]");
+      if (!status) {
+        status = document.createElement("span");
+        status.setAttribute("data-reader-export-status", "1");
+        status.setAttribute("role", "status");
+        actions.append(status);
+      }
+      status.textContent = message;
+    };
+    actionButton.disabled = true;
+    try {
+      const result = await fetch(path + "/export-access", { credentials: "same-origin", cache: "no-store" });
+      const response = await result.json();
+      if (!actionButton.isConnected) return;
+      if (!result.ok || response?.code !== 0) {
+        showStatus(result.status === 403 ? "你没有权限导出该文档。" : "暂时无法校验导出权限，请重试。");
+        return;
+      }
+      actionButton.parentElement.querySelector("[data-reader-export-status]")?.remove();
+      if (action === "markdown") handleMarkdownExport(actionButton);
+      else handlePdfExport(actionButton);
+    } catch (error) {
+      showStatus("暂时无法校验导出权限，请重试。");
+      console.error("[reader][export] check failed", error);
+    } finally {
+      actionButton.disabled = false;
     }
   };
 
@@ -1633,6 +1683,12 @@ export const READER_ASYNC_ENHANCEMENT_SCRIPT = `(() => {
       return;
     }
     currentStateNode.textContent = nextStateNode.textContent || "{}";
+    document.body.toggleAttribute("data-document-export-denied", nextDocument.body.hasAttribute("data-document-export-denied"));
+    if (nextDocument.body.hasAttribute("data-document-copy-denied")) {
+      document.body.setAttribute("data-document-copy-denied", "1");
+    } else {
+      document.body.removeAttribute("data-document-copy-denied");
+    }
   };
 
   const syncDocumentHead = (nextDocument, targetURL) => {
@@ -1917,15 +1973,21 @@ export const READER_ASYNC_ENHANCEMENT_SCRIPT = `(() => {
 
   let inflightController = null;
   let inflightSeq = 0;
-  const loadReaderPage = async (targetURL, pushHistory) => {
+  const loadReaderPage = async (targetURL, pushHistory, refreshInPlace = false, refreshTree = false) => {
     if (!(targetURL instanceof URL)) {
-      return;
+      return false;
     }
     const targetPathname = normalizePathname(targetURL.pathname);
-    if (pushHistory && targetPathname === normalizePathname(window.location.pathname)) {
-      return;
+    if (pushHistory && !refreshTree && targetPathname === normalizePathname(window.location.pathname)) {
+      return false;
     }
 
+    const fallback = () => {
+      if (!refreshInPlace) {
+        window.location.assign(targetURL.toString());
+      }
+      return false;
+    };
     inflightSeq += 1;
     const currentSeq = inflightSeq;
     if (inflightController instanceof AbortController) {
@@ -1938,6 +2000,7 @@ export const READER_ASYNC_ENHANCEMENT_SCRIPT = `(() => {
       const response = await fetch(targetURL.toString(), {
         method: "GET",
         credentials: "include",
+        cache: refreshInPlace || refreshTree ? "no-store" : "default",
         signal: inflightController.signal,
         headers: {
           Accept: "text/html",
@@ -1945,25 +2008,31 @@ export const READER_ASYNC_ENHANCEMENT_SCRIPT = `(() => {
         }
       });
       if (currentSeq !== inflightSeq) {
-        return;
+        return false;
       }
       if (!response.ok) {
-        window.location.assign(targetURL.toString());
-        return;
+        return fallback();
       }
       const htmlText = await response.text();
       if (currentSeq !== inflightSeq) {
-        return;
+        return false;
       }
       const parsedDocument = new DOMParser().parseFromString(htmlText, "text/html");
       destroyOnlyOfficeReader();
       if (!replaceArticleShell(parsedDocument)) {
-        window.location.assign(targetURL.toString());
-        return;
+        return fallback();
       }
       if (!replaceReaderOutline(parsedDocument)) {
-        window.location.assign(targetURL.toString());
-        return;
+        return fallback();
+      }
+
+      if (refreshTree) {
+        const currentTree = document.querySelector(TREE_SCROLL_SELECTOR);
+        const nextTree = parsedDocument.querySelector(TREE_SCROLL_SELECTOR);
+        if (!(currentTree instanceof HTMLElement) || !(nextTree instanceof HTMLElement)) {
+          return fallback();
+        }
+        currentTree.replaceChildren(...Array.from(nextTree.children, (child) => document.importNode(child, true)));
       }
 
       syncDocumentHead(parsedDocument, targetURL);
@@ -1975,12 +2044,17 @@ export const READER_ASYNC_ENHANCEMENT_SCRIPT = `(() => {
       syncHeadStyleByID(THEME_CUSTOM_STYLE_ID, parsedDocument);
       syncReaderStateScript(parsedDocument);
       syncMobileBarTitle(parsedDocument);
-      markActiveTreeItemByPathname(targetPathname);
-      setMobileSidebarOpen(false);
+      if (!refreshInPlace || refreshTree) {
+        markActiveTreeItemByPathname(targetPathname);
+        setMobileSidebarOpen(false);
+      }
 
       const readerMain = document.querySelector(MAIN_SELECTOR);
       if (readerMain instanceof HTMLElement) {
         readerMain.scrollTop = 0;
+      }
+      if (pushHistory && targetURL.href !== window.location.href) {
+        window.history.pushState({ reader: true }, "", targetURL.toString());
       }
       refreshOutlineRegistry();
       syncSpreadsheetTabs();
@@ -1990,27 +2064,227 @@ export const READER_ASYNC_ENHANCEMENT_SCRIPT = `(() => {
       await syncReaderImageViewerRegistry();
       void syncOfficeDownloadAction();
       await syncOnlyOfficeReader();
-      if (pushHistory) {
-        window.history.pushState({ reader: true }, "", targetURL.toString());
-      }
+      return currentSeq === inflightSeq;
     } catch (error) {
       if (
-        error &&
-        typeof error === "object" &&
-        "name" in error &&
-        (error).name === "AbortError"
+        currentSeq !== inflightSeq ||
+        (error && typeof error === "object" && "name" in error && (error).name === "AbortError")
       ) {
-        return;
+        return false;
       }
-      window.location.assign(targetURL.toString());
+      return fallback();
     } finally {
       if (currentSeq === inflightSeq) {
+        inflightController = null;
         finishProgress();
       }
     }
   };
 
+  let inlineEditor = null;
+
+  const setReadingModeControls = (visible, enabled = false) => {
+    for (const button of document.querySelectorAll(INLINE_CLOSE_TRIGGER_SELECTOR)) {
+      if (button instanceof HTMLButtonElement) {
+        button.hidden = !visible;
+        button.disabled = !enabled;
+      }
+    }
+  };
+
+  const openInlineEditor = (trigger, focusEditor = false) => {
+    const main = document.querySelector(MAIN_SELECTOR);
+    const rawEditorURL = trigger.getAttribute("data-reader-inline-edit");
+    if (inlineEditor || !(main instanceof HTMLElement) || !main.contains(trigger) || !rawEditorURL) {
+      return;
+    }
+    const editorURL = new URL(rawEditorURL, window.location.href);
+    if (editorURL.protocol !== "https:" && editorURL.protocol !== "http:") {
+      return;
+    }
+
+    if (inflightController instanceof AbortController) {
+      inflightSeq += 1;
+      inflightController.abort();
+      inflightController = null;
+      finishProgress();
+    }
+    editorURL.searchParams.set("inline", "1");
+    if (focusEditor) editorURL.searchParams.set("compose", "1");
+    const frame = document.createElement("iframe");
+    frame.name = "plaindoc-reader-editor";
+    frame.title = "文档编辑器";
+    frame.className = "reader-inline-editor";
+    frame.referrerPolicy = "strict-origin-when-cross-origin";
+    frame.src = editorURL.href;
+    inlineEditor = { frame, origin: editorURL.origin, readerURL: new URL(window.location.href), main, status: null, ready: false };
+    main.dataset.readerEditing = "1";
+    setReadingModeControls(true);
+    setMobileSidebarOpen(false);
+    main.append(frame);
+    frame.focus();
+  };
+
+  const requestReadingMode = () => {
+    if (!inlineEditor?.ready || !inlineEditor.frame.isConnected) {
+      return;
+    }
+    setMobileSidebarOpen(false);
+    inlineEditor.frame.focus();
+    inlineEditor.frame.contentWindow?.postMessage({ type: "plaindoc:reader-editor-close-request" }, inlineEditor.origin);
+  };
+
+  const closeInlineEditor = (restoreFocus = true) => {
+    if (!inlineEditor) {
+      return;
+    }
+    const { frame, main, status } = inlineEditor;
+    inlineEditor = null;
+    frame.remove();
+    status?.remove();
+    delete main.dataset.readerEditing;
+    setReadingModeControls(false);
+    if (restoreFocus) {
+      main.querySelector(INLINE_EDIT_TRIGGER_SELECTOR)?.focus();
+    }
+  };
+
+  const refreshPreviewAfterSave = (editor) => {
+    editor.frame.remove();
+    setReadingModeControls(false);
+
+    const panel = document.createElement("div");
+    panel.className = "reader-inline-update";
+    const message = document.createElement("p");
+    message.setAttribute("role", "status");
+    const retry = document.createElement("button");
+    retry.type = "button";
+    retry.className = "reader-article-action";
+    retry.textContent = "重试加载预览";
+    panel.append(message, retry);
+    editor.status = panel;
+    editor.main.append(panel);
+
+    const refresh = async () => {
+      retry.hidden = true;
+      message.textContent = "正在加载最新预览…";
+      const refreshed = await loadReaderPage(editor.readerURL, false, true);
+      if (inlineEditor !== editor) {
+        return;
+      }
+      if (refreshed) {
+        closeInlineEditor();
+      } else {
+        message.textContent = "文档已保存，暂时无法加载最新预览。";
+        retry.hidden = false;
+        retry.focus();
+      }
+    };
+    retry.addEventListener("click", () => void refresh());
+    void refresh();
+  };
+
+  let createDocumentDialog = null;
+
+  const openCreateDocumentDialog = (trigger) => {
+    const spaceId = resolveReaderStatePayload()?.space?.id;
+    const formURL = trigger.getAttribute("data-reader-create-document");
+    if (inlineEditor || createDocumentDialog || typeof spaceId !== "string" || !formURL) return;
+    const url = new URL(formURL, window.location.href);
+    if (url.protocol !== "https:" && url.protocol !== "http:") return;
+    url.searchParams.set("dialog", "create-document");
+
+    const dialog = document.createElement("dialog");
+    dialog.className = "reader-create-dialog";
+    dialog.setAttribute("aria-labelledby", "reader-create-dialog-title");
+    const title = document.createElement("h2");
+    title.id = "reader-create-dialog-title";
+    title.textContent = "新建文档";
+    const frame = document.createElement("iframe");
+    frame.name = "plaindoc-reader-create-document";
+    frame.title = "文档创建表单";
+    frame.referrerPolicy = "strict-origin-when-cross-origin";
+    frame.src = url.href;
+    dialog.append(title, frame);
+    createDocumentDialog = { dialog, frame, trigger, spaceId, origin: url.origin, created: false };
+    // 创建中的关闭判断由表单处理，避免在请求还未返回时销毁表单。
+    dialog.addEventListener("cancel", (event) => event.preventDefault());
+    setMobileSidebarOpen(false);
+    document.body.append(dialog);
+    dialog.showModal();
+  };
+
+  const closeCreateDocumentDialog = () => {
+    if (!createDocumentDialog) return;
+    const { dialog, trigger } = createDocumentDialog;
+    createDocumentDialog = null;
+    dialog.close();
+    dialog.remove();
+    trigger.focus();
+  };
+
+  const openCreatedDocument = (creation, documentId, identifier) => {
+    creation.created = true;
+    const key = typeof identifier === "string" && identifier ? identifier : documentId;
+    const url = new URL("/r/" + encodeURIComponent(creation.spaceId) + "/" + encodeURIComponent(key), window.location.origin);
+    const status = document.createElement("p");
+    status.setAttribute("role", "status");
+    const retry = document.createElement("button");
+    retry.type = "button";
+    retry.className = "reader-article-action";
+    retry.textContent = "重试打开文档";
+    creation.frame.replaceWith(status, retry);
+
+    const open = async () => {
+      retry.hidden = true;
+      status.textContent = "正在打开新文档…";
+      if (!(await loadReaderPage(url, true, true, true))) {
+        status.textContent = "文档已创建，暂时无法打开。";
+        retry.hidden = false;
+        retry.focus();
+        return;
+      }
+      closeCreateDocumentDialog();
+      const editTrigger = document.querySelector(INLINE_EDIT_TRIGGER_SELECTOR);
+      if (editTrigger instanceof HTMLButtonElement) openInlineEditor(editTrigger, true);
+    };
+
+    retry.addEventListener("click", () => void open());
+    void open();
+  };
+
+  window.addEventListener("message", (event) => {
+    const creation = createDocumentDialog;
+    if (creation?.frame.isConnected && event.source === creation.frame.contentWindow && event.origin === creation.origin) {
+      if (event.data?.type === "plaindoc:reader-create-canceled") {
+        closeCreateDocumentDialog();
+      } else if (!creation.created && event.data?.type === "plaindoc:reader-document-created" &&
+          typeof event.data.documentId === "string" && event.data.documentId) {
+        openCreatedDocument(creation, event.data.documentId, event.data.identifier);
+      } else if (!creation.created && event.data?.type === "plaindoc:reader-folder-imported" &&
+          event.data.spaceId === creation.spaceId) {
+        closeCreateDocumentDialog();
+        void loadReaderPage(new URL(window.location.href), false, false, true);
+      }
+      return;
+    }
+    if (!inlineEditor?.frame.isConnected || event.source !== inlineEditor.frame.contentWindow || event.origin !== inlineEditor.origin) {
+      return;
+    }
+    if (event.data?.type === "plaindoc:reader-editor-ready") {
+      inlineEditor.ready = true;
+      setReadingModeControls(true, true);
+    } else if (event.data?.type === "plaindoc:reader-editor-saved") {
+      refreshPreviewAfterSave(inlineEditor);
+    } else if (event.data?.type === "plaindoc:reader-editor-closed") {
+      closeInlineEditor();
+    }
+  });
+
   try {
+    document.addEventListener("error", (event) => {
+      if (event.target instanceof HTMLImageElement) showImportedImageLoadError(event.target);
+    }, true);
     expandAncestorsForActiveRow();
     markActiveTreeItemByPathname(window.location.pathname);
     refreshOutlineRegistry();
@@ -2034,6 +2308,40 @@ export const READER_ASYNC_ENHANCEMENT_SCRIPT = `(() => {
           return;
         }
 
+        const createDocumentButton = event.target.closest(CREATE_DOCUMENT_TRIGGER_SELECTOR);
+        if (createDocumentButton instanceof HTMLButtonElement) {
+          event.preventDefault();
+          openCreateDocumentDialog(createDocumentButton);
+          return;
+        }
+
+        const unsupportedFileButton = event.target.closest(UNSUPPORTED_FILE_TRIGGER_SELECTOR);
+        if (unsupportedFileButton instanceof HTMLButtonElement) {
+          const fileName = unsupportedFileButton.getAttribute("data-reader-unsupported-file") || "";
+          const dialog = document.querySelector(UNSUPPORTED_FILE_DIALOG_SELECTOR);
+          const fileNameNode = dialog?.querySelector("[data-reader-unsupported-filename]");
+          if (dialog instanceof HTMLDialogElement && fileNameNode instanceof HTMLElement) {
+            fileNameNode.textContent = fileName;
+            dialog.showModal();
+          }
+          return;
+        }
+
+        const inlineEditButton = event.target.closest(INLINE_EDIT_TRIGGER_SELECTOR);
+        const inlineCloseButton = event.target.closest(INLINE_CLOSE_TRIGGER_SELECTOR);
+        if (inlineEditButton instanceof HTMLButtonElement || inlineCloseButton instanceof HTMLButtonElement) {
+          if (event.defaultPrevented || isModifiedClick(event)) {
+            return;
+          }
+          event.preventDefault();
+          if (inlineEditButton instanceof HTMLButtonElement) {
+            openInlineEditor(inlineEditButton);
+          } else {
+            requestReadingMode();
+          }
+          return;
+        }
+
         const exportActionButton = event.target.closest(EXPORT_ACTION_SELECTOR);
         if (exportActionButton instanceof HTMLButtonElement) {
           if (event.defaultPrevented || isModifiedClick(event)) {
@@ -2041,7 +2349,7 @@ export const READER_ASYNC_ENHANCEMENT_SCRIPT = `(() => {
           }
           event.preventDefault();
           event.stopPropagation();
-          handleExportAction(exportActionButton);
+          void handleExportAction(exportActionButton);
           return;
         }
 
@@ -2149,11 +2457,15 @@ export const READER_ASYNC_ENHANCEMENT_SCRIPT = `(() => {
             return;
           }
           const targetURL = toSameOriginURL(docLink.getAttribute("href") || docLink.href);
-          if (!targetURL) {
+          if (!targetURL || inlineEditor?.frame.isConnected) {
             return;
           }
           event.preventDefault();
           event.stopPropagation();
+          if (inlineEditor && normalizePathname(targetURL.pathname) === normalizePathname(window.location.pathname)) {
+            return;
+          }
+          closeInlineEditor(false);
           setMobileSidebarOpen(false);
           void loadReaderPage(targetURL, true);
           return;
@@ -2190,6 +2502,14 @@ export const READER_ASYNC_ENHANCEMENT_SCRIPT = `(() => {
       if (!targetURL) {
         return;
       }
+      if (inlineEditor?.frame.isConnected) {
+        if (normalizePathname(targetURL.pathname) !== normalizePathname(inlineEditor.readerURL.pathname)) {
+          window.history.pushState({ reader: true }, "", inlineEditor.readerURL.toString());
+        }
+        requestReadingMode();
+        return;
+      }
+      closeInlineEditor(false);
       setMobileSidebarOpen(false);
       void loadReaderPage(targetURL, false);
     });
@@ -2202,7 +2522,7 @@ export const READER_ASYNC_ENHANCEMENT_SCRIPT = `(() => {
       if (!(event instanceof KeyboardEvent)) {
         return;
       }
-      if (event.key !== "Escape") {
+      if (event.key !== "Escape" || document.querySelector(UNSUPPORTED_FILE_DIALOG_SELECTOR + "[open]")) {
         return;
       }
       exitSpreadsheetFallbackFullscreen();

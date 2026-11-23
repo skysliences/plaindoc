@@ -15,7 +15,7 @@
         <span class="yt-nav-toggle-bar" aria-hidden="true"></span>
       </button>
       <a href="/" class="yt-brand" aria-label="{{ .SiteName }} 首页">
-        <img src="/assets/favicon.png" alt="{{ .SiteName }} Logo" class="yt-brand-logo" loading="eager" decoding="async">
+        <img src="/assets/favicon.png?v=bugo" alt="BUGO" class="yt-brand-logo" loading="eager" decoding="async">
         <span class="yt-brand-badge">Docs</span>
       </a>
     </div>
@@ -63,16 +63,18 @@
         </button>
       {{ end }}
 
-      {{ if and .IsAuthenticated .CanManageSpace }}
-        <a
-          href="{{ .AdminURL }}/spaces"
+      {{ if .IsAuthenticated }}
+        <button
+          type="button"
           class="yt-create-button"
-          title="创建内容"
-          aria-label="创建内容，跳转到后台空间管理"
+          aria-label="新建空间"
+          aria-haspopup="dialog"
+          aria-controls="create-space-dialog"
+          data-create-space-trigger
         >
           <span class="yt-create-button-icon" aria-hidden="true">+</span>
-          <span>创建</span>
-        </a>
+          <span>新建空间</span>
+        </button>
       {{ end }}
 
       {{ if .IsAuthenticated }}
@@ -88,7 +90,7 @@
           </summary>
           <div class="yt-user-menu">
             <p class="yt-user-menu-name">{{ .CurrentUserName }}</p>
-            <a href="{{ .AdminURL }}" class="yt-user-menu-item">后台管理</a>
+            {{ if .CanAccessAdmin }}<a href="{{ .AdminURL }}" class="yt-user-menu-item">后台管理</a>{{ end }}
             <form method="post" action="{{ .LogoutURL }}">
               <button type="submit" class="yt-user-menu-item yt-user-menu-button">退出登录</button>
             </form>
@@ -103,4 +105,21 @@
     </div>
   </div>
 </header>
+{{ end }}
+{{ define "create_space_dialog" }}
+{{ if .IsAuthenticated }}
+<dialog id="create-space-dialog" class="yt-space-dialog" data-create-space-dialog{{ if .SpaceCreationError }} data-reopen{{ end }} aria-labelledby="create-space-title">
+  <form method="post" action="/spaces">
+    <h2 id="create-space-title">新建空间</h2>
+    <p class="yt-space-dialog-description">创建后，你可以从示例文档开始编辑。</p>
+    <label for="create-space-name">空间名称</label>
+    <input id="create-space-name" name="name" required autofocus>
+    {{ if .SpaceCreationError }}<p role="alert" class="yt-space-dialog-error">{{ .SpaceCreationError }}</p>{{ end }}
+    <div class="yt-space-dialog-actions">
+      <button type="button" class="yt-space-dialog-cancel" data-create-space-cancel>取消</button>
+      <button type="submit" class="yt-space-dialog-submit">创建空间</button>
+    </div>
+  </form>
+</dialog>
+{{ end }}
 {{ end }}

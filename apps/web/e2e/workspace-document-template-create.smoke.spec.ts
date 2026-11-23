@@ -332,7 +332,7 @@ test.describe("Workspace Template Create Smoke", () => {
     const quickMenuButton = page.getByLabel("打开目录快捷菜单");
     await expect(quickMenuButton).toBeVisible();
     await quickMenuButton.click();
-    await page.getByRole("menuitem", { name: "新建文档" }).click();
+    await page.getByRole("menuitem", { name: "从模板新建" }).click();
 
     await expect(page.getByRole("heading", { name: "新建文档" })).toBeVisible();
     await page.getByLabel("文档标题").fill("会议纪要文档");

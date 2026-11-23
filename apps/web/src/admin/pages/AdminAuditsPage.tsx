@@ -17,6 +17,11 @@ import { AdminPageCard, AdminPaginationFooter, AdminTableContainer, AdminToolbar
 import { formatError } from "../../editor/status-utils";
 
 const DEFAULT_PAGE_SIZE = 20;
+const documentActivityActions = [
+  { action: "read", label: "阅读 / 打开" },
+  { action: "edit", label: "编辑保存" },
+  { action: "copy", label: "复制" }
+] as const;
 
 interface AdminAuditsPageProps {
   dataGateway: DataGateway;
@@ -69,6 +74,8 @@ function renderModuleLabel(value: AdminAuditModule): string {
       return "空间管理";
     case "document":
       return "文档管理";
+    case "document_activity":
+      return "文档使用";
     case "document_template":
       return "模板管理";
     case "document_template_scene":
@@ -90,6 +97,12 @@ function renderActionLabel(value: AdminAuditAction): string {
       return "更新";
     case "delete":
       return "删除";
+    case "read":
+      return "阅读";
+    case "edit":
+      return "编辑保存";
+    case "copy":
+      return "复制";
     default:
       return value;
   }
@@ -170,6 +183,9 @@ export function AdminAuditsPage({ dataGateway }: AdminAuditsPageProps) {
 
   const [auditsState, setAuditsState] = useState<AdminAuditsState>(() => emptyAuditsState());
   const [loading, setLoading] = useState(false);
+  const [activityCounts, setActivityCounts] = useState<number[] | null>(null);
+  const [activityRefresh, setActivityRefresh] = useState(0);
+  const [activityCountsError, setActivityCountsError] = useState(false);
 
   const openToast = useCallback((message: string, variant: "success" | "info" | "error" = "error") => {
     showToast(message, variant);
@@ -202,6 +218,29 @@ export function AdminAuditsPage({ dataGateway }: AdminAuditsPageProps) {
   useEffect(() => {
     void loadAudits();
   }, [loadAudits]);
+
+  useEffect(() => {
+    setActivityCounts(null);
+    setActivityCountsError(false);
+    if (moduleFilter !== "document_activity") return;
+    let active = true;
+    void Promise.all(documentActivityActions.map(({ action }) => dataGateway.admin.listAudits({
+      module: "document_activity",
+      action,
+      keyword,
+      actorUserId: actorUserID || undefined,
+      targetId: targetID || undefined,
+      requestId: requestID || undefined,
+      from: fromTime || undefined,
+      to: toTime || undefined,
+      page: 1,
+      pageSize: 1
+    }))).then(
+      (results) => { if (active) setActivityCounts(results.map((result) => result.pagination.total)); },
+      () => { if (active) setActivityCountsError(true); }
+    );
+    return () => { active = false; };
+  }, [activityRefresh, actorUserID, dataGateway.admin, fromTime, keyword, moduleFilter, requestID, targetID, toTime]);
 
   const totalPages = useMemo(() => {
     const total = auditsState.pagination.total;
@@ -294,6 +333,18 @@ export function AdminAuditsPage({ dataGateway }: AdminAuditsPageProps) {
 
   return (
     <section aria-label="审计日志查询">
+      {moduleFilter === "document_activity" && (
+        <dl className="mb-3 grid gap-3 sm:grid-cols-3" aria-label="文档使用统计">
+          {documentActivityActions.map(({ action, label }, index) => (
+            <div key={action} className="rounded-lg border border-solid border-slate-200 bg-white p-4">
+              <dt className="text-sm text-slate-600">{label}</dt>
+              <dd className="m-0 mt-1 text-2xl font-semibold text-slate-900">
+                {activityCounts?.[index]?.toLocaleString() ?? (activityCountsError ? "加载失败" : "…")}
+              </dd>
+            </div>
+          ))}
+        </dl>
+      )}
       <AdminPageCard>
           <form className="grid gap-3 xl:grid-cols-4" onSubmit={handleSearchSubmit}>
             <label className="space-y-1.5 xl:col-span-2">
@@ -321,6 +372,7 @@ export function AdminAuditsPage({ dataGateway }: AdminAuditsPageProps) {
                   <SelectItem value="user">user</SelectItem>
                   <SelectItem value="space">space</SelectItem>
                   <SelectItem value="document">document</SelectItem>
+                  <SelectItem value="document_activity">文档使用</SelectItem>
                   <SelectItem value="document_template">document_template</SelectItem>
                   <SelectItem value="document_template_scene">document_template_scene</SelectItem>
                   <SelectItem value="theme">theme</SelectItem>
@@ -344,6 +396,9 @@ export function AdminAuditsPage({ dataGateway }: AdminAuditsPageProps) {
                   <SelectItem value="create">create</SelectItem>
                   <SelectItem value="update">update</SelectItem>
                   <SelectItem value="delete">delete</SelectItem>
+                  {documentActivityActions.map(({ action, label }) => (
+                    <SelectItem key={action} value={action}>{label}</SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </label>
@@ -391,7 +446,10 @@ export function AdminAuditsPage({ dataGateway }: AdminAuditsPageProps) {
                 <Button type="button" variant="outline" disabled={loading} onClick={handleReset}>
                   重置
                 </Button>
-                <Button type="button" variant="outline" disabled={loading} onClick={() => void loadAudits()}>
+                <Button type="button" variant="outline" disabled={loading} onClick={() => {
+                  void loadAudits();
+                  setActivityRefresh((previous) => previous + 1);
+                }}>
                   <RefreshCw size={14} />
                   <span>刷新</span>
                 </Button>

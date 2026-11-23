@@ -1,22 +1,26 @@
 {{ define "youtube_space_card" }}
 <article class="yt-card">
-  <a
-    class="yt-card-thumb"
-    data-space-id="{{ .SpaceID }}"
-    href="/r/{{ .SpaceID }}"
-    target="_blank"
-    rel="noopener noreferrer"
-    aria-label="进入空间 {{ .Name }}"
-  >
-    {{ if .CoverURL }}
-      <img class="yt-card-image" src="{{ .CoverURL }}" alt="{{ .Name }} 封面" loading="lazy">
-    {{ else }}
-      <div class="yt-card-placeholder" aria-label="{{ .Name }} 无封面">
-        <span>暂无封面</span>
-      </div>
+  <div class="yt-card-cover">
+    <a
+      class="yt-card-thumb"
+      data-space-id="{{ .SpaceID }}"
+      href="/r/{{ .SpaceID }}"
+      aria-label="进入空间 {{ .Name }}"
+    >
+      {{ if .CoverURL }}
+        <img class="yt-card-image" src="{{ .CoverURL }}" alt="{{ .Name }} 封面" loading="lazy">
+        <span class="yt-card-duration" aria-hidden="true">文档空间</span>
+      {{ else }}
+        <img class="yt-card-image" src="/space-covers/{{ .SpaceID }}" alt="{{ .Name }} 封面" loading="lazy">
+      {{ end }}
+    </a>
+    {{ if .ManageURL }}
+      <button type="button" class="yt-card-manage" data-space-manage-url="{{ .ManageURL }}"
+        aria-label="管理空间 {{ .Name }}" aria-haspopup="dialog" aria-controls="space-management-dialog">
+        <span aria-hidden="true">•••</span>
+      </button>
     {{ end }}
-    <span class="yt-card-duration" aria-hidden="true">文档空间</span>
-  </a>
+  </div>
 
   <div class="yt-card-content">
     <span class="yt-card-avatar" aria-hidden="true">
@@ -30,8 +34,6 @@
       <a
         class="yt-card-title-link"
         href="/r/{{ .SpaceID }}"
-        target="_blank"
-        rel="noopener noreferrer"
         aria-label="打开空间 {{ .Name }}"
       >
         <h2 class="yt-card-title">{{ .Name }}</h2>
@@ -45,4 +47,16 @@
     </div>
   </div>
 </article>
+{{ end }}
+
+{{ define "space_management_dialog" }}
+{{ if .IsAuthenticated }}
+<dialog id="space-management-dialog" class="yt-space-dialog yt-space-management-dialog" aria-labelledby="space-management-title">
+  <header>
+    <h2 id="space-management-title">管理空间</h2>
+    <form method="dialog"><button type="submit" aria-label="关闭" autofocus><span aria-hidden="true">×</span></button></form>
+  </header>
+  <iframe name="plaindoc-space-management" title="空间管理"></iframe>
+</dialog>
+{{ end }}
 {{ end }}

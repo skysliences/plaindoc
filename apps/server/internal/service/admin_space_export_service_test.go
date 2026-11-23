@@ -52,6 +52,67 @@ func TestAdminSpaceExportService_StartExport_RequiresSpaceID(t *testing.T) {
 	}
 }
 
+func TestAdminSpaceExportService_DocumentExportDenialBlocksJobAndDownload(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	svc := newAllowExportService()
+	svc.exportDir = t.TempDir()
+	denied := true
+	WithAdminSpaceExportDocumentDenialChecker(func(_ context.Context, spaceID, actorID string) (map[string]bool, error) {
+		if spaceID != "space-a" || actorID != "actor-user" {
+			t.Fatalf("unexpected export permission lookup: space=%q actor=%q", spaceID, actorID)
+		}
+		if denied {
+			return map[string]bool{"doc-a": true}, nil
+		}
+		return nil, nil
+	})(svc)
+	input := StartAdminSpaceExportInput{
+		ActorUserID: "actor-user",
+		SpaceID:     "space-a",
+		Format:      AdminSpaceExportFormatMarkdownZip,
+	}
+	if _, err := svc.StartExport(ctx, input); !errors.Is(err, errcode.ErrAdminForbidden) {
+		t.Fatalf("expected restricted space export to fail, got %v", err)
+	}
+
+	denied = false
+	queued, err := svc.StartExport(ctx, input)
+	if err != nil {
+		t.Fatalf("start export: %v", err)
+	}
+	denied = true
+	if err := svc.BeginExportJob(ctx, queued.JobID); !errors.Is(err, errcode.ErrAdminForbidden) {
+		t.Fatalf("expected queued export to recheck policy, got %v", err)
+	}
+
+	denied = false
+	result, err := svc.StartExport(ctx, input)
+	if err != nil {
+		t.Fatalf("start export: %v", err)
+	}
+	filePath := filepath.Join(svc.exportDir, "space-a.zip")
+	if err := os.WriteFile(filePath, []byte("archive"), 0o600); err != nil {
+		t.Fatalf("write archive: %v", err)
+	}
+	initialToken := "completed-download-token"
+	if _, err := svc.store.Complete(result.JobID, "space-a.zip", filePath, 7, initialToken, tokenHash(initialToken), svc.now()); err != nil {
+		t.Fatalf("complete export: %v", err)
+	}
+	denied = true
+	if _, err := svc.IssueDownloadURL(ctx, input.ActorUserID, result.JobID); !errors.Is(err, errcode.ErrAdminSpaceExportDownloadForbidden) {
+		t.Fatalf("expected new download token to be denied, got %v", err)
+	}
+	if _, err := svc.ConsumeDownloadToken(ctx, result.JobID, input.ActorUserID, initialToken); !errors.Is(err, errcode.ErrAdminSpaceExportDownloadForbidden) {
+		t.Fatalf("expected issued download token to be denied, got %v", err)
+	}
+	denied = false
+	if _, err := svc.ConsumeDownloadToken(ctx, result.JobID, input.ActorUserID, initialToken); err != nil {
+		t.Fatalf("restoring export permission should allow the current token: %v", err)
+	}
+}
+
 func TestAdminSpaceExportService_StartExport_PersistsSpaceName(t *testing.T) {
 	t.Parallel()
 
@@ -561,7 +622,7 @@ func TestAdminSpaceExportService_ReissuesDownloadTokenForLateSubscriber(t *testi
 	if reissuedToken == "" {
 		t.Fatalf("expected late subscriber completed event to include reissued download token")
 	}
-	download, err := svc.ConsumeDownloadToken(result.JobID, "actor-user", reissuedToken)
+	download, err := svc.ConsumeDownloadToken(context.Background(), result.JobID, "actor-user", reissuedToken)
 	if err != nil {
 		t.Fatalf("consume reissued download token failed: %v", err)
 	}
@@ -596,7 +657,7 @@ func TestAdminSpaceExportService_ConsumeDownloadToken_EnforcesOneTimeDownload(t 
 		t.Fatalf("complete export failed: %v", err)
 	}
 
-	download, err := svc.ConsumeDownloadToken(result.JobID, "actor-user", downloadToken)
+	download, err := svc.ConsumeDownloadToken(context.Background(), result.JobID, "actor-user", downloadToken)
 	if err != nil {
 		t.Fatalf("consume download token failed: %v", err)
 	}
@@ -604,7 +665,7 @@ func TestAdminSpaceExportService_ConsumeDownloadToken_EnforcesOneTimeDownload(t 
 		t.Fatalf("unexpected download payload: %#v", download)
 	}
 
-	if _, err := svc.ConsumeDownloadToken(result.JobID, "actor-user", downloadToken); !errors.Is(err, errcode.ErrAdminSpaceExportDownloadForbidden) {
+	if _, err := svc.ConsumeDownloadToken(context.Background(), result.JobID, "actor-user", downloadToken); !errors.Is(err, errcode.ErrAdminSpaceExportDownloadForbidden) {
 		t.Fatalf("expected replay to be forbidden, got %v", err)
 	}
 }
@@ -639,14 +700,14 @@ func TestAdminSpaceExportService_IssueDownloadURL_ReissuesOneTimeToken(t *testin
 		t.Fatalf("issue download url failed: %v", err)
 	}
 	downloadToken := tokenQueryValue(t, downloadURL)
-	download, err := svc.ConsumeDownloadToken(result.JobID, "actor-user", downloadToken)
+	download, err := svc.ConsumeDownloadToken(context.Background(), result.JobID, "actor-user", downloadToken)
 	if err != nil {
 		t.Fatalf("consume reissued download token failed: %v", err)
 	}
 	if download.FileName != "space-a.zip" || download.FilePath != filePath || download.SizeBytes != 11 {
 		t.Fatalf("unexpected download payload: %#v", download)
 	}
-	if _, err := svc.ConsumeDownloadToken(result.JobID, "other-user", downloadToken); !errors.Is(err, errcode.ErrAdminSpaceExportDownloadForbidden) {
+	if _, err := svc.ConsumeDownloadToken(context.Background(), result.JobID, "other-user", downloadToken); !errors.Is(err, errcode.ErrAdminSpaceExportDownloadForbidden) {
 		t.Fatalf("expected other actor forbidden, got %v", err)
 	}
 }
@@ -710,14 +771,14 @@ func TestAdminSpaceExportService_IssueDownloadURL_RestoresCompletedJobFromReposi
 		t.Fatalf("issue restored download url failed: %v", err)
 	}
 	downloadToken := tokenQueryValue(t, downloadURL)
-	download, err := svc.ConsumeDownloadToken(job.JobID, "actor-user", downloadToken)
+	download, err := svc.ConsumeDownloadToken(context.Background(), job.JobID, "actor-user", downloadToken)
 	if err != nil {
 		t.Fatalf("consume restored download token failed: %v", err)
 	}
 	if download.FileName != "space-a.plaindoc" || download.FilePath != filePath || download.SizeBytes != int64(len(content)) {
 		t.Fatalf("unexpected restored download payload: %#v", download)
 	}
-	if _, err := svc.ConsumeDownloadToken(job.JobID, "actor-user", downloadToken); !errors.Is(err, errcode.ErrAdminSpaceExportDownloadForbidden) {
+	if _, err := svc.ConsumeDownloadToken(context.Background(), job.JobID, "actor-user", downloadToken); !errors.Is(err, errcode.ErrAdminSpaceExportDownloadForbidden) {
 		t.Fatalf("expected restored token replay forbidden, got %v", err)
 	}
 }
@@ -741,7 +802,7 @@ func TestAdminSpaceExportService_ConsumeDownloadToken_RejectsInvalidStates(t *te
 			t.Fatalf("start export failed: %v", err)
 		}
 
-		_, err = svc.ConsumeDownloadToken(result.JobID, "actor-user", "download-token")
+		_, err = svc.ConsumeDownloadToken(context.Background(), result.JobID, "actor-user", "download-token")
 		if !errors.Is(err, errcode.ErrAdminSpaceExportDownloadForbidden) {
 			t.Fatalf("expected unfinished job to be forbidden, got %v", err)
 		}
@@ -751,7 +812,7 @@ func TestAdminSpaceExportService_ConsumeDownloadToken_RejectsInvalidStates(t *te
 		t.Parallel()
 
 		svc, result, token := completeExportForDownloadTest(t, now, "space-a.zip", true)
-		_, err := svc.ConsumeDownloadToken(result.JobID, "other-user", token)
+		_, err := svc.ConsumeDownloadToken(context.Background(), result.JobID, "other-user", token)
 		if !errors.Is(err, errcode.ErrAdminSpaceExportDownloadForbidden) {
 			t.Fatalf("expected other actor to be forbidden, got %v", err)
 		}
@@ -762,7 +823,7 @@ func TestAdminSpaceExportService_ConsumeDownloadToken_RejectsInvalidStates(t *te
 
 		svc, result, token := completeExportForDownloadTest(t, now, "space-a.zip", true)
 		svc.nowFn = func() time.Time { return now.Add(defaultAdminSpaceTransferTokenTTL + time.Second) }
-		_, err := svc.ConsumeDownloadToken(result.JobID, "actor-user", token)
+		_, err := svc.ConsumeDownloadToken(context.Background(), result.JobID, "actor-user", token)
 		if !errors.Is(err, errcode.ErrAdminSpaceExportFileExpired) {
 			t.Fatalf("expected expired token error, got %v", err)
 		}
@@ -772,7 +833,7 @@ func TestAdminSpaceExportService_ConsumeDownloadToken_RejectsInvalidStates(t *te
 		t.Parallel()
 
 		svc, result, token := completeExportForDownloadTest(t, now, "space-a.zip", false)
-		_, err := svc.ConsumeDownloadToken(result.JobID, "actor-user", token)
+		_, err := svc.ConsumeDownloadToken(context.Background(), result.JobID, "actor-user", token)
 		if !errors.Is(err, errcode.ErrAdminSpaceExportFileNotReady) {
 			t.Fatalf("expected file not ready error, got %v", err)
 		}
@@ -794,7 +855,7 @@ func TestAdminSpaceExportService_ConsumeDownloadToken_RejectsInvalidStates(t *te
 		if _, err := svc.store.Complete(result.JobID, job.FileName, outsidePath, 11, token, tokenHash(token), now); err != nil {
 			t.Fatalf("replace export file path failed: %v", err)
 		}
-		_, err = svc.ConsumeDownloadToken(result.JobID, "actor-user", token)
+		_, err = svc.ConsumeDownloadToken(context.Background(), result.JobID, "actor-user", token)
 		if !errors.Is(err, errcode.ErrAdminSpaceExportDownloadForbidden) {
 			t.Fatalf("expected outside file path to be forbidden, got %v", err)
 		}

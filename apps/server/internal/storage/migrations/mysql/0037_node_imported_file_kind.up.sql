@@ -1,0 +1,1 @@
+ALTER TABLE nodes ADD COLUMN imported_file_kind VARCHAR(16) NOT NULL DEFAULT '';

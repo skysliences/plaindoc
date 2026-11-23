@@ -4,7 +4,7 @@ import type { SaveIndicatorVariant, SaveStatus } from "./types";
 // 在文档树中找到首个文档节点。
 export function findFirstDocId(nodes: TreeNode[]): string | null {
   for (const node of nodes) {
-    if (node.type === "doc") {
+    if (node.type === "doc" && node.importedFileKind !== "unsupported") {
       const resolvedDocumentID = (node.documentId ?? node.id ?? "").trim();
       if (resolvedDocumentID) {
         return resolvedDocumentID;

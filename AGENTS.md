@@ -172,3 +172,5 @@ PlainDoc 是一个面向中小团队的文档平台：Go 单体后端 + React �
 2. 再定位“契约真值文件”（types/config/router），最后落到实现细节。
 3. 每次改动后至少执行最小回归：`go test ./... -count=1`（server）+ `npm run web:build`（web）。
 4. 涉及契约、配置、SSR、路由变更时，同步更新 `BACKEND_DEVELOPER_GUIDE.md` 或 `FRONTEND_DEVELOPER_GUIDE.md`，避免文档漂移。
+5. 每次完成影响应用运行的改动后，Agent 必须在回复前自行更新本地预览，并让服务继续运行，供用户实时测试。优先复用本项目现有的 `http://127.0.0.1:8080` 预览和 `apps/server/data/local-preview` 数据目录。按改动重建前端、SSR Worker 和 Go 服务产物，构建成功后再重启需要重启的 PlainDoc 进程。保留现有本地配置和数据，先确认端口上的进程属于本项目。
+6. 部署后检查 `/api/healthz` 返回 `code == 0`，并访问首页或本次改动涉及的入口，确认新版本已生效。最终回复提供可测试的本地地址和验证结果。如果部署失败，先排查并重试，再说明具体阻塞和当前服务状态。

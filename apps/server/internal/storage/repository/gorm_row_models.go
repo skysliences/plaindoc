@@ -65,10 +65,11 @@ type deletedDocumentAttachmentCleanupCandidateRowDB struct {
 }
 
 type workspaceNodeDeleteSnapshotDB struct {
-	NodeID       string          `gorm:"column:node_id"`
-	SpaceID      string          `gorm:"column:space_id"`
-	ParentNodeID *string         `gorm:"column:parent_node_id"`
-	Type         models.NodeType `gorm:"column:type"`
+	ImportedFileKind models.ImportedFileKind `gorm:"column:imported_file_kind"`
+	NodeID           string                  `gorm:"column:node_id"`
+	SpaceID          string                  `gorm:"column:space_id"`
+	ParentNodeID     *string                 `gorm:"column:parent_node_id"`
+	Type             models.NodeType         `gorm:"column:type"`
 }
 
 type documentAttachmentRowDB struct {
@@ -201,33 +202,34 @@ type documentImageAssetReferenceRowDB struct {
 }
 
 type documentAccessRowDB struct {
-	ID                int64                 `gorm:"column:id"`
-	DocumentID        string                `gorm:"column:document_id"`
-	NodeID            string                `gorm:"column:node_id"`
-	ThemeID           string                `gorm:"column:theme_id"`
-	Format            models.DocumentFormat `gorm:"column:format"`
-	DocumentVis       models.Visibility     `gorm:"column:document_vis"`
-	DocumentStatus    models.EntityStatus   `gorm:"column:document_status"`
-	DocumentBanReason string                `gorm:"column:document_ban_reason"`
-	DocumentBannedAt  *time.Time            `gorm:"column:document_banned_at"`
-	DocumentDeletedAt *time.Time            `gorm:"column:document_deleted_at"`
-	Title             string                `gorm:"column:title"`
-	ContentMD         string                `gorm:"column:content_md"`
-	Version           int                   `gorm:"column:version"`
-	SourceBlobID      *string               `gorm:"column:source_blob_id"`
-	SourceFileName    *string               `gorm:"column:source_file_name"`
-	SourceMimeType    *string               `gorm:"column:source_mime_type"`
-	ContentVersion    int                   `gorm:"column:content_version"`
-	CreatedByUserID   *string               `gorm:"column:created_by_user_id"`
-	UpdatedByUserID   *string               `gorm:"column:updated_by_user_id"`
-	SpaceID           string                `gorm:"column:space_id"`
-	SpaceName         string                `gorm:"column:space_name"`
-	SpaceVis          models.Visibility     `gorm:"column:space_vis"`
-	SpaceStatus       models.EntityStatus   `gorm:"column:space_status"`
-	SpaceBanReason    string                `gorm:"column:space_ban_reason"`
-	SpaceBannedAt     *time.Time            `gorm:"column:space_banned_at"`
-	SpaceDeletedAt    *time.Time            `gorm:"column:space_deleted_at"`
-	SpaceOwnerUser    string                `gorm:"column:space_owner_user"`
+	ImportedFileKind  models.ImportedFileKind `gorm:"column:imported_file_kind"`
+	ID                int64                   `gorm:"column:id"`
+	DocumentID        string                  `gorm:"column:document_id"`
+	NodeID            string                  `gorm:"column:node_id"`
+	ThemeID           string                  `gorm:"column:theme_id"`
+	Format            models.DocumentFormat   `gorm:"column:format"`
+	DocumentVis       models.Visibility       `gorm:"column:document_vis"`
+	DocumentStatus    models.EntityStatus     `gorm:"column:document_status"`
+	DocumentBanReason string                  `gorm:"column:document_ban_reason"`
+	DocumentBannedAt  *time.Time              `gorm:"column:document_banned_at"`
+	DocumentDeletedAt *time.Time              `gorm:"column:document_deleted_at"`
+	Title             string                  `gorm:"column:title"`
+	ContentMD         string                  `gorm:"column:content_md"`
+	Version           int                     `gorm:"column:version"`
+	SourceBlobID      *string                 `gorm:"column:source_blob_id"`
+	SourceFileName    *string                 `gorm:"column:source_file_name"`
+	SourceMimeType    *string                 `gorm:"column:source_mime_type"`
+	ContentVersion    int                     `gorm:"column:content_version"`
+	CreatedByUserID   *string                 `gorm:"column:created_by_user_id"`
+	UpdatedByUserID   *string                 `gorm:"column:updated_by_user_id"`
+	SpaceID           string                  `gorm:"column:space_id"`
+	SpaceName         string                  `gorm:"column:space_name"`
+	SpaceVis          models.Visibility       `gorm:"column:space_vis"`
+	SpaceStatus       models.EntityStatus     `gorm:"column:space_status"`
+	SpaceBanReason    string                  `gorm:"column:space_ban_reason"`
+	SpaceBannedAt     *time.Time              `gorm:"column:space_banned_at"`
+	SpaceDeletedAt    *time.Time              `gorm:"column:space_deleted_at"`
+	SpaceOwnerUser    string                  `gorm:"column:space_owner_user"`
 }
 
 type adminDocumentListRowDB struct {
@@ -342,37 +344,39 @@ type passwordResetTokenRowDB struct {
 }
 
 type readerPageDocumentRowDB struct {
-	DocumentID     string                      `gorm:"column:document_id"`
-	NodeID         string                      `gorm:"column:node_id"`
-	ReaderSlug     *string                     `gorm:"column:reader_slug"`
-	ThemeID        string                      `gorm:"column:theme_id"`
-	Format         models.DocumentFormat       `gorm:"column:format"`
-	Visibility     string                      `gorm:"column:visibility"`
-	Title          string                      `gorm:"column:title"`
-	ContentMD      string                      `gorm:"column:content_md"`
-	RenderStatus   models.DocumentRenderStatus `gorm:"column:render_status"`
-	RenderError    string                      `gorm:"column:render_error"`
-	RenderedAtRaw  *string                     `gorm:"column:rendered_at_raw"`
-	Version        int                         `gorm:"column:version"`
-	SourceBlobID   *string                     `gorm:"column:source_blob_id"`
-	SourceFileName *string                     `gorm:"column:source_file_name"`
-	SourceMimeType *string                     `gorm:"column:source_mime_type"`
-	ContentVersion int                         `gorm:"column:content_version"`
-	AuthorNickname string                      `gorm:"column:author_nickname"`
-	UpdatedAtRaw   string                      `gorm:"column:updated_at_raw"`
-	SpaceID        string                      `gorm:"column:space_id"`
+	ImportedFileKind models.ImportedFileKind     `gorm:"column:imported_file_kind"`
+	DocumentID       string                      `gorm:"column:document_id"`
+	NodeID           string                      `gorm:"column:node_id"`
+	ReaderSlug       *string                     `gorm:"column:reader_slug"`
+	ThemeID          string                      `gorm:"column:theme_id"`
+	Format           models.DocumentFormat       `gorm:"column:format"`
+	Visibility       string                      `gorm:"column:visibility"`
+	Title            string                      `gorm:"column:title"`
+	ContentMD        string                      `gorm:"column:content_md"`
+	RenderStatus     models.DocumentRenderStatus `gorm:"column:render_status"`
+	RenderError      string                      `gorm:"column:render_error"`
+	RenderedAtRaw    *string                     `gorm:"column:rendered_at_raw"`
+	Version          int                         `gorm:"column:version"`
+	SourceBlobID     *string                     `gorm:"column:source_blob_id"`
+	SourceFileName   *string                     `gorm:"column:source_file_name"`
+	SourceMimeType   *string                     `gorm:"column:source_mime_type"`
+	ContentVersion   int                         `gorm:"column:content_version"`
+	AuthorNickname   string                      `gorm:"column:author_nickname"`
+	UpdatedAtRaw     string                      `gorm:"column:updated_at_raw"`
+	SpaceID          string                      `gorm:"column:space_id"`
 }
 
 type readerPageTreeNodeRowDB struct {
-	NodeID             string          `gorm:"column:node_id"`
-	DocumentID         *string         `gorm:"column:document_id"`
-	ReaderSlug         *string         `gorm:"column:reader_slug"`
-	ParentNodeID       *string         `gorm:"column:parent_node_id"`
-	Type               models.NodeType `gorm:"column:type"`
-	Title              string          `gorm:"column:title"`
-	Sort               int             `gorm:"column:sort"`
-	DocumentVisibility *string         `gorm:"column:document_visibility"`
-	DocumentFormat     *string         `gorm:"column:document_format"`
+	ImportedFileKind   models.ImportedFileKind `gorm:"column:imported_file_kind"`
+	NodeID             string                  `gorm:"column:node_id"`
+	DocumentID         *string                 `gorm:"column:document_id"`
+	ReaderSlug         *string                 `gorm:"column:reader_slug"`
+	ParentNodeID       *string                 `gorm:"column:parent_node_id"`
+	Type               models.NodeType         `gorm:"column:type"`
+	Title              string                  `gorm:"column:title"`
+	Sort               int                     `gorm:"column:sort"`
+	DocumentVisibility *string                 `gorm:"column:document_visibility"`
+	DocumentFormat     *string                 `gorm:"column:document_format"`
 }
 
 type readerPageDocumentIDRowDB struct {

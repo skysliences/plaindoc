@@ -10,6 +10,7 @@ import (
 	"github.com/lifei6671/plaindoc/apps/server/internal/server/response"
 	"github.com/lifei6671/plaindoc/apps/server/internal/service"
 	"github.com/lifei6671/plaindoc/apps/server/internal/storage/models"
+	"github.com/lifei6671/plaindoc/apps/server/internal/storage/repository"
 )
 
 var (
@@ -41,6 +42,7 @@ var (
 )
 
 type accessHandler struct {
+	activityRepo       repository.AuditLogRepository
 	authService        *service.AuthService
 	visibilityService  *service.VisibilityService
 	renderCache        *rendercache.Cache
@@ -52,27 +54,31 @@ type updateVisibilityRequest struct {
 }
 
 type spaceAccessResponse struct {
-	ID         string `json:"id"`
-	Name       string `json:"name"`
-	Visibility string `json:"visibility"`
-	CreatedAt  string `json:"createdAt"`
-	UpdatedAt  string `json:"updatedAt"`
+	CanCreateNodes *bool  `json:"canCreateNodes,omitempty"`
+	ID             string `json:"id"`
+	Name           string `json:"name"`
+	Visibility     string `json:"visibility"`
+	CreatedAt      string `json:"createdAt"`
+	UpdatedAt      string `json:"updatedAt"`
 }
 
 type documentAccessResponse struct {
-	ID             string                `json:"id"`
-	NodeID         string                `json:"nodeId"`
-	ThemeID        string                `json:"themeId"`
-	Format         models.DocumentFormat `json:"format"`
-	Visibility     string                `json:"visibility"`
-	Title          string                `json:"title"`
-	ContentMD      string                `json:"contentMd"`
-	Version        int                   `json:"version"`
-	SourceBlobID   *string               `json:"sourceBlobId,omitempty"`
-	SourceFileName *string               `json:"sourceFileName,omitempty"`
-	SourceMimeType *string               `json:"sourceMimeType,omitempty"`
-	ContentVersion int                   `json:"contentVersion"`
-	UpdatedAt      string                `json:"updatedAt"`
+	ImportedFileKind models.ImportedFileKind `json:"importedFileKind,omitempty"`
+	ImportedImageURL string                  `json:"importedImageUrl,omitempty"`
+	CopyDenied       bool                    `json:"copyDenied,omitempty"`
+	ID               string                  `json:"id"`
+	NodeID           string                  `json:"nodeId"`
+	ThemeID          string                  `json:"themeId"`
+	Format           models.DocumentFormat   `json:"format"`
+	Visibility       string                  `json:"visibility"`
+	Title            string                  `json:"title"`
+	ContentMD        string                  `json:"contentMd"`
+	Version          int                     `json:"version"`
+	SourceBlobID     *string                 `json:"sourceBlobId,omitempty"`
+	SourceFileName   *string                 `json:"sourceFileName,omitempty"`
+	SourceMimeType   *string                 `json:"sourceMimeType,omitempty"`
+	ContentVersion   int                     `json:"contentVersion"`
+	UpdatedAt        string                  `json:"updatedAt"`
 }
 
 // NewAccessHandler 创建文档/空间公开访问处理器。
@@ -124,12 +130,19 @@ func (h *accessHandler) GetSpace(c *gin.Context) {
 		return
 	}
 
+	canCreateNodes, err := h.visibilityService.CanWriteSpace(c.Request.Context(), spaceID, viewerUserID)
+	if err != nil {
+		response.InternalError(c)
+		return
+	}
+
 	response.JSON(c, http.StatusOK, spaceAccessResponse{
-		ID:         space.SpaceID,
-		Name:       space.Name,
-		Visibility: string(space.Visibility),
-		CreatedAt:  space.CreatedAt.UTC().Format(time.RFC3339Nano),
-		UpdatedAt:  space.UpdatedAt.UTC().Format(time.RFC3339Nano),
+		CanCreateNodes: &canCreateNodes,
+		ID:             space.SpaceID,
+		Name:           space.Name,
+		Visibility:     string(space.Visibility),
+		CreatedAt:      space.CreatedAt.UTC().Format(time.RFC3339Nano),
+		UpdatedAt:      space.UpdatedAt.UTC().Format(time.RFC3339Nano),
 	})
 }
 
@@ -203,20 +216,33 @@ func (h *accessHandler) GetDocument(c *gin.Context) {
 		return
 	}
 
+	copyAllowed, err := h.visibilityService.DocumentCopyAllowed(c.Request.Context(), documentID, viewerUserID)
+	if err != nil {
+		response.InternalError(c)
+		return
+	}
+	recordDocumentActivity(c, h.activityRepo, viewerUserID, documentID, "read")
+	imageURL := ""
+	if document.ImportedFileKind == models.ImportedFileKindImage {
+		imageURL = service.BuildDocumentImportedImageURL(document.DocumentID)
+	}
 	response.JSON(c, http.StatusOK, documentAccessResponse{
-		ID:             document.DocumentID,
-		NodeID:         document.NodeID,
-		ThemeID:        document.ThemeID,
-		Format:         models.NormalizeDocumentFormat(document.Format),
-		Visibility:     string(document.Visibility),
-		Title:          document.Title,
-		ContentMD:      document.ContentMD,
-		Version:        document.Version,
-		SourceBlobID:   normalizeOptionalAccessString(document.SourceBlobID),
-		SourceFileName: normalizeOptionalAccessString(document.SourceFileName),
-		SourceMimeType: normalizeOptionalAccessString(document.SourceMimeType),
-		ContentVersion: normalizeAccessContentVersion(document.ContentVersion, document.Version),
-		UpdatedAt:      formatAccessTime(document.UpdatedAt),
+		CopyDenied:       !copyAllowed,
+		ID:               document.DocumentID,
+		NodeID:           document.NodeID,
+		ThemeID:          document.ThemeID,
+		Format:           models.NormalizeDocumentFormat(document.Format),
+		ImportedFileKind: document.ImportedFileKind,
+		ImportedImageURL: imageURL,
+		Visibility:       string(document.Visibility),
+		Title:            document.Title,
+		ContentMD:        document.ContentMD,
+		Version:          document.Version,
+		SourceBlobID:     normalizeOptionalAccessString(document.SourceBlobID),
+		SourceFileName:   normalizeOptionalAccessString(document.SourceFileName),
+		SourceMimeType:   normalizeOptionalAccessString(document.SourceMimeType),
+		ContentVersion:   normalizeAccessContentVersion(document.ContentVersion, document.Version),
+		UpdatedAt:        formatAccessTime(document.UpdatedAt),
 	})
 }
 
@@ -259,19 +285,20 @@ func (h *accessHandler) UpdateDocumentVisibility(c *gin.Context) {
 		h.renderCache.PurgeDoc(document.DocumentID)
 	}
 	response.JSON(c, http.StatusOK, documentAccessResponse{
-		ID:             document.DocumentID,
-		NodeID:         document.NodeID,
-		ThemeID:        document.ThemeID,
-		Format:         models.NormalizeDocumentFormat(document.Format),
-		Visibility:     string(document.Visibility),
-		Title:          document.Title,
-		ContentMD:      document.ContentMD,
-		Version:        document.Version,
-		SourceBlobID:   normalizeOptionalAccessString(document.SourceBlobID),
-		SourceFileName: normalizeOptionalAccessString(document.SourceFileName),
-		SourceMimeType: normalizeOptionalAccessString(document.SourceMimeType),
-		ContentVersion: normalizeAccessContentVersion(document.ContentVersion, document.Version),
-		UpdatedAt:      formatAccessTime(document.UpdatedAt),
+		ID:               document.DocumentID,
+		NodeID:           document.NodeID,
+		ThemeID:          document.ThemeID,
+		Format:           models.NormalizeDocumentFormat(document.Format),
+		ImportedFileKind: document.ImportedFileKind,
+		Visibility:       string(document.Visibility),
+		Title:            document.Title,
+		ContentMD:        document.ContentMD,
+		Version:          document.Version,
+		SourceBlobID:     normalizeOptionalAccessString(document.SourceBlobID),
+		SourceFileName:   normalizeOptionalAccessString(document.SourceFileName),
+		SourceMimeType:   normalizeOptionalAccessString(document.SourceMimeType),
+		ContentVersion:   normalizeAccessContentVersion(document.ContentVersion, document.Version),
+		UpdatedAt:        formatAccessTime(document.UpdatedAt),
 	})
 }
 

@@ -24,16 +24,19 @@ var (
 type VisibilityService struct {
 	spaceRepo    repository.SpaceRepository
 	documentRepo repository.DocumentRepository
+	permissions  repository.DocumentPermissionRepository
 }
 
 // NewVisibilityService 创建可见性业务服务。
 func NewVisibilityService(
 	spaceRepo repository.SpaceRepository,
 	documentRepo repository.DocumentRepository,
+	permissions repository.DocumentPermissionRepository,
 ) *VisibilityService {
 	return &VisibilityService{
 		spaceRepo:    spaceRepo,
 		documentRepo: documentRepo,
+		permissions:  permissions,
 	}
 }
 
@@ -126,26 +129,9 @@ func (s *VisibilityService) GetDocument(
 		return nil, errors.New("visibility service dependencies are nil")
 	}
 
-	documentAccess, err := s.documentRepo.GetAccessByDocumentID(ctx, documentID)
+	documentAccess, err := s.getActiveDocument(ctx, documentID)
 	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, ErrDocumentNotFound
-		}
 		return nil, err
-	}
-	if err := EnsureEntityActive(
-		documentAccess.SpaceStatus,
-		documentAccess.SpaceBannedAt,
-		documentAccess.SpaceDeletedAt,
-	); err != nil {
-		return nil, ErrDocumentAccessDenied
-	}
-	if err := EnsureEntityActive(
-		documentAccess.Document.Status,
-		documentAccess.Document.BannedAt,
-		documentAccess.Document.DeletedAt,
-	); err != nil {
-		return nil, ErrDocumentAccessDenied
 	}
 
 	// 空间 owner 恒具备读权限：直接短路返回，避免 member 可见性下的额外成员查询。
@@ -153,6 +139,14 @@ func (s *VisibilityService) GetDocument(
 	if trimmedViewerUserID != "" && trimmedViewerUserID == strings.TrimSpace(documentAccess.SpaceOwnerUserID) {
 		documentAccess.Document.Visibility = normalizeVisibility(documentAccess.Document.Visibility)
 		return &documentAccess.Document, nil
+	}
+
+	permission, err := s.documentPermission(ctx, documentAccess, trimmedViewerUserID)
+	if err != nil {
+		return nil, err
+	}
+	if permission != nil && permission.AccessDenied {
+		return nil, ErrDocumentAccessDenied
 	}
 
 	effectiveVisibility := stricterVisibility(
@@ -191,20 +185,14 @@ func (s *VisibilityService) UpdateDocumentVisibility(
 		return nil, ErrInvalidVisibilityValue
 	}
 
-	documentAccess, err := s.documentRepo.GetAccessByDocumentID(ctx, documentID)
+	documentAccess, err := s.getActiveDocument(ctx, documentID)
 	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, ErrDocumentNotFound
-		}
 		return nil, err
 	}
-	if err := EnsureEntityActive(
-		documentAccess.SpaceStatus,
-		documentAccess.SpaceBannedAt,
-		documentAccess.SpaceDeletedAt,
-	); err != nil {
-		return nil, ErrDocumentAccessDenied
+	if err := s.authorizeDocumentWrite(ctx, documentAccess, actorUserID); err != nil {
+		return nil, err
 	}
+
 	if strings.TrimSpace(documentAccess.SpaceOwnerUserID) != strings.TrimSpace(actorUserID) {
 		hasWriterAccess, accessErr := s.spaceRepo.HasWriterAccess(ctx, documentAccess.SpaceID, actorUserID)
 		if accessErr != nil {
@@ -224,6 +212,185 @@ func (s *VisibilityService) UpdateDocumentVisibility(
 	}
 	updated.Visibility = normalizeVisibility(updated.Visibility)
 	return updated, nil
+}
+
+func (s *VisibilityService) getActiveDocument(
+	ctx context.Context, documentID string,
+) (*repository.DocumentAccessInfo, error) {
+	documentAccess, err := s.documentRepo.GetAccessByDocumentID(ctx, documentID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrDocumentNotFound
+		}
+		return nil, err
+	}
+	if err := EnsureEntityActive(
+		documentAccess.SpaceStatus,
+		documentAccess.SpaceBannedAt,
+		documentAccess.SpaceDeletedAt,
+	); err != nil {
+		return nil, ErrDocumentAccessDenied
+	}
+	if err := EnsureEntityActive(
+		documentAccess.Document.Status,
+		documentAccess.Document.BannedAt,
+		documentAccess.Document.DeletedAt,
+	); err != nil {
+		return nil, ErrDocumentAccessDenied
+	}
+
+	return documentAccess, nil
+}
+
+func (s *VisibilityService) documentPermission(
+	ctx context.Context, document *repository.DocumentAccessInfo, userID string,
+) (*models.DocumentPermission, error) {
+	if userID == "" || userID == document.SpaceOwnerUserID {
+		return nil, nil
+	}
+	rows, err := s.permissions.List(ctx, document.SpaceID, document.Document.DocumentID, userID)
+	if err != nil || len(rows) == 0 {
+		return nil, err
+	}
+	return &rows[0], nil
+}
+
+func (s *VisibilityService) CanWriteSpace(ctx context.Context, spaceID, userID string) (bool, error) {
+	return s.spaceRepo.HasWriterAccess(ctx, spaceID, userID)
+}
+
+// CanUploadImage 支持文档级编辑权限，保留没有现存文档时的空间上传入口。
+func (s *VisibilityService) CanUploadImage(ctx context.Context, spaceID, documentID, userID string) (bool, error) {
+	if documentID != "" {
+		document, err := s.getActiveDocument(ctx, documentID)
+		if err == nil {
+			if document.SpaceID != spaceID {
+				return false, nil
+			}
+			err = s.authorizeDocumentWrite(ctx, document, userID)
+			if errors.Is(err, ErrDocumentAccessDenied) {
+				return false, nil
+			}
+			return err == nil, err
+		}
+		if errors.Is(err, ErrDocumentAccessDenied) {
+			return false, nil
+		}
+		if !errors.Is(err, ErrDocumentNotFound) {
+			return false, err
+		}
+	}
+	return s.CanWriteSpace(ctx, spaceID, userID)
+}
+
+func (s *VisibilityService) IsDocumentExplicitlyDenied(ctx context.Context, documentID, userID string) (bool, error) {
+	if userID == "" {
+		return false, nil
+	}
+	rows, err := s.permissions.List(ctx, "", documentID, userID)
+	return len(rows) > 0 && rows[0].AccessDenied, err
+}
+
+// DocumentCopyAllowed resolves clipboard policy for a viewer after document access has been checked.
+func (s *VisibilityService) DocumentCopyAllowed(ctx context.Context, documentID, userID string) (bool, error) {
+	if userID == "" {
+		return true, nil
+	}
+	document, err := s.getActiveDocument(ctx, documentID)
+	if err != nil {
+		return false, err
+	}
+	permission, err := s.documentPermission(ctx, document, userID)
+	return err == nil && (permission == nil || (!permission.CopyDenied && !permission.AccessDenied)), err
+}
+
+// DocumentExportAllowed resolves the viewer's export policy after read authorization.
+func (s *VisibilityService) DocumentExportAllowed(ctx context.Context, documentID, userID string) (bool, error) {
+	if userID == "" {
+		return true, nil
+	}
+	document, err := s.getActiveDocument(ctx, documentID)
+	if err != nil {
+		return false, err
+	}
+	permission, err := s.documentPermission(ctx, document, userID)
+	return err == nil && (permission == nil || (!permission.ExportDenied && !permission.AccessDenied)), err
+}
+
+// DocumentExportDenialsByViewer returns the documents excluded by the viewer's
+// explicit export or access restrictions in an already authorized space.
+func (s *VisibilityService) DocumentExportDenialsByViewer(
+	ctx context.Context, spaceID, userID string,
+) (map[string]bool, error) {
+	denials := make(map[string]bool)
+	if userID == "" {
+		return denials, nil
+	}
+	rows, err := s.permissions.List(ctx, spaceID, "", userID)
+	if err != nil {
+		return nil, err
+	}
+	for _, permission := range rows {
+		if permission.ExportDenied || permission.AccessDenied {
+			denials[permission.DocumentID] = true
+		}
+	}
+	return denials, nil
+}
+
+func (s *VisibilityService) AuthorizeDocumentWrite(ctx context.Context, documentID, userID string) error {
+	if userID == "" {
+		return ErrViewerLoginRequired
+	}
+	document, err := s.getActiveDocument(ctx, documentID)
+	if err != nil {
+		return err
+	}
+	return s.authorizeDocumentWrite(ctx, document, userID)
+}
+
+func (s *VisibilityService) authorizeDocumentWrite(ctx context.Context, document *repository.DocumentAccessInfo, userID string) error {
+	if userID == document.SpaceOwnerUserID {
+		return nil
+	}
+	permission, err := s.documentPermission(ctx, document, userID)
+	if err != nil {
+		return err
+	}
+	if permission != nil && !permission.InheritAccess {
+		if permission.AccessDenied || permission.Role == models.RoleReader {
+			return ErrDocumentAccessDenied
+		}
+		member, err := s.spaceRepo.IsMember(ctx, document.SpaceID, userID)
+		if err != nil || member {
+			return err
+		}
+	}
+
+	canWrite, err := s.spaceRepo.HasWriterAccess(ctx, document.SpaceID, userID)
+	if err != nil {
+		return err
+	}
+	if !canWrite {
+		return ErrDocumentAccessDenied
+	}
+	return nil
+}
+
+func (s *VisibilityService) DocumentPermissionsByViewer(
+	ctx context.Context, spaceID, userID string,
+) (map[string]models.DocumentPermission, error) {
+	result := make(map[string]models.DocumentPermission)
+	if userID == "" {
+		return result, nil
+	}
+	rows, err := s.permissions.List(ctx, spaceID, "", userID)
+	for _, permission := range rows {
+		if !permission.InheritAccess {
+			result[permission.DocumentID] = permission
+		}
+	}
+	return result, err
 }
 
 func (s *VisibilityService) authorizeRead(

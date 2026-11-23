@@ -70,6 +70,7 @@ import {
   ConflictError,
   type CreateNodeInput,
   type CreateNodeResult,
+  type CreatedSpace,
   type CreateSpaceInput,
   type DataGateway,
   type Document,
@@ -105,6 +106,8 @@ import {
   type UpdateDocumentIdentifierResult,
   type UpdateNodeInput,
   type UploadLocalImageResult,
+  type ParticipantSpace,
+  type WorkspaceMember,
   type WorkspaceGateway
 } from "../types";
 import { createIndexedDbUserConfigGateway } from "../user-config/indexeddb-gateway";
@@ -867,6 +870,36 @@ export function createHttpAdapter(options: HttpAdapterOptions): DataGateway {
   };
 
   const workspace: WorkspaceGateway = {
+    async listParticipantSpaces() {
+      return request<ParticipantSpace[]>("/my-spaces");
+    },
+    async renameSpace(spaceId, name) {
+      await request<void>(`/spaces/${encodeURIComponent(spaceId)}`, {
+        method: "PATCH",
+        body: JSON.stringify({ name })
+      });
+    },
+    async listSpaceMembers(spaceId, documentId) {
+      const query = documentId ? `?documentId=${encodeURIComponent(documentId)}` : "";
+      return request<WorkspaceMember[]>(`/spaces/${encodeURIComponent(spaceId)}/members${query}`);
+    },
+    async inviteSpaceMember(spaceId, email, role) {
+      await request<void>(`/spaces/${encodeURIComponent(spaceId)}/members`, {
+        method: "PUT",
+        body: JSON.stringify({ email, role })
+      });
+    },
+    async removeSpaceMember(spaceId, userId) {
+      await request<void>(`/spaces/${encodeURIComponent(spaceId)}/members/${encodeURIComponent(userId)}`, {
+        method: "DELETE"
+      });
+    },
+    async updateDocumentMemberPermission(docId, userId, changes) {
+      await request<void>(`/docs/${encodeURIComponent(docId)}/permissions/${encodeURIComponent(userId)}`, {
+        method: "PUT",
+        body: JSON.stringify(changes)
+      });
+    },
     async listSpaces() {
       return request<Space[]>("/spaces");
     },
@@ -878,7 +911,7 @@ export function createHttpAdapter(options: HttpAdapterOptions): DataGateway {
       return request<Space>(`/spaces/${targetSpaceID}`);
     },
     async createSpace(input: CreateSpaceInput) {
-      return request<Space>("/spaces", {
+      return request<CreatedSpace>("/spaces", {
         method: "POST",
         body: JSON.stringify(input)
       });
@@ -909,6 +942,9 @@ export function createHttpAdapter(options: HttpAdapterOptions): DataGateway {
         formData.set("targetNodeId", input.targetNodeId);
       }
       formData.set("autoExtractTitle", String(input.autoExtractTitle));
+      if (input.folderManifest) {
+        formData.set("folderManifest", JSON.stringify(input.folderManifest));
+      }
       for (const file of input.files) {
         formData.append("files", file);
       }
@@ -940,8 +976,14 @@ export function createHttpAdapter(options: HttpAdapterOptions): DataGateway {
   };
 
   const document: DocumentGateway = {
+    async reportCopy(docId) {
+      await request(`/docs/${encodeURIComponent(docId)}/copy-events`, { method: "POST" });
+    },
     async getDocument(docId: string) {
-      return request<Document>(`/docs/${docId}`);
+      const result = await request<Document>(`/docs/${docId}`);
+      return result.importedImageUrl
+        ? { ...result, importedImageUrl: resolveBackendPublicUrl(result.importedImageUrl, options.baseUrl) }
+        : result;
     },
     async saveDocument(input: SaveDocumentInput) {
       return request<SaveDocumentResult>(`/docs/${input.docId}`, {

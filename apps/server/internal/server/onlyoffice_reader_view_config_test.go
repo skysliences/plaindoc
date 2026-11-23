@@ -105,6 +105,45 @@ func TestRouter_ReaderOfficeSourceAccessLink_PublicOfficeDocument(t *testing.T) 
 	}
 }
 
+func TestRouter_OfficeExportRestrictionRevokesIssuedDownload(t *testing.T) {
+	database, serve := setupAuthTestRouter(t)
+	t.Cleanup(func() { _ = database.Close() })
+
+	ownerID, _, ownerToken := registerAccessUser(t, serve, "office-export-owner@example.com")
+	memberID, _, memberToken := registerAccessUser(t, serve, "office-export-member@example.com")
+	spaceID := "01h1readerofficeexporttest01"
+	seedOnlyOfficeEnabledConfig(t, database)
+	seedSpaceForWorkspaceCreateNode(t, database, ownerID, spaceID, "member")
+	seedHomepageSpaceMember(t, database, spaceID, memberID, "reader")
+	docID := createOfficeDocumentForOnlyOfficeTest(t, serve, spaceID, ownerToken, "docx", "权限测试合同")
+
+	call := func(method, path, token, body string, status int) *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequest(method, path, strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("Content-Type", "application/json")
+		res := serve(req)
+		if res.Code != status {
+			t.Fatalf("%s %s: got %d, want %d: %s", method, path, res.Code, status, res.Body.String())
+		}
+		return res
+	}
+
+	prefix := "/api/reader/spaces/" + spaceID + "/docs/" + docID + "/"
+	link := decodeJSONResultData[struct{ URL string }](t, call(http.MethodPost, prefix+"office-source/access-link", memberToken, "", http.StatusOK).Body.Bytes())
+	call(http.MethodPut, "/api/docs/"+docID+"/permissions/"+memberID, ownerToken, `{"exportDenied":true}`, http.StatusOK)
+	call(http.MethodPost, prefix+"office-source/access-link", memberToken, "", http.StatusForbidden)
+	call(http.MethodGet, link.URL, memberToken, "", http.StatusForbidden)
+	config := decodeJSONResultData[struct {
+		Config map[string]any
+	}](t, call(http.MethodGet, prefix+"onlyoffice/view-config", memberToken, "", http.StatusOK).Body.Bytes())
+	document := requireJSONMap(t, config.Config["document"], "document")
+	permissions := requireJSONMap(t, document["permissions"], "document.permissions")
+	if permissions["download"] != false || permissions["print"] != false {
+		t.Fatalf("Office view config must disable download and print: %+v", permissions)
+	}
+}
+
 func TestRouter_ReaderOfficeSourceAccessLink_RequiresPermission(t *testing.T) {
 	database, serve := setupAuthTestRouter(t)
 	defer func() {
@@ -150,6 +189,22 @@ func TestRouter_ReaderLandingRedirectsToOfficeDocument(t *testing.T) {
 	}
 	if location := rec.Header().Get("Location"); location != "/r/"+spaceID+"/"+documentID {
 		t.Fatalf("expected reader landing redirect to office document, got %q", location)
+	}
+
+	ownerReq := httptest.NewRequest(http.MethodGet, "/r/"+spaceID, nil)
+	ownerReq.Header.Set("Authorization", "Bearer "+ownerToken)
+	ownerRec := serve(ownerReq)
+	if location := ownerRec.Header().Get("Location"); ownerRec.Code != http.StatusSeeOther ||
+		location != "/r/"+spaceID+"/"+documentID {
+		t.Fatalf("expected owner reader redirect, got status %d location %q", ownerRec.Code, location)
+	}
+
+	readerReq := httptest.NewRequest(http.MethodGet, "/r/"+spaceID+"?view=reader", nil)
+	readerReq.Header.Set("Authorization", "Bearer "+ownerToken)
+	readerRec := serve(readerReq)
+	if location := readerRec.Header().Get("Location"); readerRec.Code != http.StatusSeeOther ||
+		location != "/r/"+spaceID+"/"+documentID {
+		t.Fatalf("expected explicit reader redirect, got status %d location %q", readerRec.Code, location)
 	}
 }
 

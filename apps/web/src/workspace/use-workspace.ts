@@ -92,9 +92,13 @@ export function useWorkspace(options: UseWorkspaceOptions): UseWorkspaceResult {
   // 当前工作区空间 ID 与名称。
   const [activeSpaceId, setActiveSpaceId] = useState<string | null>(null);
   const [activeSpaceName, setActiveSpaceName] = useState(initialSpaceName);
+  const [canCreateWorkspaceNodes, setCanCreateWorkspaceNodes] = useState(true);
   // 当前空间目录树快照：后续侧边栏树结构会直接消费该状态。
   const [workspaceTree, setWorkspaceTree] = useState<TreeNode[]>([]);
   // 当前打开文档的身份与内容快照。
+  const [activeDocumentCopyDenied, setActiveDocumentCopyDenied] = useState(false);
+  const [activeDocumentIsPlainText, setActiveDocumentIsPlainText] = useState(false);
+  const [activeDocumentImage, setActiveDocumentImage] = useState<{ url: string | null } | null>(null);
   const [activeDocId, setActiveDocId] = useState<string | null>(null);
   const [activeDocumentFormat, setActiveDocumentFormat] =
     useState<DocumentFormat>(DEFAULT_DOCUMENT_FORMAT);
@@ -117,6 +121,9 @@ export function useWorkspace(options: UseWorkspaceOptions): UseWorkspaceResult {
       try {
         const document = await dataGateway.document.getDocument(docId);
         setActiveDocId(document.id);
+        setActiveDocumentCopyDenied(document.copyDenied === true);
+        setActiveDocumentIsPlainText(document.importedFileKind === "text");
+        setActiveDocumentImage(document.importedFileKind === "image" ? { url: document.importedImageUrl ?? null } : null);
         setActiveDocumentFormat(document.format ?? DEFAULT_DOCUMENT_FORMAT);
         setActiveDocumentTitle(resolveDocumentTitle(document.title, defaultDocumentTitle));
         setActiveDocumentThemeId(document.themeId || DEFAULT_DOCUMENT_THEME_ID);
@@ -165,6 +172,7 @@ export function useWorkspace(options: UseWorkspaceOptions): UseWorkspaceResult {
     async (space: Space, preferredDocId?: string | null): Promise<WorkspaceBootstrapResult> => {
       setActiveSpaceId(space.id);
       setActiveSpaceName(space.name);
+      setCanCreateWorkspaceNodes(space.canCreateNodes !== false);
 
       let tree = await dataGateway.workspace.getTree(space.id);
       setWorkspaceTree(tree);
@@ -172,9 +180,12 @@ export function useWorkspace(options: UseWorkspaceOptions): UseWorkspaceResult {
       // 启动恢复场景优先使用上次文档；不存在时回退到首篇文档。
       const preferredDocNode = preferredDocId ? findNodeById(tree, preferredDocId) : null;
       let docId =
-        preferredDocNode && preferredDocNode.type === "doc"
-          ? preferredDocNode.id
+        preferredDocNode?.type === "doc" && preferredDocNode.importedFileKind !== "unsupported"
+          ? preferredDocNode.documentId ?? preferredDocNode.id
           : findFirstDocId(tree);
+      if (!docId && space.canCreateNodes === false) {
+        throw new Error("当前空间没有可编辑的文档");
+      }
       if (!docId) {
         const created = await dataGateway.workspace.createNode({
           spaceId: space.id,
@@ -244,7 +255,7 @@ export function useWorkspace(options: UseWorkspaceOptions): UseWorkspaceResult {
           name: normalizedSpaceName
         });
         setSpaces((previousSpaces) => mergeUniqueSpaces([createdSpace], previousSpaces));
-        return await ensureSpaceReady(createdSpace);
+        return await ensureSpaceReady(createdSpace, createdSpace.exampleDocumentId);
       } catch (error) {
         setWorkspaceErrorMessage(formatError(error));
         throw error;
@@ -378,6 +389,8 @@ export function useWorkspace(options: UseWorkspaceOptions): UseWorkspaceResult {
 
         // 极端兜底：若仍找不到文档，清空当前激活态避免残留脏 ID。
         setActiveDocId(null);
+        setActiveDocumentIsPlainText(false);
+        setActiveDocumentImage(null);
         setActiveDocumentFormat(DEFAULT_DOCUMENT_FORMAT);
         setActiveDocumentTitle(defaultDocumentTitle);
         setActiveDocumentThemeId(DEFAULT_DOCUMENT_THEME_ID);
@@ -473,6 +486,8 @@ export function useWorkspace(options: UseWorkspaceOptions): UseWorkspaceResult {
         setActiveSpaceName(initialSpaceName);
         setWorkspaceTree([]);
         setActiveDocId(null);
+        setActiveDocumentIsPlainText(false);
+        setActiveDocumentImage(null);
         setActiveDocumentFormat(DEFAULT_DOCUMENT_FORMAT);
         setActiveDocumentTitle(initialDocumentTitle);
         setActiveDocumentThemeId(DEFAULT_DOCUMENT_THEME_ID);
@@ -492,8 +507,12 @@ export function useWorkspace(options: UseWorkspaceOptions): UseWorkspaceResult {
     spaces,
     activeSpaceId,
     activeSpaceName,
+    canCreateWorkspaceNodes,
     workspaceTree,
     activeDocId,
+    activeDocumentCopyDenied,
+    activeDocumentIsPlainText,
+    activeDocumentImage,
     activeDocumentFormat,
     activeDocumentTitle,
     activeDocumentThemeId,

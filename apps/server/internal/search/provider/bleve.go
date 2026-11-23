@@ -275,6 +275,9 @@ func (p *BleveProvider) filterCandidatesByVisibility(
 		if docID == "" {
 			continue
 		}
+		if _, excluded := request.ExcludedDocumentIDs[docID]; excluded {
+			continue
+		}
 		if len(scopeSpaceIDSet) > 0 {
 			spaceID := strings.TrimSpace(item.SpaceID)
 			if spaceID == "" {

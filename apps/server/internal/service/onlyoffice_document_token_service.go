@@ -25,6 +25,7 @@ type OnlyOfficeDocumentTokenPurpose string
 const (
 	OnlyOfficeDocumentTokenPurposeSource   OnlyOfficeDocumentTokenPurpose = "source"
 	OnlyOfficeDocumentTokenPurposeCallback OnlyOfficeDocumentTokenPurpose = "callback"
+	OnlyOfficeDocumentTokenPurposeDownload OnlyOfficeDocumentTokenPurpose = "download"
 )
 
 // OnlyOfficeDocumentTokenClaims 定义 ONLYOFFICE 会话令牌载荷。
@@ -32,6 +33,7 @@ type OnlyOfficeDocumentTokenClaims struct {
 	DocumentID     string                         `json:"documentId"`
 	ContentVersion int                            `json:"contentVersion"`
 	ActorUserID    string                         `json:"actorUserId,omitempty"`
+	Shared         bool                           `json:"shared,omitempty"`
 	Purpose        OnlyOfficeDocumentTokenPurpose `json:"purpose"`
 	IssuedAtUnix   int64                          `json:"iat"`
 	ExpiresAtUnix  int64                          `json:"exp"`
@@ -42,6 +44,7 @@ type IssueOnlyOfficeDocumentTokenInput struct {
 	DocumentID     string
 	ContentVersion int
 	ActorUserID    string
+	Shared         bool
 	Purpose        OnlyOfficeDocumentTokenPurpose
 	TTL            time.Duration
 }
@@ -97,6 +100,7 @@ func (s *OnlyOfficeDocumentTokenService) Issue(
 		DocumentID:     documentID,
 		ContentVersion: input.ContentVersion,
 		ActorUserID:    actorUserID,
+		Shared:         input.Shared,
 		Purpose:        purpose,
 		IssuedAtUnix:   now.Unix(),
 		ExpiresAtUnix:  expiresAt.Unix(),
@@ -168,6 +172,8 @@ func normalizeOnlyOfficeDocumentTokenPurpose(
 	switch OnlyOfficeDocumentTokenPurpose(strings.ToLower(strings.TrimSpace(string(purpose)))) {
 	case OnlyOfficeDocumentTokenPurposeSource:
 		return OnlyOfficeDocumentTokenPurposeSource
+	case OnlyOfficeDocumentTokenPurposeDownload:
+		return OnlyOfficeDocumentTokenPurposeDownload
 	case OnlyOfficeDocumentTokenPurposeCallback:
 		return OnlyOfficeDocumentTokenPurposeCallback
 	default:

@@ -64,16 +64,7 @@ func (h *workspaceHandler) GetOnlyOfficeEditConfig(c *gin.Context) {
 		response.InternalError(c)
 		return
 	}
-	if _, err := h.ensureSpaceWritable(c.Request.Context(), strings.TrimSpace(document.SpaceID), strings.TrimSpace(session.User.ID)); err != nil {
-		setRequestErrmsg(c, err, "校验 ONLYOFFICE 文档写权限失败")
-		switch {
-		case errorsIsSpaceNotFound(err):
-			response.WorkspaceErrSpaceNotFound.Write(c)
-		case errorsIsSpaceAccessDenied(err):
-			response.WorkspaceErrInsufficientSpacePermission.Write(c)
-		default:
-			response.InternalError(c)
-		}
+	if !h.requireDocumentWrite(c, documentID, strings.TrimSpace(session.User.ID)) {
 		return
 	}
 	if !models.IsOfficeDocumentFormat(document.Format) {
@@ -105,6 +96,16 @@ func (h *workspaceHandler) GetOnlyOfficeEditConfig(c *gin.Context) {
 
 	contentVersion := normalizeWorkspaceContentVersion(document.ContentVersion, document.Version)
 	actorUserID := strings.TrimSpace(session.User.ID)
+	copyAllowed, err := h.visibilityService.DocumentCopyAllowed(c.Request.Context(), documentID, actorUserID)
+	if err != nil {
+		response.InternalError(c)
+		return
+	}
+	exportAllowed, err := h.visibilityService.DocumentExportAllowed(c.Request.Context(), documentID, actorUserID)
+	if err != nil {
+		response.InternalError(c)
+		return
+	}
 	sourceToken, _, err := h.onlyOfficeTokenService.Issue(service.IssueOnlyOfficeDocumentTokenInput{
 		DocumentID:     document.DocumentID,
 		ContentVersion: contentVersion,
@@ -150,7 +151,7 @@ func (h *workspaceHandler) GetOnlyOfficeEditConfig(c *gin.Context) {
 			"url":         sourceURL,
 			"fileType":    officeDocumentFileExtension(document.Format),
 			"key":         buildOnlyOfficeDocumentKey(document.DocumentID, contentVersion),
-			"permissions": map[string]any{"edit": true, "download": true, "print": true},
+			"permissions": map[string]any{"edit": true, "download": exportAllowed, "print": exportAllowed, "copy": copyAllowed},
 		},
 		"editorConfig": map[string]any{
 			"mode":        "edit",
@@ -190,6 +191,9 @@ func (h *workspaceHandler) ServeOnlyOfficeSourceDocument(c *gin.Context) {
 
 	claims, ok := h.parseOnlyOfficeDocumentToken(c, service.OnlyOfficeDocumentTokenPurposeSource)
 	if !ok {
+		claims, ok = h.parseOnlyOfficeDocumentToken(c, service.OnlyOfficeDocumentTokenPurposeDownload)
+	}
+	if !ok {
 		c.Status(http.StatusForbidden)
 		return
 	}
@@ -212,6 +216,25 @@ func (h *workspaceHandler) ServeOnlyOfficeSourceDocument(c *gin.Context) {
 	if normalizeWorkspaceContentVersion(document.ContentVersion, document.Version) != claims.ContentVersion {
 		c.Status(http.StatusNotFound)
 		return
+	}
+
+	if claims.Shared {
+		denied, err := h.visibilityService.IsDocumentExplicitlyDenied(c.Request.Context(), documentID, claims.ActorUserID)
+		if err != nil || denied {
+			c.Status(http.StatusForbidden)
+			return
+		}
+	} else if _, err := h.visibilityService.GetDocument(c.Request.Context(), documentID, claims.ActorUserID); err != nil {
+		c.Status(http.StatusForbidden)
+		return
+	}
+
+	if claims.Purpose == service.OnlyOfficeDocumentTokenPurposeDownload {
+		allowed, err := h.visibilityService.DocumentExportAllowed(c.Request.Context(), documentID, claims.ActorUserID)
+		if err != nil || !allowed {
+			c.Status(http.StatusForbidden)
+			return
+		}
 	}
 
 	blobID := strings.TrimSpace(derefOptionalString(document.SourceBlobID))
@@ -296,6 +319,10 @@ func (h *workspaceHandler) HandleOnlyOfficeCallback(c *gin.Context) {
 		return
 	}
 
+	if err := h.visibilityService.AuthorizeDocumentWrite(c.Request.Context(), documentID, claims.ActorUserID); err != nil {
+		writeOnlyOfficeCallbackResult(c, 1)
+		return
+	}
 	fileContent, err := h.downloadOnlyOfficeCallbackFile(c.Request.Context(), callbackFileURL)
 	if err != nil {
 		setRequestErrmsg(c, err, "下载 ONLYOFFICE 输出文件失败")
@@ -376,6 +403,7 @@ func (h *workspaceHandler) HandleOnlyOfficeCallback(c *gin.Context) {
 	if h.renderCache != nil {
 		h.renderCache.PurgeDoc(current.DocumentID)
 	}
+	recordDocumentActivity(c, h.auditLogRepo, actorUserID, current.DocumentID, "edit")
 	if auditErr := h.recordOnlyOfficeCallbackAudit(c.Request.Context(), onlyOfficeCallbackAuditRecord{
 		ActorUserID:    actorUserID,
 		RequestID:      response.RequestIDFromContext(c),
@@ -708,14 +736,6 @@ func writeOnlyOfficeCallbackResult(c *gin.Context, errorCode int) {
 
 func errorsIsRecordNotFound(err error) bool {
 	return errors.Is(err, gorm.ErrRecordNotFound)
-}
-
-func errorsIsSpaceNotFound(err error) bool {
-	return errors.Is(err, service.ErrSpaceNotFound)
-}
-
-func errorsIsSpaceAccessDenied(err error) bool {
-	return errors.Is(err, service.ErrSpaceAccessDenied)
 }
 
 func ulidMakeString() string {

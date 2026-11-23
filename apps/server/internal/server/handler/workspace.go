@@ -22,8 +22,6 @@ import (
 )
 
 const (
-	defaultWorkspaceCategoryID           = "01jmf4v2x7m7f1m6qv5kh0t2mn"
-	defaultWorkspaceCategoryName         = "未分类"
 	maxWorkspaceSpaceNameLength          = 64
 	maxWorkspaceDocumentIdentifierLength = 80
 	defaultWorkspaceRevisionPage         = 1
@@ -44,6 +42,7 @@ var (
 )
 
 type workspaceHandler struct {
+	collaboration              *service.WorkspaceCollaborationService
 	workspaceRepo              repository.WorkspaceRepository
 	documentAttachmentRepo     repository.DocumentAttachmentRepository
 	documentAttachmentCleanup  *service.DocumentAttachmentCleanupService
@@ -68,13 +67,15 @@ type workspaceHandler struct {
 }
 
 type workspaceSpaceResponse struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	CreatedAt string `json:"createdAt"`
-	UpdatedAt string `json:"updatedAt"`
+	ExampleDocumentID string `json:"exampleDocumentId,omitempty"`
+	ID                string `json:"id"`
+	Name              string `json:"name"`
+	CreatedAt         string `json:"createdAt"`
+	UpdatedAt         string `json:"updatedAt"`
 }
 
 type workspaceTreeNodeResponse struct {
+	ImportedFileKind   models.ImportedFileKind     `json:"importedFileKind,omitempty"`
 	ID                 string                      `json:"id"`
 	DocumentID         *string                     `json:"documentId,omitempty"`
 	DocumentIdentifier *string                     `json:"documentIdentifier,omitempty"`
@@ -90,18 +91,19 @@ type workspaceTreeNodeResponse struct {
 }
 
 type workspaceDocumentResponse struct {
-	ID             string                `json:"id"`
-	NodeID         string                `json:"nodeId"`
-	ThemeID        string                `json:"themeId"`
-	Format         models.DocumentFormat `json:"format"`
-	Title          string                `json:"title"`
-	ContentMD      string                `json:"contentMd"`
-	Version        int                   `json:"version"`
-	SourceBlobID   *string               `json:"sourceBlobId,omitempty"`
-	SourceFileName *string               `json:"sourceFileName,omitempty"`
-	SourceMimeType *string               `json:"sourceMimeType,omitempty"`
-	ContentVersion int                   `json:"contentVersion"`
-	UpdatedAt      string                `json:"updatedAt"`
+	ImportedFileKind models.ImportedFileKind `json:"importedFileKind,omitempty"`
+	ID               string                  `json:"id"`
+	NodeID           string                  `json:"nodeId"`
+	ThemeID          string                  `json:"themeId"`
+	Format           models.DocumentFormat   `json:"format"`
+	Title            string                  `json:"title"`
+	ContentMD        string                  `json:"contentMd"`
+	Version          int                     `json:"version"`
+	SourceBlobID     *string                 `json:"sourceBlobId,omitempty"`
+	SourceFileName   *string                 `json:"sourceFileName,omitempty"`
+	SourceMimeType   *string                 `json:"sourceMimeType,omitempty"`
+	ContentVersion   int                     `json:"contentVersion"`
+	UpdatedAt        string                  `json:"updatedAt"`
 }
 
 type workspaceRevisionEditorUserResponse struct {
@@ -135,19 +137,20 @@ type workspaceRevisionDetailResponse struct {
 }
 
 type workspaceDocumentRow struct {
-	DocumentID     string                `gorm:"column:document_id"`
-	NodeID         string                `gorm:"column:node_id"`
-	ThemeID        string                `gorm:"column:theme_id"`
-	Format         models.DocumentFormat `gorm:"column:format"`
-	Title          string                `gorm:"column:title"`
-	ContentMD      string                `gorm:"column:content_md"`
-	Version        int                   `gorm:"column:version"`
-	SourceBlobID   *string               `gorm:"column:source_blob_id"`
-	SourceFileName *string               `gorm:"column:source_file_name"`
-	SourceMimeType *string               `gorm:"column:source_mime_type"`
-	ContentVersion int                   `gorm:"column:content_version"`
-	SpaceID        string                `gorm:"column:space_id"`
-	UpdatedAtRaw   string                `gorm:"column:updated_at"`
+	ImportedFileKind models.ImportedFileKind
+	DocumentID       string                `gorm:"column:document_id"`
+	NodeID           string                `gorm:"column:node_id"`
+	ThemeID          string                `gorm:"column:theme_id"`
+	Format           models.DocumentFormat `gorm:"column:format"`
+	Title            string                `gorm:"column:title"`
+	ContentMD        string                `gorm:"column:content_md"`
+	Version          int                   `gorm:"column:version"`
+	SourceBlobID     *string               `gorm:"column:source_blob_id"`
+	SourceFileName   *string               `gorm:"column:source_file_name"`
+	SourceMimeType   *string               `gorm:"column:source_mime_type"`
+	ContentVersion   int                   `gorm:"column:content_version"`
+	SpaceID          string                `gorm:"column:space_id"`
+	UpdatedAtRaw     string                `gorm:"column:updated_at"`
 }
 
 type createWorkspaceSpaceRequest struct {
@@ -216,6 +219,7 @@ type localizeDocumentRemoteImagesResponse struct {
 }
 
 type workspaceTreeNode struct {
+	ImportedFileKind   models.ImportedFileKind
 	ID                 string
 	DocumentID         *string
 	DocumentIdentifier *string
@@ -327,55 +331,27 @@ func (h *workspaceHandler) CreateSpace(c *gin.Context) {
 		return
 	}
 
-	spaceName := strings.TrimSpace(req.Name)
-	if spaceName == "" || len([]rune(spaceName)) > maxWorkspaceSpaceNameLength {
+	spaceName, valid := normalizeWorkspaceSpaceName(req.Name)
+	if !valid {
 		response.WorkspaceErrSpaceName.Write(c)
 		return
 	}
-
-	defaultCategory := models.SpaceCategory{
-		CategoryID: defaultWorkspaceCategoryID,
-		Name:       defaultWorkspaceCategoryName,
-	}
-	defaultCategoryValue, err := h.workspaceRepo.GetDefaultCategory(c.Request.Context())
-	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+	space, exampleDocumentID, err := h.collaboration.CreateSpace(c.Request.Context(), actorUserID, spaceName)
+	if err != nil {
+		setRequestErrmsg(c, err, "创建工作区空间失败")
 		response.InternalError(c)
 		return
 	}
-	if defaultCategoryValue != nil {
-		defaultCategory = *defaultCategoryValue
-	}
-	if strings.TrimSpace(defaultCategory.CategoryID) == "" {
-		defaultCategory.CategoryID = defaultWorkspaceCategoryID
-	}
-	if strings.TrimSpace(defaultCategory.Name) == "" {
-		defaultCategory.Name = defaultWorkspaceCategoryName
-	}
-
-	now := time.Now().UTC()
-	space := &models.Space{
-		SpaceID:     strings.ToLower(ulid.Make().String()),
-		Name:        spaceName,
-		Description: "",
-		CategoryID:  strings.TrimSpace(defaultCategory.CategoryID),
-		Category:    strings.TrimSpace(defaultCategory.Name),
-		OwnerUserID: actorUserID,
-		Visibility:  models.VisibilityMember,
-		Status:      models.EntityStatusActive,
-		CreatedAt:   now,
-		UpdatedAt:   now,
-	}
-	if err := h.workspaceRepo.CreateSpace(c.Request.Context(), space); err != nil {
-		response.InternalError(c)
-		return
-	}
-
 	response.JSON(c, http.StatusOK, workspaceSpaceResponse{
-		ID:        space.SpaceID,
-		Name:      space.Name,
-		CreatedAt: now.Format(time.RFC3339Nano),
-		UpdatedAt: now.Format(time.RFC3339Nano),
+		ID: space.SpaceID, Name: space.Name, ExampleDocumentID: exampleDocumentID,
+		CreatedAt: space.CreatedAt.Format(time.RFC3339Nano),
+		UpdatedAt: space.UpdatedAt.Format(time.RFC3339Nano),
 	})
+}
+
+func normalizeWorkspaceSpaceName(value string) (string, bool) {
+	name := strings.TrimSpace(value)
+	return name, name != "" && len([]rune(name)) <= maxWorkspaceSpaceNameLength
 }
 
 // GetTree 返回空间目录树（仅对具备写权限的用户开放编辑器入口）。
@@ -395,15 +371,19 @@ func (h *workspaceHandler) GetTree(c *gin.Context) {
 		return
 	}
 
-	if _, err := h.ensureSpaceWritable(c.Request.Context(), spaceID, actorUserID); err != nil {
-		switch {
-		case errors.Is(err, service.ErrSpaceNotFound):
-			response.WorkspaceErrSpaceNotFound.Write(c)
-		case errors.Is(err, service.ErrSpaceAccessDenied):
-			response.WorkspaceErrInsufficientSpacePermission.Write(c)
-		default:
-			response.InternalError(c)
-		}
+	space, err := h.loadSpaceAccess(c.Request.Context(), spaceID, actorUserID)
+	if err != nil {
+		writeWorkspaceCollaborationError(c, err)
+		return
+	}
+	spaceWritable := hasWorkspaceStructureAccess(space, actorUserID)
+	if !spaceWritable && space.MemberRole == nil {
+		response.WorkspaceErrInsufficientSpacePermission.Write(c)
+		return
+	}
+	permissions, err := h.visibilityService.DocumentPermissionsByViewer(c.Request.Context(), spaceID, actorUserID)
+	if err != nil {
+		response.InternalError(c)
 		return
 	}
 
@@ -413,6 +393,7 @@ func (h *workspaceHandler) GetTree(c *gin.Context) {
 		return
 	}
 
+	hasEditableDocument := false
 	treeNodes := make(map[string]*workspaceTreeNode, len(rows))
 	for _, row := range rows {
 		nodeID := strings.TrimSpace(row.NodeID)
@@ -420,16 +401,27 @@ func (h *workspaceHandler) GetTree(c *gin.Context) {
 			continue
 		}
 		documentID := normalizeOptionalString(row.DocumentID)
+		if documentID != nil {
+			permission, overridden := permissions[*documentID]
+			if !canEditWorkspaceDocument(permission, overridden, spaceWritable) {
+				continue
+			}
+			hasEditableDocument = true
+		}
 		documentIdentifier := normalizeOptionalString(row.ReaderSlug)
 		documentRouteKey := resolveWorkspaceDocumentRouteKey(documentID, documentIdentifier)
 		documentVisibility := normalizeWorkspaceDocumentVisibility(row.Type, row.DocumentVisibility)
 		documentFormat := normalizeWorkspaceTreeDocumentFormat(row.Type, row.DocumentFormat)
+		if row.ImportedFileKind == models.ImportedFileKindUnsupported {
+			documentFormat, documentVisibility = nil, nil
+		}
 		treeNodes[nodeID] = &workspaceTreeNode{
 			ID:                 nodeID,
 			DocumentID:         documentID,
 			DocumentIdentifier: documentIdentifier,
 			DocumentRouteKey:   documentRouteKey,
 			DocumentFormat:     documentFormat,
+			ImportedFileKind:   row.ImportedFileKind,
 			SpaceID:            strings.TrimSpace(row.SpaceID),
 			ParentID:           normalizeOptionalString(row.ParentNodeID),
 			Type:               normalizeWorkspaceNodeType(row.Type),
@@ -438,6 +430,11 @@ func (h *workspaceHandler) GetTree(c *gin.Context) {
 			Visibility:         documentVisibility,
 			Children:           make([]*workspaceTreeNode, 0),
 		}
+	}
+
+	if !spaceWritable && !hasEditableDocument {
+		response.WorkspaceErrInsufficientSpacePermission.Write(c)
+		return
 	}
 
 	roots := make([]*workspaceTreeNode, 0)
@@ -454,6 +451,7 @@ func (h *workspaceHandler) GetTree(c *gin.Context) {
 		}
 		parentNode, exists := treeNodes[*parentID]
 		if !exists {
+			node.ParentID = nil
 			roots = append(roots, node)
 			continue
 		}
@@ -606,10 +604,18 @@ func (h *workspaceHandler) CreateNode(c *gin.Context) {
 			response.InternalError(c)
 			return
 		}
+		if parent.ImportedFileKind == models.ImportedFileKindUnsupported {
+			response.WorkspaceErrParentNodeNotFound.Write(c)
+			return
+		}
 		if strings.TrimSpace(parent.SpaceID) != spaceID {
 			response.WorkspaceErrParentNodeNotTargetSpace.Write(c)
 			return
 		}
+	}
+
+	if !h.requireNodePermission(c, spaceID, actorUserID, parentID, false) {
+		return
 	}
 
 	maxSort, err := h.workspaceRepo.GetMaxNodeSort(c.Request.Context(), spaceID, parentID)
@@ -782,6 +788,10 @@ func (h *workspaceHandler) UpdateNode(c *gin.Context) {
 		return
 	}
 
+	if !h.requireNodePermission(c, node.SpaceID, actorUserID, &nodeID, req.ParentID != nil || req.Sort != nil) {
+		return
+	}
+
 	updateValues := map[string]any{}
 	nextTitle := strings.TrimSpace(node.Title)
 	if req.Title != nil {
@@ -812,8 +822,15 @@ func (h *workspaceHandler) UpdateNode(c *gin.Context) {
 				response.InternalError(c)
 				return
 			}
+			if parent.ImportedFileKind == models.ImportedFileKindUnsupported {
+				response.WorkspaceErrParentNodeNotFound.Write(c)
+				return
+			}
 			if strings.TrimSpace(parent.SpaceID) != strings.TrimSpace(node.SpaceID) {
 				response.WorkspaceErrParentNodeNotTargetSpace.Write(c)
+				return
+			}
+			if !h.requireNodePermission(c, node.SpaceID, actorUserID, parentID, false) {
 				return
 			}
 			updateValues["parent_node_id"] = *parentID
@@ -829,7 +846,7 @@ func (h *workspaceHandler) UpdateNode(c *gin.Context) {
 	updateValues["updated_at"] = now
 
 	var documentTitle *string
-	if node.Type == models.NodeTypeDoc && req.Title != nil {
+	if node.Type == models.NodeTypeDoc && node.ImportedFileKind != models.ImportedFileKindUnsupported && req.Title != nil {
 		documentTitle = &nextTitle
 	}
 
@@ -849,7 +866,7 @@ func (h *workspaceHandler) UpdateNode(c *gin.Context) {
 		return
 	}
 
-	if h != nil && h.renderCache != nil && node.Type == models.NodeTypeDoc {
+	if h != nil && h.renderCache != nil && node.Type == models.NodeTypeDoc && node.ImportedFileKind != models.ImportedFileKindUnsupported {
 		// 文档节点标题变更会影响阅读页展示，按文档维度主动失效缓存。
 		h.renderCache.PurgeDoc(strings.TrimSpace(node.NodeID))
 	}
@@ -906,10 +923,18 @@ func (h *workspaceHandler) MoveNode(c *gin.Context) {
 		return
 	}
 
+	if !h.requireNodePermission(c, spaceID, actorUserID, &nodeID, true) {
+		return
+	}
+
+	targetParentID := normalizeOptionalString(req.TargetParentID)
+	if !h.requireNodePermission(c, spaceID, actorUserID, targetParentID, false) {
+		return
+	}
 	now := time.Now().UTC()
 	if err := h.workspaceRepo.MoveNode(c.Request.Context(), repository.WorkspaceMoveNodeParams{
 		NodeID:             nodeID,
-		TargetParentNodeID: normalizeOptionalString(req.TargetParentID),
+		TargetParentNodeID: targetParentID,
 		TargetIndex:        *req.TargetIndex,
 		ActorUserID:        actorUserID,
 		TouchSpace:         spaceID,
@@ -978,6 +1003,10 @@ func (h *workspaceHandler) DeleteNode(c *gin.Context) {
 		return
 	}
 
+	if !h.requireNodePermission(c, spaceID, actorUserID, &nodeID, true) {
+		return
+	}
+
 	now := time.Now().UTC()
 	deleted, err := h.workspaceRepo.DeleteNode(c.Request.Context(), nodeID, spaceID, now)
 	if err != nil {
@@ -1034,34 +1063,31 @@ func (h *workspaceHandler) SaveDocument(c *gin.Context) {
 		return
 	}
 	current := workspaceDocumentRow{
-		DocumentID:     currentRecord.DocumentID,
-		NodeID:         currentRecord.NodeID,
-		ThemeID:        currentRecord.ThemeID,
-		Format:         currentRecord.Format,
-		Title:          currentRecord.Title,
-		ContentMD:      currentRecord.ContentMD,
-		Version:        currentRecord.Version,
-		SourceBlobID:   currentRecord.SourceBlobID,
-		SourceFileName: currentRecord.SourceFileName,
-		SourceMimeType: currentRecord.SourceMimeType,
-		ContentVersion: currentRecord.ContentVersion,
-		SpaceID:        currentRecord.SpaceID,
-		UpdatedAtRaw:   currentRecord.UpdatedAtRaw,
+		DocumentID:       currentRecord.DocumentID,
+		NodeID:           currentRecord.NodeID,
+		ThemeID:          currentRecord.ThemeID,
+		Format:           currentRecord.Format,
+		ImportedFileKind: currentRecord.ImportedFileKind,
+		Title:            currentRecord.Title,
+		ContentMD:        currentRecord.ContentMD,
+		Version:          currentRecord.Version,
+		SourceBlobID:     currentRecord.SourceBlobID,
+		SourceFileName:   currentRecord.SourceFileName,
+		SourceMimeType:   currentRecord.SourceMimeType,
+		ContentVersion:   currentRecord.ContentVersion,
+		SpaceID:          currentRecord.SpaceID,
+		UpdatedAtRaw:     currentRecord.UpdatedAtRaw,
 	}
 
 	spaceID := strings.TrimSpace(current.SpaceID)
-	if _, err := h.ensureSpaceWritable(c.Request.Context(), spaceID, actorUserID); err != nil {
-		switch {
-		case errors.Is(err, service.ErrSpaceNotFound):
-			response.WorkspaceErrSpaceNotFound.Write(c)
-		case errors.Is(err, service.ErrSpaceAccessDenied):
-			response.WorkspaceErrInsufficientSpacePermission.Write(c)
-		default:
-			response.InternalError(c)
-		}
+	if !h.requireDocumentWrite(c, documentID, actorUserID) {
 		return
 	}
 
+	if current.ImportedFileKind == models.ImportedFileKindImage {
+		response.WorkspaceErrMarkdownOnlyOperation.Write(c)
+		return
+	}
 	if current.Version != req.BaseVersion {
 		h.writeDocumentVersionConflict(c, mapWorkspaceDocumentResponse(current))
 		return
@@ -1105,19 +1131,20 @@ func (h *workspaceHandler) SaveDocument(c *gin.Context) {
 			return
 		}
 		h.writeDocumentVersionConflict(c, mapWorkspaceDocumentResponse(workspaceDocumentRow{
-			DocumentID:     latestRecord.DocumentID,
-			NodeID:         latestRecord.NodeID,
-			ThemeID:        latestRecord.ThemeID,
-			Format:         latestRecord.Format,
-			Title:          latestRecord.Title,
-			ContentMD:      latestRecord.ContentMD,
-			Version:        latestRecord.Version,
-			SourceBlobID:   latestRecord.SourceBlobID,
-			SourceFileName: latestRecord.SourceFileName,
-			SourceMimeType: latestRecord.SourceMimeType,
-			ContentVersion: latestRecord.ContentVersion,
-			SpaceID:        latestRecord.SpaceID,
-			UpdatedAtRaw:   latestRecord.UpdatedAtRaw,
+			DocumentID:       latestRecord.DocumentID,
+			NodeID:           latestRecord.NodeID,
+			ThemeID:          latestRecord.ThemeID,
+			Format:           latestRecord.Format,
+			ImportedFileKind: latestRecord.ImportedFileKind,
+			Title:            latestRecord.Title,
+			ContentMD:        latestRecord.ContentMD,
+			Version:          latestRecord.Version,
+			SourceBlobID:     latestRecord.SourceBlobID,
+			SourceFileName:   latestRecord.SourceFileName,
+			SourceMimeType:   latestRecord.SourceMimeType,
+			ContentVersion:   latestRecord.ContentVersion,
+			SpaceID:          latestRecord.SpaceID,
+			UpdatedAtRaw:     latestRecord.UpdatedAtRaw,
 		}))
 		return
 	}
@@ -1127,12 +1154,13 @@ func (h *workspaceHandler) SaveDocument(c *gin.Context) {
 		h.renderCache.PurgeDoc(documentID)
 	}
 
+	recordDocumentActivity(c, h.auditLogRepo, actorUserID, documentID, "edit")
 	current.ContentMD = req.ContentMD
 	current.Version = nextVersion
 	current.ContentVersion = nextVersion
 	current.UpdatedAtRaw = now.Format(time.RFC3339Nano)
 
-	if h != nil && h.documentImageAssetService != nil {
+	if h != nil && h.documentImageAssetService != nil && current.ImportedFileKind != models.ImportedFileKindText {
 		if syncErr := h.documentImageAssetService.SyncDocumentImageAssets(
 			c.Request.Context(),
 			service.SyncDocumentImageAssetsInput{
@@ -1196,15 +1224,7 @@ func (h *workspaceHandler) UpdateDocumentIdentifier(c *gin.Context) {
 	}
 
 	spaceID := strings.TrimSpace(currentRecord.SpaceID)
-	if _, err := h.ensureSpaceWritable(c.Request.Context(), spaceID, actorUserID); err != nil {
-		switch {
-		case errors.Is(err, service.ErrSpaceNotFound):
-			response.WorkspaceErrSpaceNotFound.Write(c)
-		case errors.Is(err, service.ErrSpaceAccessDenied):
-			response.WorkspaceErrInsufficientSpacePermission.Write(c)
-		default:
-			response.InternalError(c)
-		}
+	if !h.requireDocumentWrite(c, documentID, actorUserID) {
 		return
 	}
 
@@ -1277,16 +1297,7 @@ func (h *workspaceHandler) LocalizeDocumentRemoteImages(c *gin.Context) {
 		return
 	}
 
-	spaceID := strings.TrimSpace(currentRecord.SpaceID)
-	if _, err := h.ensureSpaceWritable(c.Request.Context(), spaceID, actorUserID); err != nil {
-		switch {
-		case errors.Is(err, service.ErrSpaceNotFound):
-			response.WorkspaceErrSpaceNotFound.Write(c)
-		case errors.Is(err, service.ErrSpaceAccessDenied):
-			response.WorkspaceErrInsufficientSpacePermission.Write(c)
-		default:
-			response.InternalError(c)
-		}
+	if !h.requireDocumentWrite(c, documentID, actorUserID) {
 		return
 	}
 	if currentRecord.Format != models.DocumentFormatMarkdown {
@@ -1476,34 +1487,31 @@ func (h *workspaceHandler) RestoreRevision(c *gin.Context) {
 		return
 	}
 	current := workspaceDocumentRow{
-		DocumentID:     currentRecord.DocumentID,
-		NodeID:         currentRecord.NodeID,
-		ThemeID:        currentRecord.ThemeID,
-		Format:         currentRecord.Format,
-		Title:          currentRecord.Title,
-		ContentMD:      currentRecord.ContentMD,
-		Version:        currentRecord.Version,
-		SourceBlobID:   currentRecord.SourceBlobID,
-		SourceFileName: currentRecord.SourceFileName,
-		SourceMimeType: currentRecord.SourceMimeType,
-		ContentVersion: currentRecord.ContentVersion,
-		SpaceID:        currentRecord.SpaceID,
-		UpdatedAtRaw:   currentRecord.UpdatedAtRaw,
+		DocumentID:       currentRecord.DocumentID,
+		NodeID:           currentRecord.NodeID,
+		ThemeID:          currentRecord.ThemeID,
+		Format:           currentRecord.Format,
+		ImportedFileKind: currentRecord.ImportedFileKind,
+		Title:            currentRecord.Title,
+		ContentMD:        currentRecord.ContentMD,
+		Version:          currentRecord.Version,
+		SourceBlobID:     currentRecord.SourceBlobID,
+		SourceFileName:   currentRecord.SourceFileName,
+		SourceMimeType:   currentRecord.SourceMimeType,
+		ContentVersion:   currentRecord.ContentVersion,
+		SpaceID:          currentRecord.SpaceID,
+		UpdatedAtRaw:     currentRecord.UpdatedAtRaw,
 	}
 
 	spaceID := strings.TrimSpace(current.SpaceID)
-	if _, err := h.ensureSpaceWritable(c.Request.Context(), spaceID, actorUserID); err != nil {
-		switch {
-		case errors.Is(err, service.ErrSpaceNotFound):
-			response.WorkspaceErrSpaceNotFound.Write(c)
-		case errors.Is(err, service.ErrSpaceAccessDenied):
-			response.WorkspaceErrInsufficientSpacePermission.Write(c)
-		default:
-			response.InternalError(c)
-		}
+	if !h.requireDocumentWrite(c, documentID, actorUserID) {
 		return
 	}
 
+	if current.ImportedFileKind == models.ImportedFileKindImage {
+		response.WorkspaceErrMarkdownOnlyOperation.Write(c)
+		return
+	}
 	targetRevision, err := h.workspaceRepo.GetRevisionDetailByID(c.Request.Context(), documentID, revisionID)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -1560,19 +1568,20 @@ func (h *workspaceHandler) RestoreRevision(c *gin.Context) {
 				return
 			}
 			h.writeDocumentVersionConflict(c, mapWorkspaceDocumentResponse(workspaceDocumentRow{
-				DocumentID:     latestRecord.DocumentID,
-				NodeID:         latestRecord.NodeID,
-				ThemeID:        latestRecord.ThemeID,
-				Format:         latestRecord.Format,
-				Title:          latestRecord.Title,
-				ContentMD:      latestRecord.ContentMD,
-				Version:        latestRecord.Version,
-				SourceBlobID:   latestRecord.SourceBlobID,
-				SourceFileName: latestRecord.SourceFileName,
-				SourceMimeType: latestRecord.SourceMimeType,
-				ContentVersion: latestRecord.ContentVersion,
-				SpaceID:        latestRecord.SpaceID,
-				UpdatedAtRaw:   latestRecord.UpdatedAtRaw,
+				DocumentID:       latestRecord.DocumentID,
+				NodeID:           latestRecord.NodeID,
+				ThemeID:          latestRecord.ThemeID,
+				Format:           latestRecord.Format,
+				ImportedFileKind: latestRecord.ImportedFileKind,
+				Title:            latestRecord.Title,
+				ContentMD:        latestRecord.ContentMD,
+				Version:          latestRecord.Version,
+				SourceBlobID:     latestRecord.SourceBlobID,
+				SourceFileName:   latestRecord.SourceFileName,
+				SourceMimeType:   latestRecord.SourceMimeType,
+				ContentVersion:   latestRecord.ContentVersion,
+				SpaceID:          latestRecord.SpaceID,
+				UpdatedAtRaw:     latestRecord.UpdatedAtRaw,
 			}))
 			return
 		}
@@ -1581,12 +1590,13 @@ func (h *workspaceHandler) RestoreRevision(c *gin.Context) {
 			// 恢复历史版本后失效阅读缓存，避免继续命中过期正文。
 			h.renderCache.PurgeDoc(documentID)
 		}
+		recordDocumentActivity(c, h.auditLogRepo, actorUserID, documentID, "edit")
 		current.ContentMD = restoredContent
 		current.Version = nextVersion
 		current.ContentVersion = nextVersion
 		current.UpdatedAtRaw = now.Format(time.RFC3339Nano)
 
-		if h != nil && h.documentImageAssetService != nil {
+		if h != nil && h.documentImageAssetService != nil && current.ImportedFileKind != models.ImportedFileKindText {
 			if syncErr := h.documentImageAssetService.SyncDocumentImageAssets(
 				c.Request.Context(),
 				service.SyncDocumentImageAssetsInput{
@@ -1702,19 +1712,20 @@ func (h *workspaceHandler) RestoreRevision(c *gin.Context) {
 			return
 		}
 		h.writeDocumentVersionConflict(c, mapWorkspaceDocumentResponse(workspaceDocumentRow{
-			DocumentID:     latestRecord.DocumentID,
-			NodeID:         latestRecord.NodeID,
-			ThemeID:        latestRecord.ThemeID,
-			Format:         latestRecord.Format,
-			Title:          latestRecord.Title,
-			ContentMD:      latestRecord.ContentMD,
-			Version:        latestRecord.Version,
-			SourceBlobID:   latestRecord.SourceBlobID,
-			SourceFileName: latestRecord.SourceFileName,
-			SourceMimeType: latestRecord.SourceMimeType,
-			ContentVersion: latestRecord.ContentVersion,
-			SpaceID:        latestRecord.SpaceID,
-			UpdatedAtRaw:   latestRecord.UpdatedAtRaw,
+			DocumentID:       latestRecord.DocumentID,
+			NodeID:           latestRecord.NodeID,
+			ThemeID:          latestRecord.ThemeID,
+			Format:           latestRecord.Format,
+			ImportedFileKind: latestRecord.ImportedFileKind,
+			Title:            latestRecord.Title,
+			ContentMD:        latestRecord.ContentMD,
+			Version:          latestRecord.Version,
+			SourceBlobID:     latestRecord.SourceBlobID,
+			SourceFileName:   latestRecord.SourceFileName,
+			SourceMimeType:   latestRecord.SourceMimeType,
+			ContentVersion:   latestRecord.ContentVersion,
+			SpaceID:          latestRecord.SpaceID,
+			UpdatedAtRaw:     latestRecord.UpdatedAtRaw,
 		}))
 		return
 	}
@@ -1723,6 +1734,7 @@ func (h *workspaceHandler) RestoreRevision(c *gin.Context) {
 		// Office 恢复切换了源文件版本，必须失效阅读缓存并等待 HTML 重新渲染。
 		h.renderCache.PurgeDoc(documentID)
 	}
+	recordDocumentActivity(c, h.auditLogRepo, actorUserID, documentID, "edit")
 	if renderErr := h.enqueueOfficeRevisionRestoreRender(c.Request.Context(), renderInput); renderErr != nil {
 		slog.WarnContext(c.Request.Context(), "恢复 Office 历史版本后提交 HTML 渲染任务失败，文档已切换到新版本但需等待补偿处理",
 			"documentID", documentID,
@@ -1791,7 +1803,7 @@ func workspaceRevisionDetailResponseFromRecord(
 	summary := workspaceRevisionSummaryResponseFromRecord(record.WorkspaceRevisionSummaryRecord)
 	detail := workspaceRevisionDetailResponse{
 		workspaceRevisionSummaryResponse: summary,
-		ContentMD:                        trimWorkspaceRevisionOptionalString(record.ContentMD),
+		ContentMD:                        record.ContentMD,
 	}
 	if record.BlobID != nil || record.FileName != nil || record.MimeType != nil {
 		detail.File = &workspaceRevisionFileResponse{
@@ -1909,22 +1921,82 @@ func (h *workspaceHandler) ensureSpaceWritable(
 	if err != nil {
 		return nil, err
 	}
-	if strings.TrimSpace(space.OwnerUserID) == userID {
-		return space, nil
-	}
-	if space.IsPlatformAdmin {
-		return space, nil
-	}
-	if space.HasSpaceAdminScope {
-		return space, nil
-	}
-	if space.MemberRole == nil {
-		return nil, service.ErrSpaceAccessDenied
-	}
-	if *space.MemberRole == models.RoleReader {
+	if !hasWorkspaceStructureAccess(space, userID) {
 		return nil, service.ErrSpaceAccessDenied
 	}
 	return space, nil
+}
+
+func hasWorkspaceStructureAccess(space *repository.WorkspaceSpacePermissionSnapshot, userID string) bool {
+	return space.OwnerUserID == userID || space.IsPlatformAdmin || space.HasSpaceAdminScope ||
+		(space.MemberRole != nil && *space.MemberRole != models.RoleReader)
+}
+
+func canEditWorkspaceDocument(permission models.DocumentPermission, overridden, spaceWritable bool) bool {
+	if overridden {
+		return !permission.AccessDenied && permission.Role != models.RoleReader
+	}
+	return spaceWritable
+}
+
+func (h *workspaceHandler) requireDocumentWrite(c *gin.Context, documentID, userID string) bool {
+	if err := h.visibilityService.AuthorizeDocumentWrite(c.Request.Context(), documentID, userID); err != nil {
+		writeWorkspaceDocumentAccessError(c, err)
+		return false
+	}
+	return true
+}
+
+func (h *workspaceHandler) requireNodePermission(c *gin.Context, spaceID, userID string, nodeID *string, subtree bool) bool {
+	if nodeID == nil {
+		return true
+	}
+	ctx := c.Request.Context()
+	permissions, err := h.visibilityService.DocumentPermissionsByViewer(ctx, spaceID, userID)
+	if err != nil {
+		response.InternalError(c)
+		return false
+	}
+	if len(permissions) == 0 {
+		return true
+	}
+	rows, err := h.workspaceRepo.ListTreeNodesBySpaceID(ctx, spaceID)
+	if err != nil {
+		response.InternalError(c)
+		return false
+	}
+	parents := make(map[string]string, len(rows))
+	for _, row := range rows {
+		parents[row.NodeID] = derefOptionalString(row.ParentNodeID)
+	}
+	for _, row := range rows {
+		if row.DocumentID == nil {
+			continue
+		}
+		permission, overridden := permissions[*row.DocumentID]
+		if canEditWorkspaceDocument(permission, overridden, true) {
+			continue
+		}
+		for ancestor, steps := row.NodeID, 0; ancestor != "" && steps <= len(rows); ancestor, steps = parents[ancestor], steps+1 {
+			if ancestor == *nodeID {
+				writeWorkspaceDocumentAccessError(c, service.ErrDocumentAccessDenied)
+				return false
+			}
+			if !subtree {
+				break
+			}
+		}
+	}
+	return true
+}
+
+func (h *workspaceHandler) RequireDocumentWrite(c *gin.Context) {
+	actorID, ok := h.requireActorUserID(c)
+	if !ok || !h.requireDocumentWrite(c, c.Param("docId"), actorID) {
+		c.Abort()
+		return
+	}
+	c.Next()
 }
 
 func (h *workspaceHandler) loadSpaceAccess(
@@ -1975,6 +2047,7 @@ func mapWorkspaceTreeResponses(nodes []*workspaceTreeNode) []workspaceTreeNodeRe
 			DocumentIdentifier: node.DocumentIdentifier,
 			DocumentRouteKey:   node.DocumentRouteKey,
 			DocumentFormat:     node.DocumentFormat,
+			ImportedFileKind:   node.ImportedFileKind,
 			SpaceID:            node.SpaceID,
 			ParentID:           node.ParentID,
 			Type:               normalizeWorkspaceNodeType(node.Type),
@@ -1989,18 +2062,19 @@ func mapWorkspaceTreeResponses(nodes []*workspaceTreeNode) []workspaceTreeNodeRe
 
 func mapWorkspaceDocumentResponse(row workspaceDocumentRow) workspaceDocumentResponse {
 	return workspaceDocumentResponse{
-		ID:             strings.TrimSpace(row.DocumentID),
-		NodeID:         strings.TrimSpace(row.NodeID),
-		ThemeID:        strings.TrimSpace(row.ThemeID),
-		Format:         models.NormalizeDocumentFormat(row.Format),
-		Title:          strings.TrimSpace(row.Title),
-		ContentMD:      row.ContentMD,
-		Version:        row.Version,
-		SourceBlobID:   normalizeOptionalString(row.SourceBlobID),
-		SourceFileName: normalizeOptionalString(row.SourceFileName),
-		SourceMimeType: normalizeOptionalString(row.SourceMimeType),
-		ContentVersion: normalizeWorkspaceContentVersion(row.ContentVersion, row.Version),
-		UpdatedAt:      formatWorkspaceTime(row.UpdatedAtRaw),
+		ID:               strings.TrimSpace(row.DocumentID),
+		NodeID:           strings.TrimSpace(row.NodeID),
+		ThemeID:          strings.TrimSpace(row.ThemeID),
+		Format:           models.NormalizeDocumentFormat(row.Format),
+		ImportedFileKind: row.ImportedFileKind,
+		Title:            strings.TrimSpace(row.Title),
+		ContentMD:        row.ContentMD,
+		Version:          row.Version,
+		SourceBlobID:     normalizeOptionalString(row.SourceBlobID),
+		SourceFileName:   normalizeOptionalString(row.SourceFileName),
+		SourceMimeType:   normalizeOptionalString(row.SourceMimeType),
+		ContentVersion:   normalizeWorkspaceContentVersion(row.ContentVersion, row.Version),
+		UpdatedAt:        formatWorkspaceTime(row.UpdatedAtRaw),
 	}
 }
 

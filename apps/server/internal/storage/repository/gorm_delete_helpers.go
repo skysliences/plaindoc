@@ -102,6 +102,7 @@ func collectWorkspaceNodeDeleteScopeInTx(
 			qualifiedColumn("", models.NodeColumns.SpaceID),
 			qualifiedColumn("", models.NodeColumns.ParentNodeID),
 			qualifiedColumn("", models.NodeColumns.Type),
+			qualifiedColumn("", models.NodeColumns.ImportedFileKind),
 		)).
 		Where(qualifiedColumn("", models.NodeColumns.NodeID)+" = ?", normalizedRootNodeID).
 		Take(&root).Error; err != nil {

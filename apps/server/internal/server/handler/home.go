@@ -19,6 +19,7 @@ type homeHandler struct {
 	homeSearchService  *service.HomeSearchService
 	searchConfig       *service.SearchConfigService
 	adminAccessService *service.AdminAccessService
+	collaboration      *service.WorkspaceCollaborationService
 	webOrigin          string
 }
 
@@ -40,6 +41,7 @@ func NewHomeHandler(
 	homeSearchService *service.HomeSearchService,
 	searchConfigService *service.SearchConfigService,
 	adminAccessService *service.AdminAccessService,
+	collaboration *service.WorkspaceCollaborationService,
 	webOrigin string,
 ) *homeHandler {
 	return &homeHandler{
@@ -48,6 +50,7 @@ func NewHomeHandler(
 		homeSearchService:  homeSearchService,
 		searchConfig:       searchConfigService,
 		adminAccessService: adminAccessService,
+		collaboration:      collaboration,
 		webOrigin:          normalizeWebOrigin(webOrigin),
 	}
 }
@@ -55,6 +58,40 @@ func NewHomeHandler(
 // Home 渲染首页（左侧分类 + 可见空间列表）。
 func (h *homeHandler) Home(c *gin.Context) {
 	h.renderPage(c, false)
+}
+
+// CreateSpace handles the homepage dialog's form submission.
+func (h *homeHandler) CreateSpace(c *gin.Context) {
+	viewer := h.resolveOptionalViewerIdentity(c)
+	if !viewer.Authenticated {
+		c.Redirect(http.StatusSeeOther, h.webOrigin+"/login")
+		return
+	}
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 4<<10)
+	name, valid := normalizeWorkspaceSpaceName(c.PostForm("name"))
+	if !valid {
+		c.Redirect(http.StatusSeeOther, "/?spaceCreationError=name")
+		return
+	}
+
+	space, documentID, err := h.collaboration.CreateSpace(c.Request.Context(), viewer.UserID, name)
+	if err != nil {
+		setRequestErrmsg(c, err, "创建空间失败")
+		c.Redirect(http.StatusSeeOther, "/?spaceCreationError=server")
+		return
+	}
+	c.Redirect(http.StatusSeeOther, "/r/"+url.PathEscape(space.SpaceID)+"/"+url.PathEscape(documentID))
+}
+
+func spaceCreationError(code string) string {
+	switch code {
+	case "name":
+		return "请输入 1 至 64 个字符的空间名称。"
+	case "server":
+		return "空间创建失败，请重试。"
+	default:
+		return ""
+	}
 }
 
 // Explore 渲染分类页（顶部分类导航 + 分类空间列表）。
@@ -70,7 +107,7 @@ func (h *homeHandler) Search(c *gin.Context) {
 	}
 
 	viewerIdentity := h.resolveOptionalViewerIdentity(c)
-	canManageSpace := h.resolveCanManageSpace(c, viewerIdentity)
+	canAccessAdmin := h.resolveCanAccessAdmin(c, viewerIdentity)
 	searchEnabled := h.resolveHomepageSearchEnabled(c)
 
 	categoryRecord, err := h.homeService.GetPage(c.Request.Context(), service.HomepageQueryInput{
@@ -121,7 +158,8 @@ func (h *homeHandler) Search(c *gin.Context) {
 		FilingLink:           categoryRecord.FilingLink,
 		IsSearch:             true,
 		IsAuthenticated:      viewerIdentity.Authenticated,
-		CanManageSpace:       canManageSpace,
+		CanAccessAdmin:       canAccessAdmin,
+		WorkspaceURL:         h.webOrigin + "/editor",
 		CurrentUserName:      viewerIdentity.Name,
 		CurrentUserAvatar:    buildUserAvatarText(viewerIdentity.Name, viewerIdentity.Email),
 		CurrentUserAvatarURL: strings.TrimSpace(viewerIdentity.AvatarURL),
@@ -176,7 +214,7 @@ func (h *homeHandler) renderPage(c *gin.Context, explore bool) {
 	}
 
 	viewerIdentity := h.resolveOptionalViewerIdentity(c)
-	canManageSpace := h.resolveCanManageSpace(c, viewerIdentity)
+	canAccessAdmin := h.resolveCanAccessAdmin(c, viewerIdentity)
 	searchEnabled := h.resolveHomepageSearchEnabled(c)
 	record, err := h.homeService.GetPage(c.Request.Context(), service.HomepageQueryInput{
 		ViewerUserID: viewerIdentity.UserID,
@@ -209,7 +247,7 @@ func (h *homeHandler) renderPage(c *gin.Context, explore bool) {
 	}
 
 	categoryItems := buildHomeCategoryItems(record, explore, isExploreAll, false)
-	spaceItems := mapHomepageSpaces(record.Spaces)
+	spaceItems := mapHomepageSpaces(record.Spaces, viewerIdentity.UserID, h.webOrigin+"/editor")
 	loginURL := h.buildWebAuthEntryURL(c, "/login")
 	registerURL := h.buildWebAuthEntryURL(c, "/register")
 	activeCategoryName := strings.TrimSpace(record.ActiveCategory)
@@ -227,7 +265,9 @@ func (h *homeHandler) renderPage(c *gin.Context, explore bool) {
 		FilingLink:           record.FilingLink,
 		IsExplore:            explore,
 		IsAuthenticated:      viewerIdentity.Authenticated,
-		CanManageSpace:       canManageSpace,
+		CanAccessAdmin:       canAccessAdmin,
+		WorkspaceURL:         h.webOrigin + "/editor",
+		SpaceCreationError:   spaceCreationError(c.Query("spaceCreationError")),
 		CurrentUserName:      viewerIdentity.Name,
 		CurrentUserAvatar:    buildUserAvatarText(viewerIdentity.Name, viewerIdentity.Email),
 		CurrentUserAvatarURL: strings.TrimSpace(viewerIdentity.AvatarURL),
@@ -285,7 +325,7 @@ func (h *homeHandler) resolveOptionalViewerIdentity(c *gin.Context) homeViewerId
 	}
 }
 
-func (h *homeHandler) resolveCanManageSpace(
+func (h *homeHandler) resolveCanAccessAdmin(
 	c *gin.Context,
 	viewerIdentity homeViewerIdentity,
 ) bool {
@@ -356,10 +396,15 @@ func buildHomeCategoryItems(
 	return categoryItems
 }
 
-func mapHomepageSpaces(items []service.HomepageSpaceRecord) []view.HomeSpaceViewData {
+func mapHomepageSpaces(items []service.HomepageSpaceRecord, actorID, workspaceURL string) []view.HomeSpaceViewData {
 	spaceItems := make([]view.HomeSpaceViewData, 0, len(items))
 	for _, item := range items {
+		manageURL := ""
+		if actorID != "" && actorID == item.OwnerUserID {
+			manageURL = workspaceURL + "?space=" + url.QueryEscape(item.SpaceID) + "&manage=dialog"
+		}
 		spaceItems = append(spaceItems, view.HomeSpaceViewData{
+			ManageURL:   manageURL,
 			SpaceID:     strings.TrimSpace(item.SpaceID),
 			Name:        strings.TrimSpace(item.Name),
 			Description: strings.TrimSpace(item.Description),

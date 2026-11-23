@@ -18,6 +18,7 @@ const VIEWER_TARGET_ATTRIBUTE = "data-reader-image-viewer-target";
 const VIEWER_ITEM_INDEX_ATTRIBUTE = "data-reader-image-viewer-index";
 const VIEWER_OPEN_BODY_CLASS = "reader-image-viewer-open";
 const GALLERY_ITEM_SELECTOR = `[${VIEWER_TARGET_ATTRIBUTE}='1']`;
+const IMPORTED_IMAGE_PREVIEW_SELECTOR = "[data-reader-imported-image-preview='1']";
 const MERMAID_DIAGRAM_SELECTOR = "[data-reader-hook='mermaid'] [data-reader-mermaid-diagram='1'] svg";
 const SVG_MIN_VIEWER_EDGE = 32;
 const ZOOM_STEP_MULTIPLIER = 1.2;
@@ -653,7 +654,8 @@ function handleViewerClick(event) {
   if (!(event.target instanceof Element)) {
     return;
   }
-  const mediaNode = event.target.closest(GALLERY_ITEM_SELECTOR);
+  const mediaNode = event.target.closest(GALLERY_ITEM_SELECTOR) ??
+    event.target.closest(IMPORTED_IMAGE_PREVIEW_SELECTOR)?.querySelector(GALLERY_ITEM_SELECTOR);
   if (mediaNode instanceof Element) {
     const linkedMediaAnchor = mediaNode.closest("a[href]");
     if (linkedMediaAnchor instanceof HTMLAnchorElement && linkedMediaAnchor.contains(mediaNode)) {

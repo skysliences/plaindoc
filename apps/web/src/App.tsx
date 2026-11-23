@@ -10,6 +10,7 @@ import {
   Bold,
   Code2,
   CheckCircle2,
+  Eye,
   GripVertical,
   Image as ImageIcon,
   Italic,
@@ -21,6 +22,7 @@ import {
   Monitor,
   Minus,
   Paperclip,
+  Pencil,
   PanelLeftClose,
   PanelLeftOpen,
   Quote,
@@ -58,7 +60,10 @@ import { EditorAccessErrorPage } from "./components/EditorAccessErrorPage";
 import { EditorLoadingPage } from "./components/EditorLoadingPage";
 import { OnlyOfficeEditorPane, type OnlyOfficeEditorPaneState } from "./components/OnlyOfficeEditorPane";
 import { ResetPasswordPanel } from "./components/ResetPasswordPanel";
+import { ReaderCreateDocumentForm } from "./workspace/ReaderCreateDocumentForm";
+import { WorkspaceHome, getSpaceManagementParentOrigin, isSpaceManagementFrame } from "./workspace/WorkspaceHome";
 import { WorkspaceSidebar } from "./components/WorkspaceSidebar";
+import { WorkspaceImagePane } from "./components/WorkspaceImagePane";
 import { ThemeMenu } from "./components/ThemeMenu";
 import { TocMenu } from "./components/TocMenu";
 import { DocumentAttachmentPopover } from "./components/DocumentAttachmentPopover";
@@ -67,6 +72,7 @@ import {
   DocumentRevisionHistoryTrigger
 } from "./components/DocumentRevisionHistoryDialog";
 import { useConfirmDialog } from "./components/ConfirmDialog";
+import { Button } from "./components/ui/button";
 import { Toaster } from "./components/ui/sonner";
 import {
   Tooltip,
@@ -90,6 +96,7 @@ import {
   type CreateNodeResult,
   type DocumentAttachment,
   type DocumentFormat,
+  type ImportWorkspaceDocumentsInput,
   type ImportWorkspaceDocumentsResult,
   type OnlyOfficeEditConfig,
   type DocumentShareConfig,
@@ -171,7 +178,6 @@ const REGISTER_ROUTE_PATH = "/register";
 const FORGOT_PASSWORD_ROUTE_PATH = "/forgot-password";
 const RESET_PASSWORD_ROUTE_PATH = "/reset-password";
 const EDITOR_ROUTE_BASE_PATH = "/editor";
-const ADMIN_SPACES_ROUTE_PATH = `${ADMIN_ROUTE_BASE_PATH}/spaces`;
 const AUTO_SAVE_DEBOUNCE_MS = 800;
 const EDITOR_TITLE_EXTRA_METADATA = "PlainDoc - 一个适合中小团队文档在线管理系统";
 const AUTH_CAPTCHA_REQUIRED_CODE = 1008;
@@ -943,6 +949,8 @@ interface EditorToolbarButtonProps {
   label: string;
   onClick: () => void;
   className?: string;
+  pressed?: boolean;
+  controls?: string;
   children: ReactNode;
 }
 
@@ -950,6 +958,8 @@ function EditorToolbarButton({
   label,
   onClick,
   className,
+  pressed,
+  controls,
   children
 }: EditorToolbarButtonProps) {
   const resolvedClassName = className
@@ -958,7 +968,14 @@ function EditorToolbarButton({
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <button type="button" className={resolvedClassName} aria-label={label} onClick={onClick}>
+        <button
+          type="button"
+          className={resolvedClassName}
+          aria-label={label}
+          aria-pressed={pressed}
+          aria-controls={controls}
+          onClick={onClick}
+        >
           {children}
         </button>
       </TooltipTrigger>
@@ -973,8 +990,13 @@ export default function App() {
   const location = useLocation();
   const navigate = useNavigate();
   const route = useMemo(() => parseAppRoute(location.pathname), [location.pathname]);
-  const isEditorRoute =
-    route.kind === "editor-root" || route.kind === "editor-space" || route.kind === "editor-doc";
+  const readerCreateParentOrigin =
+    route.kind === "editor-space" && new URLSearchParams(location.search).get("dialog") === "create-document" &&
+    window.parent !== window && window.name === "plaindoc-reader-create-document" && document.referrer
+      ? new URL(document.referrer).origin
+      : undefined;
+  const isEditorRoute = !readerCreateParentOrigin &&
+    (route.kind === "editor-space" || route.kind === "editor-doc");
   const isAdminRoute =
     route.kind === "admin-login" || route.kind === "admin-root" || route.kind === "admin-page";
   const routeSpaceId = route.kind === "editor-space" || route.kind === "editor-doc" ? route.spaceId : null;
@@ -1004,7 +1026,11 @@ export default function App() {
   const {
     activeSpaceId,
     activeSpaceName,
+    canCreateWorkspaceNodes,
     workspaceTree,
+    activeDocumentCopyDenied,
+    activeDocumentIsPlainText,
+    activeDocumentImage,
     activeDocumentFormat,
     activeDocumentTitle,
     activeDocumentThemeId,
@@ -1119,6 +1145,8 @@ export default function App() {
   const pendingRouteDocumentIDRef = useRef<{ docId: string; startedAt: number } | null>(null);
   // 自动保存并发保护：避免低延迟模式下出现并发 PUT 造成版本竞争。
   const autoSaveInFlightRef = useRef(false);
+  const allowReaderEditorUnloadRef = useRef(false);
+  const readerEditorClosingRef = useRef(false);
   // 自动保存计划序号：仅允许最新一轮计划执行，旧计划直接丢弃。
   const autoSaveScheduleIDRef = useRef(0);
   // ONLYOFFICE 回写后延迟刷新文档元信息，避免与服务端 callback 写回竞争。
@@ -1127,11 +1155,41 @@ export default function App() {
   const latestContentRef = useRef(content);
   // CodeMirror 实例引用：供顶部语法工具栏直接分发编辑命令。
   const editorViewRef = useRef<EditorView | null>(null);
+  useEffect(() => {
+    if (!isEditorRoute || !activeDocId) return;
+    function reportCopy() {
+      if (!activeDocumentCopyDenied && activeDocId) {
+        void dataGateway.document.reportCopy?.(activeDocId).catch(() => {});
+      }
+    }
+    function handleClipboard(event: ClipboardEvent) {
+      const target = event.target;
+      const selection = window.getSelection();
+      const documentSurfaces = document.querySelectorAll(`#${PREVIEW_BODY_ID}, .revision-history-dialog__diff`);
+      const inEditor = target instanceof Element && !!target.closest(".cm-content");
+      const inDocument = selection && Array.from(documentSurfaces).some((surface) => selection.containsNode(surface, true));
+      if (!inEditor && !inDocument) return;
+      if (activeDocumentCopyDenied) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+      } else if (!selection?.isCollapsed || inEditor) {
+        reportCopy();
+      }
+    }
+    document.addEventListener("copy", handleClipboard, true);
+    document.addEventListener("cut", handleClipboard, true);
+    document.addEventListener("plaindoc:clipboard-copy", reportCopy);
+    return () => {
+      document.removeEventListener("copy", handleClipboard, true);
+      document.removeEventListener("cut", handleClipboard, true);
+      document.removeEventListener("plaindoc:clipboard-copy", reportCopy);
+    };
+  }, [activeDocId, activeDocumentCopyDenied, dataGateway.document, isEditorRoute]);
+
   const isActiveOfficeDocument = isOfficeDocumentFormat(activeDocumentFormat);
-  const activeDocumentFormatLabel = useMemo(
-    () => resolveDocumentFormatLabel(activeDocumentFormat),
-    [activeDocumentFormat]
-  );
+  const isActiveImage = activeDocumentImage !== null;
+  const isTextEditor = !isActiveOfficeDocument && !isActiveImage;
+  const activeDocumentFormatLabel = isActiveImage ? "图片" : resolveDocumentFormatLabel(activeDocumentFormat);
 
   // 当前生效主题对象，用于渲染菜单高亮和生成样式。
   const activePreviewTheme = useMemo(
@@ -1163,7 +1221,7 @@ export default function App() {
     const mermaidMatches = content.match(/^```mermaid\b/gim);
     return mermaidMatches?.length ?? 0;
   }, [content]);
-  const shouldDeferPreview = mermaidBlockCount >= MERMAID_PREVIEW_DEFER_THRESHOLD;
+  const shouldDeferPreview = !activeDocumentIsPlainText && mermaidBlockCount >= MERMAID_PREVIEW_DEFER_THRESHOLD;
   const previewContent = shouldDeferPreview ? deferredPreviewContent : content;
 
   // 滚动同步 Hook：封装编辑区/预览区双向同步与锚点重建逻辑。
@@ -1220,10 +1278,38 @@ export default function App() {
     };
   }, [setLastSavedAt]);
 
-  const handleBackToAdminSpaces = useCallback(() => {
-    navigate(ADMIN_SPACES_ROUTE_PATH);
-  }, [navigate]);
+  useEffect(() => {
+    const parentOrigin = getSpaceManagementParentOrigin();
+    if (!parentOrigin || route.kind !== "editor-root") return;
+    const closeManagement = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !event.defaultPrevented) {
+        window.parent.postMessage({ type: "plaindoc:close-space-management" }, parentOrigin);
+      }
+    };
+    window.addEventListener("keydown", closeManagement);
+    return () => window.removeEventListener("keydown", closeManagement);
+  }, [route.kind]);
 
+  const editorEntry = new URLSearchParams(location.search).get("from");
+  const readerEditorParentOrigin =
+    editorEntry === "reader" && new URLSearchParams(location.search).get("inline") === "1" &&
+    window.parent !== window && window.name === "plaindoc-reader-editor" && document.referrer
+      ? new URL(document.referrer).origin
+      : undefined;
+  const isSpaceDocumentView = editorEntry === "home" || editorEntry === "space" || editorEntry === "reader";
+  const [isSpacePreviewOpen, setIsSpacePreviewOpen] = useState(false);
+  const canToggleInlinePreview = Boolean(readerEditorParentOrigin) && isTextEditor && !activeDocumentIsPlainText;
+  const isInlinePreviewVisible = canToggleInlinePreview && isSpacePreviewOpen;
+  const isSpacePreviewVisible = isSpaceDocumentView && !readerEditorParentOrigin && isSpacePreviewOpen;
+  const isPreviewVisible = !isSpaceDocumentView || isSpacePreviewVisible || isInlinePreviewVisible;
+  const shouldOpenCreateDocument = new URLSearchParams(location.search).get("create") === "document";
+  const createFromReaderRef = useRef(false);
+  const consumeCreateDocumentRequest = useCallback(() => {
+    createFromReaderRef.current = true;
+    const query = new URLSearchParams(location.search);
+    query.delete("create");
+    navigate({ pathname: location.pathname, search: query.toString(), hash: location.hash }, { replace: true });
+  }, [location.hash, location.pathname, location.search, navigate]);
   const routeDocExistsInTree = useMemo(() => {
     if (!routeDocId) {
       return false;
@@ -1235,7 +1321,7 @@ export default function App() {
         continue;
       }
       const resolvedDocumentID = (node.documentId ?? node.id ?? "").trim();
-      if (node.type === "doc" && resolvedDocumentID === routeDocId) {
+      if (node.type === "doc" && node.importedFileKind !== "unsupported" && resolvedDocumentID === routeDocId) {
         return true;
       }
       if (node.children.length) {
@@ -1256,7 +1342,7 @@ export default function App() {
         continue;
       }
       const resolvedDocumentID = (node.documentId ?? node.id ?? "").trim();
-      if (node.type === "doc" && resolvedDocumentID === activeDocId) {
+      if (node.type === "doc" && node.importedFileKind !== "unsupported" && resolvedDocumentID === activeDocId) {
         return true;
       }
       if (node.children.length) {
@@ -1372,13 +1458,7 @@ export default function App() {
       return;
     }
 
-    // 编辑器必须绑定具体空间，禁止直接打开 /editor 根路径。
-    if (route.kind === "editor-root") {
-      window.location.replace("/");
-      return;
-    }
-
-    if (!isEditorRoute && !isAdminRoute) {
+    if (!isEditorRoute && !readerCreateParentOrigin && !isAdminRoute && route.kind !== "editor-root") {
       if (location.pathname !== "/") {
         window.location.replace("/");
       }
@@ -1392,6 +1472,7 @@ export default function App() {
     location.hash,
     location.pathname,
     location.search,
+    readerCreateParentOrigin,
     route.kind,
     authLoginOptions.allowUserRegister
   ]);
@@ -2163,7 +2244,7 @@ export default function App() {
   ]);
 
   const extensions = useMemo(
-    () => [
+    () => activeDocumentIsPlainText ? [EditorView.lineWrapping] : [
       // 编辑器软换行，避免横向滚动影响同步体验。
       EditorView.lineWrapping,
       // 拦截粘贴：图片文件上传、富文本转 Markdown、外链图片本地化。
@@ -2225,7 +2306,7 @@ export default function App() {
         codeLanguages: languages
       })
     ],
-    [localizeRemoteImageURLsInMarkdown, uploadImageFilesToEditor]
+    [activeDocumentIsPlainText, localizeRemoteImageURLsInMarkdown, uploadImageFilesToEditor]
   );
   // remark 插件顺序：先 GFM/数学公式，再规整样式 span 容器，再按链接模式处理脚注，最后注入锚点属性。
   const remarkPlugins = useMemo(() => {
@@ -2247,8 +2328,8 @@ export default function App() {
   );
   // 解析文档标题与 [TOC] 标记，供目录菜单与语法渲染共用。
   const tocParseResult = useMemo(
-    () => parseTocFromMarkdown(previewContent, markdownTextParser),
-    [markdownTextParser, previewContent]
+    () => parseTocFromMarkdown(activeDocumentIsPlainText ? "" : previewContent, markdownTextParser),
+    [activeDocumentIsPlainText, markdownTextParser, previewContent]
   );
   // TOC 标题列表。
   const tocItems = tocParseResult.items;
@@ -2268,8 +2349,8 @@ export default function App() {
   );
   // 提取 Markdown 对应的纯文本内容。
   const plainTextContent = useMemo(
-    () => extractPlainTextFromMarkdown(content, markdownTextParser),
-    [content, markdownTextParser]
+    () => activeDocumentIsPlainText ? content : extractPlainTextFromMarkdown(content, markdownTextParser),
+    [activeDocumentIsPlainText, content, markdownTextParser]
   );
   // 统计非空白字符数量，作为字数展示。
   const plainTextCount = useMemo(() => plainTextContent.replace(/\s+/g, "").length, [plainTextContent]);
@@ -2342,6 +2423,26 @@ export default function App() {
     !editorAccessError &&
     !hasEditorInitialResourcesReady;
 
+  useEffect(() => {
+    if (shouldShowEditorLoadingPage || !activeDocId || activeDocId !== routeDocId || !isTextEditor) {
+      return;
+    }
+    const query = new URLSearchParams(location.search);
+    if (query.get("compose") !== "1") {
+      return;
+    }
+    const frame = window.requestAnimationFrame(() => {
+      const view = editorViewRef.current;
+      if (!view?.dom.isConnected) {
+        return;
+      }
+      view.focus();
+      query.delete("compose");
+      navigate({ pathname: location.pathname, search: query.toString(), hash: location.hash }, { replace: true });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [activeDocId, isTextEditor, location.hash, location.pathname, location.search, navigate, routeDocId, shouldShowEditorLoadingPage]);
+
   const editorLoadingDescription = useMemo(() => {
     if (isPreviewThemesLoading) {
       return "正在加载主题资源...";
@@ -2396,9 +2497,9 @@ export default function App() {
   }, [activeDocId]);
 
   // 在离开当前文档前确认未保存修改，避免目录切换导致内容丢失。
-  const confirmLeaveForDocumentSwitch = useCallback(async (): Promise<boolean> => {
-    const hasUnsavedChanges =
-      content !== lastSavedContent && saveStatus !== "loading" && saveStatus !== "saving";
+  const confirmLeaveForDocumentSwitch = useCallback(async (leavingPage = false): Promise<boolean> => {
+    const hasUnsavedChanges = content !== lastSavedContent &&
+      (leavingPage || (saveStatus !== "loading" && saveStatus !== "saving"));
     if (!hasUnsavedChanges) {
       return true;
     }
@@ -2410,9 +2511,82 @@ export default function App() {
     });
   }, [confirmByModal, content, lastSavedContent, saveStatus]);
 
+  useEffect(() => {
+    if (!readerEditorParentOrigin || content === lastSavedContent) return;
+    const warnBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (allowReaderEditorUnloadRef.current) return;
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", warnBeforeUnload);
+    return () => window.removeEventListener("beforeunload", warnBeforeUnload);
+  }, [content, lastSavedContent, readerEditorParentOrigin]);
+
+  const handleCloseReaderEditor = useCallback(async () => {
+    if (!readerEditorParentOrigin || autoSaveInFlightRef.current || readerEditorClosingRef.current) return;
+    readerEditorClosingRef.current = true;
+    try {
+      if (latestContentRef.current !== lastSavedContent) {
+        window.focus();
+        const confirmed = await confirmByModal({
+          title: "返回阅读模式？",
+          description: "当前文档有未保存的修改。",
+          confirmText: "放弃修改",
+          tone: "warning"
+        });
+        if (!confirmed) return;
+      }
+      allowReaderEditorUnloadRef.current = true;
+      window.parent.postMessage({ type: "plaindoc:reader-editor-closed" }, readerEditorParentOrigin);
+    } finally {
+      readerEditorClosingRef.current = false;
+    }
+  }, [confirmByModal, lastSavedContent, readerEditorParentOrigin]);
+
+  useEffect(() => {
+    if (!readerEditorParentOrigin) return;
+    const handleMessage = (event: MessageEvent) => {
+      if (event.source === window.parent && event.origin === readerEditorParentOrigin &&
+          event.data?.type === "plaindoc:reader-editor-close-request") {
+        void handleCloseReaderEditor();
+      }
+    };
+    window.addEventListener("message", handleMessage);
+    return () => window.removeEventListener("message", handleMessage);
+  }, [handleCloseReaderEditor, readerEditorParentOrigin]);
+
+  useEffect(() => {
+    if (readerEditorParentOrigin) {
+      window.parent.postMessage({ type: "plaindoc:reader-editor-ready" }, readerEditorParentOrigin);
+    }
+  }, [readerEditorParentOrigin]);
+
+  const handleBackToWorkspace = useCallback(async () => {
+    if (!(await confirmLeaveForDocumentSwitch())) return;
+    if (isSpaceManagementFrame() && activeSpaceId) {
+      navigate(`${EDITOR_ROUTE_BASE_PATH}?space=${encodeURIComponent(activeSpaceId)}&manage=dialog`);
+      return;
+    }
+    if (editorEntry === "reader" && activeSpaceId && activeDocId) {
+      window.location.assign(`/r/${encodeURIComponent(activeSpaceId)}/${encodeURIComponent(activeDocId)}`);
+      return;
+    }
+    if (editorEntry === "home" || editorEntry === "space") {
+      window.location.assign("/");
+      return;
+    }
+    navigate(EDITOR_ROUTE_BASE_PATH);
+  }, [activeDocId, activeSpaceId, confirmLeaveForDocumentSwitch, editorEntry, navigate]);
+
+  const handleOpenReaderDirectory = useCallback(async () => {
+    if (activeSpaceId && await confirmLeaveForDocumentSwitch()) {
+      window.location.assign(`/r/${encodeURIComponent(activeSpaceId)}`);
+    }
+  }, [activeSpaceId, confirmLeaveForDocumentSwitch]);
+
   // 从侧边栏打开目标文档：保持保存状态与状态栏提示一致。
   const handleOpenWorkspaceDocument = useCallback(
-    async (docId: string): Promise<void> => {
+    async (docId: string, focusEditor = false): Promise<void> => {
       if (docId === activeDocId) {
         return;
       }
@@ -2429,6 +2603,7 @@ export default function App() {
       }
       setSaveStatus("loading");
       setStatusMessage("切换文档中...");
+      setIsSpacePreviewOpen(false);
       try {
         const result = await openDocument(docId);
         setSaveStatus("ready");
@@ -2436,7 +2611,10 @@ export default function App() {
         if (activeSpaceId) {
           const resultPath = buildEditorRoutePath(activeSpaceId, result.id);
           if (location.pathname !== resultPath) {
-            navigate(resultPath);
+            const query = new URLSearchParams();
+            if (editorEntry === "home" || isSpaceDocumentView) query.set("from", editorEntry ?? "");
+            if (focusEditor) query.set("compose", "1");
+            navigate({ pathname: resultPath, search: query.toString() });
           } else if (pendingRouteDocumentIDRef.current?.docId === result.id) {
             pendingRouteDocumentIDRef.current = null;
           }
@@ -2448,7 +2626,7 @@ export default function App() {
         throw error;
       }
     },
-    [activeDocId, activeSpaceId, confirmLeaveForDocumentSwitch, location.pathname, navigate, openDocument]
+    [activeDocId, activeSpaceId, confirmLeaveForDocumentSwitch, editorEntry, isSpaceDocumentView, location.pathname, navigate, openDocument]
   );
 
   // 路由同步 effect 使用 ref 读取最新打开文档函数，避免因依赖抖动触发重复初始化请求。
@@ -2505,7 +2683,7 @@ export default function App() {
           setStatusMessage(`已加载文档 v${bootstrapResult.documentVersion}`);
           const targetPath = buildEditorRoutePath(bootstrapResult.spaceId, bootstrapResult.docId);
           if (location.pathname !== targetPath) {
-            navigate(targetPath, { replace: true });
+            navigate({ pathname: targetPath, search: location.search }, { replace: true });
           }
           return;
         }
@@ -2532,7 +2710,7 @@ export default function App() {
         if (activeSpaceId && activeDocId && (!routeSpaceId || !routeDocId)) {
           const targetPath = buildEditorRoutePath(activeSpaceId, activeDocId);
           if (location.pathname !== targetPath) {
-            navigate(targetPath, { replace: true });
+            navigate({ pathname: targetPath, search: location.search }, { replace: true });
           }
         }
       } catch (error) {
@@ -2565,6 +2743,7 @@ export default function App() {
     isEditorRoute,
     location.pathname,
     navigate,
+    location.search,
     routeDocExistsInTree,
     routeDocId,
     routeSpaceId,
@@ -2639,12 +2818,19 @@ export default function App() {
       documentIdentifier?: string;
       templateId?: string;
       format?: DocumentFormat;
+      focusEditor?: boolean;
     }): Promise<CreateNodeResult> => {
       try {
         const created = await createNode(input);
         if (created.docId) {
+          if (createFromReaderRef.current && activeSpaceId) {
+            window.location.assign(`/r/${encodeURIComponent(activeSpaceId)}/${encodeURIComponent(created.docId)}`);
+            return created;
+          }
           // 创建成功后立即返回，文档打开流程异步进行，避免目录树出现可见等待闪烁。
-          void handleOpenWorkspaceDocument(created.docId);
+          void handleOpenWorkspaceDocument(created.docId, input.focusEditor).catch(() => {
+            // 打开失败由编辑器状态栏提示，已创建的文档仍保留在目录中。
+          });
           return created;
         }
         setStatusMessage(input.type === "folder" ? "目录创建成功" : "文档创建成功");
@@ -2654,29 +2840,30 @@ export default function App() {
         throw error;
       }
     },
-    [createNode, handleOpenWorkspaceDocument]
+    [activeSpaceId, createNode, handleOpenWorkspaceDocument]
   );
 
   const handleImportWorkspaceDocuments = useCallback(
-    async (input: {
-      targetNodeId: string | null;
-      files: File[];
-      autoExtractTitle: boolean;
-    }): Promise<ImportWorkspaceDocumentsResult> => {
+    async (input: Omit<ImportWorkspaceDocumentsInput, "spaceId">): Promise<ImportWorkspaceDocumentsResult> => {
       if (!activeSpaceId) {
         throw new Error("当前未激活空间，无法导入文档。");
       }
       try {
         const result = await dataGateway.workspace.importDocuments({
-          spaceId: activeSpaceId,
-          targetNodeId: input.targetNodeId,
-          files: input.files,
-          autoExtractTitle: input.autoExtractTitle
+          ...input,
+          spaceId: activeSpaceId
         });
-        await reloadTree(activeSpaceId);
+        try {
+          await reloadTree(activeSpaceId);
+        } catch (error) {
+          const message = `导入已完成，目录刷新失败：${formatError(error)}`;
+          setStatusMessage(message);
+          toast.error(message);
+          return result;
+        }
         const firstImportedDocumentID =
           result.createdNodes.find((item) => item.type === "doc" && item.documentId)?.documentId ?? null;
-        if (firstImportedDocumentID) {
+        if (!input.folderManifest && firstImportedDocumentID) {
           void handleOpenWorkspaceDocument(firstImportedDocumentID);
         }
         setStatusMessage(
@@ -2912,86 +3099,76 @@ export default function App() {
     [isWorkspaceSidebarCollapsed, workspaceSidebarWidth]
   );
 
-  // 自动保存：内容变化后延迟提交，处理版本冲突与失败状态。
+  const saveMarkdownDocument = useCallback(async () => {
+    if (!activeDocId || !isTextEditor || autoSaveInFlightRef.current) return false;
+    autoSaveInFlightRef.current = true;
+    const contentAtSaveStart = latestContentRef.current;
+    setSaveStatus("saving");
+    setStatusMessage("保存中...");
+    try {
+      const result = await dataGateway.document.saveDocument({
+        docId: activeDocId,
+        contentMd: contentAtSaveStart,
+        baseVersion
+      });
+      const savedContent = result.document.contentMd;
+      // 仅在保存期间用户未继续编辑时，回写服务端版本，避免覆盖后续输入。
+      if (latestContentRef.current === contentAtSaveStart && savedContent !== contentAtSaveStart) {
+        setContent(savedContent);
+      }
+      setBaseVersion(result.document.version);
+      setActiveDocumentFormat(result.document.format ?? "markdown");
+      setActiveDocumentTitle(result.document.title || "未命名文档");
+      setActiveDocumentThemeId(result.document.themeId || DEFAULT_PREVIEW_THEME_ID);
+      setActiveDocumentSourceFileName(result.document.sourceFileName ?? null);
+      setActiveDocumentSourceMimeType(result.document.sourceMimeType ?? null);
+      setActiveDocumentContentVersion(result.document.contentVersion ?? result.document.version);
+      setLastSavedAt(result.document.updatedAt);
+      setLastSavedContent(savedContent);
+      setSaveStatus("saved");
+      setStatusMessage(`已保存 v${result.document.version}`);
+      return latestContentRef.current === contentAtSaveStart;
+    } catch (error) {
+      if (error instanceof ConflictError) {
+        setSaveStatus("conflict");
+        setStatusMessage(
+          `检测到冲突：当前基线 v${baseVersion}，最新版本 v${error.latestDocument.version}`
+        );
+        return false;
+      }
+      setSaveStatus("error");
+      setStatusMessage(`保存失败：${formatError(error)}`);
+      return false;
+    } finally {
+      autoSaveInFlightRef.current = false;
+    }
+  }, [
+    activeDocId, baseVersion, dataGateway.document, isTextEditor, setActiveDocumentContentVersion, setActiveDocumentFormat,
+    setActiveDocumentSourceFileName, setActiveDocumentSourceMimeType, setActiveDocumentThemeId,
+    setActiveDocumentTitle, setBaseVersion, setContent, setLastSavedAt, setLastSavedContent
+  ]);
+
+  // 阅读页内嵌时只在明确点击保存后提交，避免与自动保存竞争版本。
   useEffect(() => {
     if (
-      !activeDocId ||
-      activeDocumentFormat !== "markdown" ||
-      content === lastSavedContent ||
-      saveStatus === "loading" ||
-      saveStatus === "saving" ||
-      saveStatus === "conflict"
-    ) {
-      return;
-    }
+      readerEditorParentOrigin || !activeDocId || !isTextEditor || activeDocumentFormat !== "markdown" ||
+      content === lastSavedContent || saveStatus === "loading" ||
+      saveStatus === "saving" || saveStatus === "conflict"
+    ) return;
 
-    const scheduleID = autoSaveScheduleIDRef.current + 1;
-    autoSaveScheduleIDRef.current = scheduleID;
-    const timer = window.setTimeout(async () => {
-      if (scheduleID !== autoSaveScheduleIDRef.current) {
-        return;
-      }
-      if (autoSaveInFlightRef.current) {
-        return;
-      }
-      autoSaveInFlightRef.current = true;
-      const contentAtSaveStart = latestContentRef.current;
-      setSaveStatus("saving");
-      setStatusMessage("保存中...");
-      try {
-        const result = await dataGateway.document.saveDocument({
-          docId: activeDocId,
-          contentMd: contentAtSaveStart,
-          baseVersion
-        });
-        const savedContent = result.document.contentMd;
-        // 仅在保存期间用户未继续编辑时，回写服务端版本，避免覆盖后续输入。
-        if (latestContentRef.current === contentAtSaveStart && savedContent !== contentAtSaveStart) {
-          setContent(savedContent);
-        }
-        setBaseVersion(result.document.version);
-        setActiveDocumentFormat(result.document.format ?? "markdown");
-        setActiveDocumentTitle(result.document.title || "未命名文档");
-        setActiveDocumentThemeId(result.document.themeId || DEFAULT_PREVIEW_THEME_ID);
-        setActiveDocumentSourceFileName(result.document.sourceFileName ?? null);
-        setActiveDocumentSourceMimeType(result.document.sourceMimeType ?? null);
-        setActiveDocumentContentVersion(result.document.contentVersion ?? result.document.version);
-        setLastSavedAt(result.document.updatedAt);
-        setLastSavedContent(savedContent);
-        setSaveStatus("saved");
-        setStatusMessage(`已保存 v${result.document.version}`);
-      } catch (error) {
-        if (error instanceof ConflictError) {
-          setSaveStatus("conflict");
-          setStatusMessage(
-            `检测到冲突：当前基线 v${baseVersion}，最新版本 v${error.latestDocument.version}`
-          );
-          return;
-        }
-        setSaveStatus("error");
-        setStatusMessage(`保存失败：${formatError(error)}`);
-      } finally {
-        autoSaveInFlightRef.current = false;
-      }
+    const scheduleID = ++autoSaveScheduleIDRef.current;
+    const timer = window.setTimeout(() => {
+      if (scheduleID === autoSaveScheduleIDRef.current) void saveMarkdownDocument();
     }, AUTO_SAVE_DEBOUNCE_MS);
+    return () => window.clearTimeout(timer);
+  }, [activeDocId, activeDocumentFormat, content, isTextEditor, lastSavedContent, readerEditorParentOrigin, saveMarkdownDocument, saveStatus]);
 
-    // 输入持续变化时清理上一次保存定时器。
-    return () => {
-      window.clearTimeout(timer);
-    };
-  }, [
-    activeDocId,
-    activeDocumentFormat,
-    baseVersion,
-    content,
-    dataGateway,
-    lastSavedContent,
-    saveStatus,
-    setActiveDocumentContentVersion,
-    setActiveDocumentFormat,
-    setActiveDocumentSourceMimeType,
-    setActiveDocumentSourceFileName
-  ]);
+  async function handleSaveReaderDocument() {
+    if (!readerEditorParentOrigin || autoSaveInFlightRef.current || readerEditorClosingRef.current || saveStatus === "conflict") return;
+    if (latestContentRef.current !== lastSavedContent && !(await saveMarkdownDocument())) return;
+    allowReaderEditorUnloadRef.current = true;
+    window.parent.postMessage({ type: "plaindoc:reader-editor-saved" }, readerEditorParentOrigin);
+  }
 
   // 应用选中的主题：更新文档主题绑定并同步预览区渲染。
   const handleThemeChange = useCallback(
@@ -3469,6 +3646,26 @@ export default function App() {
     );
   }
 
+  if (readerCreateParentOrigin && route.kind === "editor-space") {
+    return (
+      <ReaderCreateDocumentForm
+        spaceId={route.spaceId}
+        gateway={dataGateway.workspace}
+        onCancel={() => window.parent.postMessage({ type: "plaindoc:reader-create-canceled" }, readerCreateParentOrigin)}
+        onCreated={(documentId, identifier) => window.parent.postMessage({
+          type: "plaindoc:reader-document-created", documentId, identifier
+        }, readerCreateParentOrigin)}
+        onFolderImported={() => window.parent.postMessage({
+          type: "plaindoc:reader-folder-imported", spaceId: route.spaceId
+        }, readerCreateParentOrigin)}
+      />
+    );
+  }
+
+  if (route.kind === "editor-root") {
+    return <WorkspaceHome gateway={dataGateway.workspace} />;
+  }
+
   // 编辑器首次资源加载：先展示全屏 loading，待核心资源就绪后再渲染完整编辑器布局。
   if (shouldShowEditorLoadingPage) {
     return (
@@ -3495,6 +3692,247 @@ export default function App() {
     );
   }
 
+  const documentToolbar = (
+    <header className="header">
+      <TooltipProvider delayDuration={120}>
+        <div
+          className="editor-toolbar"
+          role="toolbar"
+          aria-label={!isTextEditor || activeDocumentIsPlainText ? "文档工具栏" : "Markdown 常用语法工具栏"}
+        >
+          <div className="editor-toolbar__group editor-toolbar__group--plain">
+            {readerEditorParentOrigin ? (
+              !isActiveImage && (
+                <Button size="sm" disabled={saveStatus === "saving" || saveStatus === "conflict"} onClick={() => void handleSaveReaderDocument()}>
+                  {saveStatus === "saving" ? "保存中…" : "保存"}
+                </Button>
+              )
+            ) : (
+              <EditorToolbarButton
+                label={isSpaceManagementFrame() ? "返回空间管理" : editorEntry === "reader" ? "返回阅读" : editorEntry === "home" || editorEntry === "space" ? "返回首页" : "返回我的空间"}
+                className="editor-toolbar__button--highlight"
+                onClick={handleBackToWorkspace}
+              >
+                <ArrowLeft size={20} />
+              </EditorToolbarButton>
+            )}
+          </div>
+          {isTextEditor ? (
+            <div className="editor-toolbar__group">
+              <EditorToolbarButton label="撤销" onClick={() => runEditorToolbarCommand(undo)}>
+                <Undo2 size={15} />
+              </EditorToolbarButton>
+              <EditorToolbarButton label="重做" onClick={() => runEditorToolbarCommand(redo)}>
+                <Redo2 size={15} />
+              </EditorToolbarButton>
+            </div>
+          ) : null}
+          {isTextEditor && !activeDocumentIsPlainText ? (
+            <>
+              <div className="editor-toolbar__group">
+                <EditorToolbarButton
+                  label="一级标题"
+                  className="editor-toolbar__button--text"
+                  onClick={() => runEditorToolbarCommand((view) => applyHeadingSyntax(view, 1))}
+                >
+                  H1
+                </EditorToolbarButton>
+                <EditorToolbarButton
+                  label="二级标题"
+                  className="editor-toolbar__button--text"
+                  onClick={() => runEditorToolbarCommand((view) => applyHeadingSyntax(view, 2))}
+                >
+                  H2
+                </EditorToolbarButton>
+                <EditorToolbarButton
+                  label="三级标题"
+                  className="editor-toolbar__button--text"
+                  onClick={() => runEditorToolbarCommand((view) => applyHeadingSyntax(view, 3))}
+                >
+                  H3
+                </EditorToolbarButton>
+                <EditorToolbarButton
+                  label="四级标题"
+                  className="editor-toolbar__button--text"
+                  onClick={() => runEditorToolbarCommand((view) => applyHeadingSyntax(view, 4))}
+                >
+                  H4
+                </EditorToolbarButton>
+              </div>
+              <div className="editor-toolbar__group">
+                <EditorToolbarButton
+                  label="加粗"
+                  onClick={() =>
+                    runEditorToolbarCommand((view) => {
+                      wrapPrimarySelection(view, "**", "**", "粗体文本");
+                    })
+                  }
+                >
+                  <Bold size={15} />
+                </EditorToolbarButton>
+                <EditorToolbarButton
+                  label="斜体"
+                  onClick={() =>
+                    runEditorToolbarCommand((view) => {
+                      wrapPrimarySelection(view, "*", "*", "斜体文本");
+                    })
+                  }
+                >
+                  <Italic size={15} />
+                </EditorToolbarButton>
+                <EditorToolbarButton
+                  label="删除线"
+                  onClick={() =>
+                    runEditorToolbarCommand((view) => {
+                      wrapPrimarySelection(view, "~~", "~~", "删除线文本");
+                    })
+                  }
+                >
+                  <Strikethrough size={15} />
+                </EditorToolbarButton>
+                <EditorToolbarButton
+                  label="行内代码"
+                  onClick={() =>
+                    runEditorToolbarCommand((view) => {
+                      wrapPrimarySelection(view, "`", "`", "code");
+                    })
+                  }
+                >
+                  <Code2 size={15} />
+                </EditorToolbarButton>
+              </div>
+              <div className="editor-toolbar__group">
+                <EditorToolbarButton label="无序列表" onClick={() => runEditorToolbarCommand(applyBulletListSyntax)}>
+                  <List size={15} />
+                </EditorToolbarButton>
+                <EditorToolbarButton label="有序列表" onClick={() => runEditorToolbarCommand(applyOrderedListSyntax)}>
+                  <ListOrdered size={15} />
+                </EditorToolbarButton>
+                <EditorToolbarButton label="任务列表" onClick={() => runEditorToolbarCommand(applyTaskListSyntax)}>
+                  <ListChecks size={15} />
+                </EditorToolbarButton>
+                <EditorToolbarButton label="引用" onClick={() => runEditorToolbarCommand(applyQuoteSyntax)}>
+                  <Quote size={15} />
+                </EditorToolbarButton>
+              </div>
+              <div className="editor-toolbar__group">
+                <EditorToolbarButton label="插入链接" onClick={() => runEditorToolbarCommand(insertLinkSyntax)}>
+                  <Link2 size={15} />
+                </EditorToolbarButton>
+                <EditorToolbarButton label="插入图片" onClick={triggerImageFilePicker}>
+                  <ImageIcon size={15} />
+                </EditorToolbarButton>
+                <EditorToolbarButton label="代码块" onClick={() => runEditorToolbarCommand(insertCodeBlockSyntax)}>
+                  <Code2 size={15} />
+                </EditorToolbarButton>
+                <EditorToolbarButton label="分隔线" onClick={() => runEditorToolbarCommand(insertHorizontalRuleSyntax)}>
+                  <Minus size={15} />
+                </EditorToolbarButton>
+                <EditorToolbarButton label="插入表格" onClick={() => runEditorToolbarCommand(insertTableSyntax)}>
+                  <Table2 size={15} />
+                </EditorToolbarButton>
+              </div>
+              {canToggleInlinePreview && (
+                <div className="editor-toolbar__group editor-toolbar__group--plain">
+                  <EditorToolbarButton
+                    label="预览模式"
+                    className="editor-toolbar__button--with-label"
+                    pressed={isInlinePreviewVisible}
+                    controls={PREVIEW_PANE_ID}
+                    onClick={() => setIsSpacePreviewOpen((open) => !open)}
+                  >
+                    <Eye size={15} aria-hidden="true" />
+                    <span className="editor-toolbar__button-label">预览模式</span>
+                  </EditorToolbarButton>
+                </div>
+              )}
+            </>
+          ) : null}
+        </div>
+        <div className="header-actions">
+          <DocumentAttachmentPopover
+            attachments={activeDocumentAttachments}
+            open={isAttachmentDialogOpen}
+            onOpenChange={setIsAttachmentDialogOpen}
+            showTrigger
+            disabled={!activeDocId}
+            loading={isAttachmentListLoading}
+            uploading={isAttachmentUploading}
+            pendingAction={pendingAttachmentAction}
+            onUploadFiles={(files) => {
+              void handleUploadDocumentAttachments(files);
+            }}
+            onRefresh={() => {
+              void reloadDocumentAttachments();
+            }}
+            onDownload={(attachment) => {
+              void handleDownloadDocumentAttachment(attachment);
+            }}
+            onPreview={(attachment) => {
+              void handlePreviewDocumentAttachment(attachment);
+            }}
+            onDelete={(attachment) => {
+              void handleDeleteDocumentAttachment(attachment);
+            }}
+          />
+          {/* 目录菜单：展示标题结构并支持快速跳转。 */}
+          {isTextEditor && hasTocMarker ? (
+            <TocMenu
+              items={tocItems}
+              onSelectItem={handleTocNavigate}
+              triggerMode="icon"
+              tooltipText="目录导航"
+            />
+          ) : null}
+          {isSpaceDocumentView && isTextEditor && !readerEditorParentOrigin ? (
+            <EditorToolbarButton
+              label={isSpacePreviewVisible ? "继续编辑" : "预览文档"}
+              onClick={() => setIsSpacePreviewOpen((open) => !open)}
+            >
+              {isSpacePreviewVisible ? <Pencil size={15} /> : <Eye size={15} />}
+            </EditorToolbarButton>
+          ) : null}
+          {isTextEditor && isPreviewVisible ? (
+            <>
+              {/* 预览模式切换：在 PC 与移动端窄屏模拟之间切换。 */}
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    className={`preview-mode-toggle preview-mode-toggle--${previewViewportMode} preview-mode-toggle--icon`}
+                    onClick={togglePreviewViewportMode}
+                    aria-label={previewViewportMode === "desktop" ? "切换到移动端预览" : "切换到 PC 预览"}
+                  >
+                    {previewViewportMode === "desktop" ? <Monitor size={14} /> : <Smartphone size={14} />}
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">
+                  {previewViewportMode === "desktop" ? "切换到移动端预览" : "切换到 PC 预览"}
+                </TooltipContent>
+              </Tooltip>
+              {/* 主题菜单：展开/收起只更新菜单组件自身。 */}
+              <ThemeMenu
+                themes={previewThemes}
+                activeThemeId={activePreviewTheme.id}
+                onSelectTheme={handleThemeChange}
+                customPreviewStyleText={customPreviewStyleText}
+                triggerMode="icon"
+                tooltipText="主题设置"
+              />
+            </>
+          ) : null}
+          {/* 历史版本入口：仅打开受控弹窗，列表数据延后到弹窗内部加载。 */}
+          {!isActiveImage && (
+            <DocumentRevisionHistoryTrigger
+              disabled={!isRevisionHistoryAvailable}
+              onOpen={() => setIsRevisionHistoryDialogOpen(true)}
+            />
+          )}
+        </div>
+      </TooltipProvider>
+    </header>
+  );
+
   return (
     // 主页面容器。
     <div className="page">
@@ -3512,211 +3950,6 @@ export default function App() {
       {customPreviewStyleText ? (
         <style id="plaindoc-preview-custom-style">{customPreviewStyleText}</style>
       ) : null}
-      {/* 顶部状态栏。 */}
-      <header className="header">
-        <TooltipProvider delayDuration={120}>
-          <div
-            className="editor-toolbar"
-            role="toolbar"
-            aria-label={isActiveOfficeDocument ? "工作区工具栏" : "Markdown 常用语法工具栏"}
-          >
-            <div className="editor-toolbar__group editor-toolbar__group--plain">
-              <EditorToolbarButton
-                label="返回后台空间管理"
-                className="editor-toolbar__button--highlight"
-                onClick={handleBackToAdminSpaces}
-              >
-                <ArrowLeft size={20} />
-              </EditorToolbarButton>
-            </div>
-            {!isActiveOfficeDocument ? (
-              <>
-                <div className="editor-toolbar__group">
-                  <EditorToolbarButton label="撤销" onClick={() => runEditorToolbarCommand(undo)}>
-                    <Undo2 size={15} />
-                  </EditorToolbarButton>
-                  <EditorToolbarButton label="重做" onClick={() => runEditorToolbarCommand(redo)}>
-                    <Redo2 size={15} />
-                  </EditorToolbarButton>
-                </div>
-                <div className="editor-toolbar__group">
-                  <EditorToolbarButton
-                    label="一级标题"
-                    className="editor-toolbar__button--text"
-                    onClick={() => runEditorToolbarCommand((view) => applyHeadingSyntax(view, 1))}
-                  >
-                    H1
-                  </EditorToolbarButton>
-                  <EditorToolbarButton
-                    label="二级标题"
-                    className="editor-toolbar__button--text"
-                    onClick={() => runEditorToolbarCommand((view) => applyHeadingSyntax(view, 2))}
-                  >
-                    H2
-                  </EditorToolbarButton>
-                  <EditorToolbarButton
-                    label="三级标题"
-                    className="editor-toolbar__button--text"
-                    onClick={() => runEditorToolbarCommand((view) => applyHeadingSyntax(view, 3))}
-                  >
-                    H3
-                  </EditorToolbarButton>
-                  <EditorToolbarButton
-                    label="四级标题"
-                    className="editor-toolbar__button--text"
-                    onClick={() => runEditorToolbarCommand((view) => applyHeadingSyntax(view, 4))}
-                  >
-                    H4
-                  </EditorToolbarButton>
-                </div>
-                <div className="editor-toolbar__group">
-                  <EditorToolbarButton
-                    label="加粗"
-                    onClick={() =>
-                      runEditorToolbarCommand((view) => {
-                        wrapPrimarySelection(view, "**", "**", "粗体文本");
-                      })
-                    }
-                  >
-                    <Bold size={15} />
-                  </EditorToolbarButton>
-                  <EditorToolbarButton
-                    label="斜体"
-                    onClick={() =>
-                      runEditorToolbarCommand((view) => {
-                        wrapPrimarySelection(view, "*", "*", "斜体文本");
-                      })
-                    }
-                  >
-                    <Italic size={15} />
-                  </EditorToolbarButton>
-                  <EditorToolbarButton
-                    label="删除线"
-                    onClick={() =>
-                      runEditorToolbarCommand((view) => {
-                        wrapPrimarySelection(view, "~~", "~~", "删除线文本");
-                      })
-                    }
-                  >
-                    <Strikethrough size={15} />
-                  </EditorToolbarButton>
-                  <EditorToolbarButton
-                    label="行内代码"
-                    onClick={() =>
-                      runEditorToolbarCommand((view) => {
-                        wrapPrimarySelection(view, "`", "`", "code");
-                      })
-                    }
-                  >
-                    <Code2 size={15} />
-                  </EditorToolbarButton>
-                </div>
-                <div className="editor-toolbar__group">
-                  <EditorToolbarButton label="无序列表" onClick={() => runEditorToolbarCommand(applyBulletListSyntax)}>
-                    <List size={15} />
-                  </EditorToolbarButton>
-                  <EditorToolbarButton label="有序列表" onClick={() => runEditorToolbarCommand(applyOrderedListSyntax)}>
-                    <ListOrdered size={15} />
-                  </EditorToolbarButton>
-                  <EditorToolbarButton label="任务列表" onClick={() => runEditorToolbarCommand(applyTaskListSyntax)}>
-                    <ListChecks size={15} />
-                  </EditorToolbarButton>
-                  <EditorToolbarButton label="引用" onClick={() => runEditorToolbarCommand(applyQuoteSyntax)}>
-                    <Quote size={15} />
-                  </EditorToolbarButton>
-                </div>
-                <div className="editor-toolbar__group">
-                  <EditorToolbarButton label="插入链接" onClick={() => runEditorToolbarCommand(insertLinkSyntax)}>
-                    <Link2 size={15} />
-                  </EditorToolbarButton>
-                  <EditorToolbarButton label="插入图片" onClick={triggerImageFilePicker}>
-                    <ImageIcon size={15} />
-                  </EditorToolbarButton>
-                  <EditorToolbarButton label="代码块" onClick={() => runEditorToolbarCommand(insertCodeBlockSyntax)}>
-                    <Code2 size={15} />
-                  </EditorToolbarButton>
-                  <EditorToolbarButton label="分隔线" onClick={() => runEditorToolbarCommand(insertHorizontalRuleSyntax)}>
-                    <Minus size={15} />
-                  </EditorToolbarButton>
-                  <EditorToolbarButton label="插入表格" onClick={() => runEditorToolbarCommand(insertTableSyntax)}>
-                    <Table2 size={15} />
-                  </EditorToolbarButton>
-                </div>
-              </>
-            ) : null}
-          </div>
-          <div className="header-actions">
-            <DocumentAttachmentPopover
-              attachments={activeDocumentAttachments}
-              open={isAttachmentDialogOpen}
-              onOpenChange={setIsAttachmentDialogOpen}
-              showTrigger
-              disabled={!activeDocId}
-              loading={isAttachmentListLoading}
-              uploading={isAttachmentUploading}
-              pendingAction={pendingAttachmentAction}
-              onUploadFiles={(files) => {
-                void handleUploadDocumentAttachments(files);
-              }}
-              onRefresh={() => {
-                void reloadDocumentAttachments();
-              }}
-              onDownload={(attachment) => {
-                void handleDownloadDocumentAttachment(attachment);
-              }}
-              onPreview={(attachment) => {
-                void handlePreviewDocumentAttachment(attachment);
-              }}
-              onDelete={(attachment) => {
-                void handleDeleteDocumentAttachment(attachment);
-              }}
-            />
-            {/* 目录菜单：展示标题结构并支持快速跳转。 */}
-            {!isActiveOfficeDocument && hasTocMarker ? (
-              <TocMenu
-                items={tocItems}
-                onSelectItem={handleTocNavigate}
-                triggerMode="icon"
-                tooltipText="目录导航"
-              />
-            ) : null}
-            {!isActiveOfficeDocument ? (
-              <>
-                {/* 预览模式切换：在 PC 与移动端窄屏模拟之间切换。 */}
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <button
-                      type="button"
-                      className={`preview-mode-toggle preview-mode-toggle--${previewViewportMode} preview-mode-toggle--icon`}
-                      onClick={togglePreviewViewportMode}
-                      aria-label={previewViewportMode === "desktop" ? "切换到移动端预览" : "切换到 PC 预览"}
-                    >
-                      {previewViewportMode === "desktop" ? <Monitor size={14} /> : <Smartphone size={14} />}
-                    </button>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom">
-                    {previewViewportMode === "desktop" ? "切换到移动端预览" : "切换到 PC 预览"}
-                  </TooltipContent>
-                </Tooltip>
-                {/* 主题菜单：展开/收起只更新菜单组件自身。 */}
-                <ThemeMenu
-                  themes={previewThemes}
-                  activeThemeId={activePreviewTheme.id}
-                  onSelectTheme={handleThemeChange}
-                  customPreviewStyleText={customPreviewStyleText}
-                  triggerMode="icon"
-                  tooltipText="主题设置"
-                />
-              </>
-            ) : null}
-            {/* 历史版本入口：仅打开受控弹窗，列表数据延后到弹窗内部加载。 */}
-            <DocumentRevisionHistoryTrigger
-              disabled={!isRevisionHistoryAvailable}
-              onOpen={() => setIsRevisionHistoryDialogOpen(true)}
-            />
-          </div>
-        </TooltipProvider>
-      </header>
       <DocumentRevisionHistoryDialog
         open={isRevisionHistoryDialogOpen}
         documentId={activeDocId}
@@ -3739,115 +3972,142 @@ export default function App() {
       />
       {/* 工作区主区域：左侧边栏 + 中间编辑器 + 右侧预览。 */}
       <main
-        className={`workspace ${isWorkspaceSidebarCollapsed ? "workspace--sidebar-collapsed" : ""} ${isActiveOfficeDocument ? "workspace--office" : ""}`}
+        className={`workspace ${readerEditorParentOrigin ? "workspace--reader-inline " : ""}${isSpaceDocumentView ? "workspace--space " : ""}${isInlinePreviewVisible ? "workspace--inline-preview " : ""}${isWorkspaceSidebarCollapsed ? "workspace--sidebar-collapsed " : ""}${isActiveOfficeDocument ? "workspace--office " : ""}${isActiveImage ? "workspace--image" : ""}`}
         style={workspaceLayoutStyle}
       >
-        <div className="workspace-sidebar-slot">
-          <WorkspaceSidebar
-            activeSpaceName={activeSpaceName}
-            activeDocId={activeDocId}
-            officeCreationEnabled={!isOnlyOfficeConfigLoading && onlyOfficeConfig.enabled}
-            workspaceTree={workspaceTree}
-            onOpenDocument={handleOpenWorkspaceDocument}
-            onCreateNode={handleCreateWorkspaceNode}
-            onImportDocuments={handleImportWorkspaceDocuments}
-            onListDocumentTemplates={loadWorkspaceDocumentTemplates}
-            onGetDocumentTemplate={loadWorkspaceDocumentTemplateDetail}
-            onUpdateDocumentIdentifier={handleUpdateWorkspaceDocumentIdentifier}
-            onGetDocumentShareConfig={handleGetWorkspaceDocumentShareConfig}
-            onUpdateDocumentShareConfig={handleUpdateWorkspaceDocumentShareConfig}
-            onDisableDocumentShare={handleDisableWorkspaceDocumentShare}
-            onUpdateDocumentVisibility={handleUpdateWorkspaceDocumentVisibility}
-            onRenameNode={handleRenameWorkspaceNode}
-            onDeleteNode={handleDeleteWorkspaceNode}
-            onMoveNode={handleMoveWorkspaceNode}
-          />
-        </div>
-        <div className="workspace-sidebar-resizer" role="separator" aria-orientation="vertical" aria-label="工作区宽度调节">
-          <button
-            type="button"
-            className="workspace-sidebar-resizer__toggle"
-            onClick={toggleWorkspaceSidebar}
-            title={isWorkspaceSidebarCollapsed ? "展开工作区目录" : "隐藏工作区目录"}
-            aria-label={isWorkspaceSidebarCollapsed ? "展开工作区目录" : "隐藏工作区目录"}
-          >
-            {isWorkspaceSidebarCollapsed ? <PanelLeftOpen size={14} /> : <PanelLeftClose size={14} />}
-          </button>
-          <button
-            type="button"
-            className="workspace-sidebar-resizer__handle"
-            onPointerDown={handleWorkspaceSidebarResizeStart}
-            disabled={isWorkspaceSidebarCollapsed}
-            title={
-              isWorkspaceSidebarCollapsed ? "请先展开工作区目录" : "拖拽调整工作区目录宽度"
-            }
-            aria-label={
-              isWorkspaceSidebarCollapsed ? "请先展开工作区目录" : "拖拽调整工作区目录宽度"
-            }
-          >
-            <GripVertical size={14} />
-          </button>
-        </div>
-        {isActiveOfficeDocument ? (
-          <OnlyOfficeEditorPane
-            documentId={activeDocId}
-            documentTitle={activeDocumentSourceFileName ?? activeDocumentTitle}
-            documentFormat={activeDocumentFormat}
-            editConfig={onlyOfficeEditConfig}
-            isConfigLoading={isOnlyOfficeEditConfigLoading}
-            errorMessage={onlyOfficeEditConfigError}
-            onStateChange={handleOnlyOfficeEditorStateChange}
-          />
-        ) : (
+        {!readerEditorParentOrigin && (
           <>
-            <section className="pane editor-pane" ref={handleEditorPaneRef}>
-              <CodeMirror
-                value={content}
-                extensions={extensions}
-                height="100%"
-                onCreateEditor={handleEditorCreate}
-                onChange={(value) => {
-                  // 录入编辑内容，并将状态切回可保存。
-                  setContent(value);
-                  if (saveStatus !== "loading" || Boolean(activeDocId)) {
-                    setSaveStatus("ready");
-                  }
-                }}
-                basicSetup={{
-                  lineNumbers: false,
-                  foldGutter: false
-                }}
+            <div className="workspace-sidebar-slot">
+              <WorkspaceSidebar
+                activeSpaceName={activeSpaceName}
+                onOpenReaderDirectory={isSpaceDocumentView && activeSpaceId ? handleOpenReaderDirectory : undefined}
+                canCreateNodes={canCreateWorkspaceNodes}
+                onCreateDocumentRequestHandled={shouldOpenCreateDocument && routeDocId === activeDocId
+                  ? consumeCreateDocumentRequest
+                  : undefined}
+                activeDocId={activeDocId}
+                officeCreationEnabled={!isOnlyOfficeConfigLoading && onlyOfficeConfig.enabled}
+                workspaceTree={workspaceTree}
+                onOpenDocument={handleOpenWorkspaceDocument}
+                onCreateNode={handleCreateWorkspaceNode}
+                onImportDocuments={handleImportWorkspaceDocuments}
+                onListDocumentTemplates={loadWorkspaceDocumentTemplates}
+                onGetDocumentTemplate={loadWorkspaceDocumentTemplateDetail}
+                onUpdateDocumentIdentifier={handleUpdateWorkspaceDocumentIdentifier}
+                onGetDocumentShareConfig={handleGetWorkspaceDocumentShareConfig}
+                onUpdateDocumentShareConfig={handleUpdateWorkspaceDocumentShareConfig}
+                onDisableDocumentShare={handleDisableWorkspaceDocumentShare}
+                onUpdateDocumentVisibility={handleUpdateWorkspaceDocumentVisibility}
+                onRenameNode={handleRenameWorkspaceNode}
+                onDeleteNode={handleDeleteWorkspaceNode}
+                onMoveNode={handleMoveWorkspaceNode}
               />
-            </section>
-            <section
-              id={PREVIEW_PANE_ID}
-              className={`pane preview-pane preview-pane--${previewViewportMode} ${PREVIEW_PANE_CLASS}`}
-              // 使用稳定 ref 回调，保证滚动监听不会被重复拆装。
-              ref={handlePreviewScrollerRef}
-            >
-              <div className={`preview-viewport preview-viewport--${previewViewportMode}`}>
-                <article
-                  id={PREVIEW_BODY_ID}
-                  className={`markdown-body ${PREVIEW_BODY_CLASS} preview-body--${previewViewportMode} ${activePreviewThemeClassName}`}
-                >
-                  {/* 使用 remark 插件渲染 Markdown 并写入 block 锚点。 */}
-                  <ReactMarkdown
-                    remarkPlugins={remarkPlugins}
-                    // 开启 Markdown 内嵌 HTML 解析，安全边界由 rehype-sanitize 白名单控制。
-                    remarkRehypeOptions={PREVIEW_MARKDOWN_REHYPE_OPTIONS}
-                    rehypePlugins={rehypePlugins}
-                    components={markdownComponents}
-                  >
-                    {previewContent}
-                  </ReactMarkdown>
-                </article>
-              </div>
-            </section>
+            </div>
+            <div className="workspace-sidebar-resizer" role="separator" aria-orientation="vertical" aria-label="工作区宽度调节">
+              <button
+                type="button"
+                className="workspace-sidebar-resizer__toggle"
+                onClick={toggleWorkspaceSidebar}
+                title={isWorkspaceSidebarCollapsed ? "展开工作区目录" : "隐藏工作区目录"}
+                aria-label={isWorkspaceSidebarCollapsed ? "展开工作区目录" : "隐藏工作区目录"}
+              >
+                {isWorkspaceSidebarCollapsed ? <PanelLeftOpen size={14} /> : <PanelLeftClose size={14} />}
+              </button>
+              <button
+                type="button"
+                className="workspace-sidebar-resizer__handle"
+                onPointerDown={handleWorkspaceSidebarResizeStart}
+                disabled={isWorkspaceSidebarCollapsed}
+                title={
+                  isWorkspaceSidebarCollapsed ? "请先展开工作区目录" : "拖拽调整工作区目录宽度"
+                }
+                aria-label={
+                  isWorkspaceSidebarCollapsed ? "请先展开工作区目录" : "拖拽调整工作区目录宽度"
+                }
+              >
+                <GripVertical size={14} />
+              </button>
+            </div>
           </>
         )}
+        <div className="workspace-content">
+          {documentToolbar}
+          {isActiveOfficeDocument ? (
+            <OnlyOfficeEditorPane
+              documentId={activeDocId}
+              documentTitle={activeDocumentSourceFileName ?? activeDocumentTitle}
+              documentFormat={activeDocumentFormat}
+              editConfig={onlyOfficeEditConfig}
+              isConfigLoading={isOnlyOfficeEditConfigLoading}
+              errorMessage={onlyOfficeEditConfigError}
+              onStateChange={handleOnlyOfficeEditorStateChange}
+            />
+          ) : activeDocumentImage ? (
+            <WorkspaceImagePane
+              key={activeDocId}
+              title={activeDocumentTitle}
+              url={activeDocumentImage.url}
+              copyDenied={activeDocumentCopyDenied}
+            />
+          ) : (
+            <>
+              <section className="pane editor-pane" ref={handleEditorPaneRef} hidden={isSpacePreviewVisible}>
+                <CodeMirror
+                  value={content}
+                  extensions={extensions}
+                  height="100%"
+                  onCreateEditor={handleEditorCreate}
+                  onChange={(value) => {
+                    // 录入编辑内容，并将状态切回可保存。
+                    latestContentRef.current = value;
+                    allowReaderEditorUnloadRef.current = false;
+                    setContent(value);
+                    if ((!readerEditorParentOrigin || !autoSaveInFlightRef.current) && (saveStatus !== "loading" || Boolean(activeDocId))) {
+                      setSaveStatus("ready");
+                    }
+                  }}
+                  basicSetup={{
+                    lineNumbers: false,
+                    foldGutter: false
+                  }}
+                />
+              </section>
+              <section
+                id={PREVIEW_PANE_ID}
+                hidden={!isPreviewVisible}
+                className={`pane preview-pane preview-pane--${previewViewportMode} ${PREVIEW_PANE_CLASS}`}
+                // 使用稳定 ref 回调，保证滚动监听不会被重复拆装。
+                ref={handlePreviewScrollerRef}
+              >
+                <div className={`preview-viewport preview-viewport--${previewViewportMode}`}>
+                  <article
+                    id={PREVIEW_BODY_ID}
+                    data-document-copy-denied={activeDocumentCopyDenied ? "1" : undefined}
+                    className={`markdown-body ${PREVIEW_BODY_CLASS} preview-body--${previewViewportMode} ${activePreviewThemeClassName}`}
+                  >
+                    {/* 使用 remark 插件渲染 Markdown 并写入 block 锚点。 */}
+                    {activeDocumentIsPlainText ? (
+                      <pre className="workspace-plain-text-preview">{previewContent}</pre>
+                    ) : (
+                      <ReactMarkdown
+                        remarkPlugins={remarkPlugins}
+                        // 开启 Markdown 内嵌 HTML 解析，安全边界由 rehype-sanitize 白名单控制。
+                        remarkRehypeOptions={PREVIEW_MARKDOWN_REHYPE_OPTIONS}
+                        rehypePlugins={rehypePlugins}
+                        components={markdownComponents}
+                      >
+                        {previewContent}
+                      </ReactMarkdown>
+                    )}
+                  </article>
+                </div>
+              </section>
+            </>
+          )}
+        </div>
       </main>
       {/* 冲突提示与手动同步入口。 */}
-      {!isActiveOfficeDocument && saveStatus === "conflict" ? (
+      {isTextEditor && saveStatus === "conflict" ? (
         <footer className="conflict-footer">
           <span>当前文档存在版本冲突，请先同步最新版本后再手动合并。</span>
           <button type="button" onClick={() => void syncLatestVersion()}>
@@ -3906,10 +4166,12 @@ export default function App() {
             <span style={{ fontWeight: 600 }}>最后保存时间：</span>
             {lastSavedTimeLabel}
           </span>
-          <span>
-            <span style={{ fontWeight: 600 }}>{isActiveOfficeDocument ? "文件信息：" : "字数统计："}</span>
-            {activeDocumentMetricLabel}
-          </span>
+          {!isActiveImage && (
+            <span>
+              <span style={{ fontWeight: 600 }}>{isActiveOfficeDocument ? "文件信息：" : "字数统计："}</span>
+              {activeDocumentMetricLabel}
+            </span>
+          )}
         </div>
       </footer>
     </div>

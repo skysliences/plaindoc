@@ -26,9 +26,13 @@ export interface WorkspaceState {
   spaces: Space[];
   activeSpaceId: string | null;
   activeSpaceName: string;
+  canCreateWorkspaceNodes: boolean;
   workspaceTree: TreeNode[];
   activeDocId: string | null;
   activeDocumentFormat: DocumentFormat;
+  activeDocumentCopyDenied: boolean;
+  activeDocumentIsPlainText: boolean;
+  activeDocumentImage: { url: string | null } | null;
   activeDocumentTitle: string;
   activeDocumentThemeId: string;
   activeDocumentSourceFileName: string | null;

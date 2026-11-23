@@ -103,6 +103,26 @@ describe("reader-image-viewer-runtime", () => {
     expect(document.body.classList.contains("reader-image-viewer-open")).toBe(false);
   });
 
+  it("opens the viewer when activating a standalone image preview button", () => {
+    const { getByRole } = render(
+      <>
+        <ReaderImageViewerShell />
+        <div id="plaindoc-preview-body">
+          <button type="button" aria-label="放大图片 图表.png" data-reader-imported-image-preview="1">
+            <img src="/api/docs/test/imported-image" alt="图表.png" width="640" height="480" />
+          </button>
+        </div>
+      </>
+    );
+    mockStageRect();
+    ensureReaderImageViewer(document);
+
+    getByRole("button", { name: "放大图片 图表.png" }).click();
+
+    expect(document.querySelector("[data-reader-hook='image-viewer']")).not.toHaveAttribute("hidden");
+    expect(document.querySelector(".reader-image-viewer__media--img")?.getAttribute("alt")).toBe("图表.png");
+  });
+
   it("closes viewer when clicking outside the media frame", async () => {
     render(
       <>

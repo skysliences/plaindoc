@@ -77,6 +77,15 @@ func (h *documentSharePageHandler) Page(c *gin.Context) {
 		return
 	}
 
+	viewer := h.readerRenderer.resolveOptionalViewerIdentity(c)
+	if err := h.documentShareService.CheckViewer(c.Request.Context(), resolvedShare.DocumentID, viewer.UserID); err != nil {
+		if errors.Is(err, service.ErrDocumentShareAccessDenied) {
+			h.renderShareFriendlyError(c, http.StatusForbidden, "没有访问权限", "你没有权限访问该文档。")
+		} else {
+			h.renderShareFriendlyError(c, http.StatusInternalServerError, "加载失败", "分享页面暂时不可用，请稍后再试。")
+		}
+		return
+	}
 	canonicalDocKey := resolveDocumentShareCanonicalDocKey(resolvedShare)
 	if canonicalDocKey != "" && canonicalDocKey != docKey {
 		c.Redirect(http.StatusSeeOther, buildDocumentSharePagePath(spaceID, canonicalDocKey))
@@ -90,7 +99,7 @@ func (h *documentSharePageHandler) Page(c *gin.Context) {
 		}
 	}
 
-	pageResult, err := h.documentShareService.BuildReaderPageByRouteKey(c.Request.Context(), spaceID, canonicalDocKey)
+	pageResult, err := h.documentShareService.BuildReaderPageByRouteKey(c.Request.Context(), spaceID, canonicalDocKey, viewer.UserID)
 	if err != nil {
 		setRequestErrmsg(c, err, "构建分享阅读页数据失败")
 		if errors.Is(err, service.ErrDocumentShareNotFound) {
@@ -103,14 +112,17 @@ func (h *documentSharePageHandler) Page(c *gin.Context) {
 
 	shareDocKey := resolveDocumentShareCanonicalDocKey(pageResult.Share)
 	payload := readerPagePayload{
-		Space:           pageResult.Page.Space,
-		Document:        pageResult.Page.Document,
-		Attachments:     pageResult.Page.Attachments,
-		Tree:            pageResult.Page.Tree,
-		ActiveDocID:     pageResult.Page.ActiveDocID,
-		RequestOrigin:   resolveRequestOrigin(c),
-		Viewer:          h.readerRenderer.resolveOptionalViewerIdentity(c),
-		OfficeRendering: h.readerRenderer.resolveOfficeRenderingState(c.Request.Context()),
+		CopyDenied:            pageResult.Page.CopyDenied,
+		ExportDenied:          pageResult.Page.ExportDenied,
+		TrackDocumentActivity: viewer.Authenticated,
+		Space:                 pageResult.Page.Space,
+		Document:              pageResult.Page.Document,
+		Attachments:           pageResult.Page.Attachments,
+		Tree:                  pageResult.Page.Tree,
+		ActiveDocID:           pageResult.Page.ActiveDocID,
+		RequestOrigin:         resolveRequestOrigin(c),
+		Viewer:                viewer,
+		OfficeRendering:       h.readerRenderer.resolveOfficeRenderingState(c.Request.Context()),
 		Share: &readerPageShareState{
 			Enabled:            true,
 			ShareID:            strings.TrimSpace(pageResult.Share.ShareID),
@@ -120,6 +132,7 @@ func (h *documentSharePageHandler) Page(c *gin.Context) {
 			AttachmentBasePath: buildDocumentShareAttachmentBasePath(spaceID, shareDocKey),
 		},
 	}
+	recordDocumentActivity(c, h.readerRenderer.activityRepo, viewer.UserID, pageResult.Page.Document.ID, "read")
 	h.readerRenderer.renderReaderPayload(
 		c,
 		http.StatusOK,
@@ -162,8 +175,9 @@ func (h *documentSharePageHandler) GetOnlyOfficeViewConfig(c *gin.Context) {
 		return
 	}
 
+	viewer := h.readerRenderer.resolveOptionalViewerIdentity(c)
 	canonicalDocKey := resolveDocumentShareCanonicalDocKey(resolvedShare)
-	pageResult, err := h.documentShareService.BuildReaderPageByRouteKey(c.Request.Context(), spaceID, canonicalDocKey)
+	pageResult, err := h.documentShareService.BuildReaderPageByRouteKey(c.Request.Context(), spaceID, canonicalDocKey, viewer.UserID)
 	if err != nil {
 		setRequestErrmsg(c, err, "构建分享 Office 阅读页数据失败")
 		if errors.Is(err, service.ErrDocumentShareNotFound) {
@@ -174,14 +188,16 @@ func (h *documentSharePageHandler) GetOnlyOfficeViewConfig(c *gin.Context) {
 		return
 	}
 
-	viewer := h.readerRenderer.resolveOptionalViewerIdentity(c)
 	configPayload, err := buildOnlyOfficeViewConfig(
 		c.Request.Context(),
 		h.readerRenderer.onlyOfficeConfigService,
 		h.readerRenderer.onlyOfficeTokenService,
 		pageResult.Page.Document,
+		!pageResult.Page.CopyDenied,
+		!pageResult.Page.ExportDenied,
 		viewer.UserID,
 		viewer.Name,
+		true,
 	)
 	if err != nil {
 		setRequestErrmsg(c, err, "生成分享 Office 只读配置失败")
@@ -230,8 +246,9 @@ func (h *documentSharePageHandler) CreateOfficeSourceAccessLink(c *gin.Context) 
 		return
 	}
 
+	viewer := h.readerRenderer.resolveOptionalViewerIdentity(c)
 	canonicalDocKey := resolveDocumentShareCanonicalDocKey(resolvedShare)
-	pageResult, err := h.documentShareService.BuildReaderPageByRouteKey(c.Request.Context(), spaceID, canonicalDocKey)
+	pageResult, err := h.documentShareService.BuildReaderPageByRouteKey(c.Request.Context(), spaceID, canonicalDocKey, viewer.UserID)
 	if err != nil {
 		setRequestErrmsg(c, err, "构建分享原文件下载数据失败")
 		if errors.Is(err, service.ErrDocumentShareNotFound) {
@@ -242,11 +259,15 @@ func (h *documentSharePageHandler) CreateOfficeSourceAccessLink(c *gin.Context) 
 		return
 	}
 
-	viewer := h.readerRenderer.resolveOptionalViewerIdentity(c)
+	if pageResult.Page.ExportDenied {
+		writeDocumentExportForbidden(c)
+		return
+	}
 	downloadURL, fileName, expiresAt, err := buildOfficeSourceAccessLink(
 		h.readerRenderer.onlyOfficeTokenService,
 		pageResult.Page.Document,
 		viewer.UserID,
+		true,
 	)
 	if err != nil {
 		setRequestErrmsg(c, err, "生成分享原文件下载链接失败")
@@ -306,6 +327,12 @@ func (h *documentSharePageHandler) Verify(c *gin.Context) {
 		return
 	}
 
+	if err := h.checkShareViewer(c, resolvedShare.DocumentID); err != nil {
+		if !writeMappedDocumentShareError(c, err) {
+			response.InternalError(c)
+		}
+		return
+	}
 	ttl := time.Duration(0)
 	if resolvedShare.ExpiresAt != nil {
 		remaining := time.Until(resolvedShare.ExpiresAt.UTC())
@@ -528,10 +555,18 @@ func (h *documentSharePageHandler) ensureShareAttachmentAccess(
 	if err != nil {
 		return service.ResolveDocumentShareResult{}, err
 	}
+	if err := h.checkShareViewer(c, resolvedShare.DocumentID); err != nil {
+		return service.ResolveDocumentShareResult{}, err
+	}
 	if resolvedShare.Mode == models.DocumentShareModePassword && !h.isShareAccessAuthorized(c, resolvedShare) {
 		return service.ResolveDocumentShareResult{}, service.ErrDocumentShareAccessDenied
 	}
 	return resolvedShare, nil
+}
+
+func (h *documentSharePageHandler) checkShareViewer(c *gin.Context, documentID string) error {
+	viewer := h.readerRenderer.resolveOptionalViewerIdentity(c)
+	return h.documentShareService.CheckViewer(c.Request.Context(), documentID, viewer.UserID)
 }
 
 func (h *documentSharePageHandler) isShareAccessAuthorized(

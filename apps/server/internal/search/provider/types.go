@@ -34,19 +34,20 @@ type IndexRecord struct {
 
 // SearchRequest 定义统一检索请求结构。
 type SearchRequest struct {
-	SpaceID           string
-	ScopeSpaceIDs     []string
-	ActorUserID       string
-	IsAuthenticated   bool
-	UserRoleLevel     int
-	RawQuery          string
-	Query             string
-	Page              int
-	PageSize          int
-	Sort              SortMode
-	NeedHighlight     bool
-	DictVersion       string
-	NormalizerVersion string
+	ExcludedDocumentIDs map[string]struct{}
+	SpaceID             string
+	ScopeSpaceIDs       []string
+	ActorUserID         string
+	IsAuthenticated     bool
+	UserRoleLevel       int
+	RawQuery            string
+	Query               string
+	Page                int
+	PageSize            int
+	Sort                SortMode
+	NeedHighlight       bool
+	DictVersion         string
+	NormalizerVersion   string
 }
 
 // SearchHit 定义统一检索命中结构。

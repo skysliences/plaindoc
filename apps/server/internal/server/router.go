@@ -183,6 +183,8 @@ func newRouter(
 		bleveProvider,
 	)
 	searchQueryService.SetSearchVisibilityRepository(searchVisibilityRepo)
+	documentPermissionRepo := repository.NewGormDocumentPermissionRepository(db)
+	searchQueryService.SetDocumentPermissionRepository(documentPermissionRepo)
 	searchIndexService := service.NewSearchIndexService(
 		db,
 		searchConfigService,
@@ -202,11 +204,12 @@ func newRouter(
 	// 首页全文检索服务：负责首页落地页检索结果读取与可见性过滤。
 	homeSearchService := service.NewHomeSearchService(searchQueryService, db)
 	// 可见性服务为“空间/文档可访问性”提供统一判定，避免 handler 里散落权限逻辑。
-	visibilityService := service.NewVisibilityService(spaceRepo, documentRepo)
+	visibilityService := service.NewVisibilityService(spaceRepo, documentRepo, documentPermissionRepo)
 	// 阅读页服务：聚合空间树与文档正文，供 SSR worker 渲染。
 	readerPageService := service.NewReaderPageService(db, visibilityService, documentAttachmentRepo)
 	// 阅读页 SSR 渲染缓存：仅缓存 Node 渲染结果，不缓存鉴权流程。
 	readerRenderCache := buildReaderRenderCache(cfg, logger, readerSSRDispatcher != nil)
+	collaborationService := service.NewWorkspaceCollaborationService(workspaceRepo, spaceRepo, userRepo, visibilityService)
 	// 首页 Handler：承接 SSR 渲染与登录态相关行为。
 	homeHandler := handler.NewHomeHandler(
 		authService,
@@ -214,6 +217,7 @@ func newRouter(
 		homeSearchService,
 		searchConfigService,
 		adminAccessService,
+		collaborationService,
 		cfg.WebOrigin,
 	)
 	// sitemap Handler：承接 /sitemap.xml 输出。
@@ -241,6 +245,7 @@ func newRouter(
 		documentAttachmentRepo,
 		spaceRepo,
 		imageHostingService,
+		visibilityService,
 	)
 	documentShareAccessTokenService := service.NewDocumentShareAccessTokenService(cfg.JWT.Secret, 0)
 	adminDocumentShareService := service.NewAdminDocumentShareService(
@@ -267,11 +272,13 @@ func newRouter(
 		authService,
 		imageHostingService,
 		documentAttachmentRepo,
-		spaceRepo,
+		visibilityService,
 	)
 	onlyOfficeHandler := handler.NewOnlyOfficeHandler(authService, onlyOfficeConfigService)
 	documentAttachmentTokenService := service.NewDocumentAttachmentDownloadTokenService(cfg.JWT.Secret, 24*time.Hour)
 	accessHandler := handler.NewAccessHandler(authService, visibilityService, readerRenderCache, searchIndexService)
+	accessHandler.SetDocumentActivityRepository(auditLogRepo)
+	readerPageHandler.SetDocumentActivityRepository(auditLogRepo)
 	documentTemplateHandler := handler.NewDocumentTemplateHandler(documentTemplateService)
 	workspaceHandler := handler.NewWorkspaceHandler(
 		workspaceRepo,
@@ -290,6 +297,7 @@ func newRouter(
 		readerRenderCache,
 		searchIndexService,
 	)
+	workspaceHandler.SetCollaborationService(collaborationService)
 	workspaceDocumentShareHandler := handler.NewWorkspaceDocumentShareHandler(workspaceHandler, documentShareService)
 	documentSharePageHandler := handler.NewDocumentSharePageHandler(
 		documentShareService,
@@ -314,6 +322,8 @@ func newRouter(
 	router.GET("/sitemap.xml", sitemapHandler.Sitemap)
 	// 首页：服务端渲染（SEO 主入口）。
 	router.GET("/", homeHandler.Home)
+	router.POST("/spaces", homeHandler.CreateSpace)
+	router.GET("/space-covers/:spaceId", accessHandler.GetSpaceTitleCover)
 	// 分类探索页：服务端渲染分类导航与分类空间列表。
 	router.GET("/explore/:categoryId", homeHandler.Explore)
 	// 首页全文检索落地页：显示可见文档检索结果。
@@ -457,6 +467,12 @@ func newRouter(
 		api.GET("/spaces", workspaceHandler.ListSpaces)
 		// 新建空间（业务端入口，不是后台治理入口）。
 		api.POST("/spaces", workspaceHandler.CreateSpace)
+		api.GET("/my-spaces", workspaceHandler.ListParticipantSpaces)
+		api.PATCH("/spaces/:spaceId", workspaceHandler.RenameParticipantSpace)
+		api.GET("/spaces/:spaceId/members", workspaceHandler.ListSpaceMembers)
+		api.PUT("/spaces/:spaceId/members", workspaceHandler.InviteSpaceMember)
+		api.DELETE("/spaces/:spaceId/members/:userId", workspaceHandler.RemoveSpaceMember)
+		api.PUT("/docs/:docId/permissions/:userId", workspaceHandler.SetDocumentMemberAccess)
 		// 读取单个空间详情（含访问校验）。
 		api.GET("/spaces/:spaceId", accessHandler.GetSpace)
 		// 读取空间目录树（编辑器左侧目录树数据源）。
@@ -475,10 +491,15 @@ func newRouter(
 		api.PUT("/spaces/:spaceId/visibility", accessHandler.UpdateSpaceVisibility)
 		// 读取文档正文。
 		api.GET("/docs/:docId", accessHandler.GetDocument)
+		api.GET("/docs/:docId/imported-image", workspaceHandler.ServeImportedImage)
+		api.GET("/shares/:spaceId/:docKey/imported-image", documentSharePageHandler.ImportedImageHandler(workspaceHandler))
+		api.POST("/docs/:docId/copy-events", accessHandler.ReportDocumentCopy)
+		api.POST("/shares/:spaceId/:docKey/copy-events", documentSharePageHandler.ReportDocumentCopy)
 		// 阅读页 Office 文档只读配置。
 		api.GET("/reader/spaces/:spaceId/docs/:docId/onlyoffice/view-config", readerPageHandler.GetOnlyOfficeViewConfig)
 		// 阅读页 Office 原文件下载 access-link。
 		api.POST("/reader/spaces/:spaceId/docs/:docId/office-source/access-link", readerPageHandler.CreateOfficeSourceAccessLink)
+		api.GET("/reader/spaces/:spaceId/docs/:docId/export-access", readerPageHandler.CheckDocumentExportAccess)
 		// 生成 ONLYOFFICE 编辑配置。
 		api.GET("/docs/:docId/onlyoffice/edit-config", workspaceHandler.GetOnlyOfficeEditConfig)
 		// ONLYOFFICE Document Server 拉取正文文件。
@@ -535,6 +556,7 @@ func newRouter(
 			documentSharePageHandler.GetOnlyOfficeViewConfig,
 		)
 		// 分享页 Office 原文件下载 access-link。
+		api.GET("/shares/:spaceId/:docKey/export-access", documentSharePageHandler.CheckDocumentExportAccess)
 		api.POST(
 			"/shares/:spaceId/:docKey/office-source/access-link",
 			documentSharePageHandler.CreateOfficeSourceAccessLink,
@@ -577,6 +599,7 @@ func newRouter(
 		adminSpaceHandler := handler.NewAdminSpaceHandler(adminSpaceService, searchIndexService)
 		adminSpaceExportOptions := []service.AdminSpaceExportServiceOption{
 			service.WithAdminSpaceExportRepositories(spaceRepo, workspaceRepo),
+			service.WithAdminSpaceExportDocumentDenialChecker(visibilityService.DocumentExportDenialsByViewer),
 			service.WithAdminSpaceExportAttachmentReader(documentAttachmentRepo),
 			service.WithAdminSpaceExportImageHostingService(imageHostingService),
 			service.WithAdminSpaceExportOfficeHTMLRenderer(officeHTMLRenderService),
@@ -1187,7 +1210,7 @@ func newRouter(
 		// 获取前台可用主题列表（通常仅返回已启用主题）。
 		api.GET("/themes", themeHandler.List)
 		// 为指定文档设置主题。
-		api.PUT("/docs/:docId/theme", documentThemeHandler.UpdateTheme)
+		api.PUT("/docs/:docId/theme", workspaceHandler.RequireDocumentWrite, documentThemeHandler.UpdateTheme)
 	}
 
 	// 统一未知路由错误协议，避免返回 HTML 默认页导致前端网关解析不一致。
