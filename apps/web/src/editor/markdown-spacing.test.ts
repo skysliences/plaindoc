@@ -27,4 +27,18 @@ describe("Markdown spacing", () => {
     expect(format("##  Links\r\n[site](https://example.com)\r\n\r\n4.   four"))
       .toBe("## Links\r\n\r\n[site](https://example.com)\r\n\r\n4. four");
   });
+  it("promotes Chinese numbered paragraphs and soft lines to an ordered list", () => {
+    const input = "1、模型更换与兼容。\r\n\r\n2、  模型下载与校验。\r\n3、**推理框架**与参数调整。";
+    const expected = "1. 模型更换与兼容。\r\n\r\n2. 模型下载与校验。\r\n3. **推理框架**与参数调整。";
+    expect(format(input)).toBe(expected);
+    expect(format(expected)).toBe(expected);
+    expect(format("9、权限\n\n10、计费\n\n11、监控")).toBe("9. 权限\n\n10. 计费\n\n11. 监控");
+  });
+  it("leaves isolated labels, numbering gaps, and literal examples alone", () => {
+    for (const input of ["1、单独一项", "1、甲\n\n3、丙", "1、甲\n\n其他段落\n\n2、乙",
+      "~~~md\n1、甲\n2、乙\n~~~", "> 1、甲\n> 2、乙", "`1、甲\n2、乙`",
+      "---\ntitle: demo\n1、甲\n2、乙\n---"]) {
+      expect(format(input)).toBe(input);
+    }
+  });
 });

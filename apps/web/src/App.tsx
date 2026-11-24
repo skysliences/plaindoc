@@ -3836,7 +3836,13 @@ export default function App() {
                 <EditorToolbarButton
                   label="一键排版"
                   className="editor-toolbar__button--with-label"
-                  onClick={() => runEditorToolbarCommand(formatMarkdownSpacing)}
+                  onClick={() => runEditorToolbarCommand((view) => {
+                    if (formatMarkdownSpacing(view)) {
+                      toast.success("已排版，可撤销");
+                    } else if (!view.state.readOnly) {
+                      toast.info("当前格式已整齐，无需调整");
+                    }
+                  })}
                 >
                   <ListCollapse size={15} aria-hidden="true" />
                   <span className="editor-toolbar__button-label">一键排版</span>

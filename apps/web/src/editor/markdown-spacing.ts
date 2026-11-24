@@ -16,6 +16,48 @@ interface SpacingEdit {
   insert: string;
 }
 
+// Only promote a sequence of numbered prose lines. Work from paragraph text
+// nodes so examples inside code, tables, HTML and nested lists stay literal.
+function chineseListEdits(source: string, root: Root, protectedEnd: number): SpacingEdit[] {
+  const edits: SpacingEdit[] = [];
+  let run: Array<SpacingEdit & { number: number }> = [];
+
+  function finish() {
+    if (run.length > 1 && run.every((item, i) => item.number === run[0].number + i)) {
+      for (const { from, to, insert } of run) edits.push({ from, to, insert });
+    }
+    run = [];
+  }
+
+  for (const block of root.children) {
+    const start = block.position?.start.offset;
+    if (block.type !== "paragraph" || start === undefined || start < protectedEnd) {
+      finish();
+      continue;
+    }
+
+    if (!/^[1-9]\d{0,8}、/.test(source.slice(start, start + 12))) {
+      finish();
+      continue;
+    }
+    for (const child of block.children) {
+      if (child.type !== "text") continue;
+      const from = child.position?.start.offset;
+      const to = child.position?.end.offset;
+      if (from === undefined || to === undefined) continue;
+      for (const match of source.slice(from, to).matchAll(/^([ ]{0,3})([1-9]\d{0,8})、[ \t]*/gm)) {
+        const offset = from + match.index + match[1].length;
+        const lineStart = source.lastIndexOf("\n", offset - 1) + 1;
+        if (!/^ {0,3}$/.test(source.slice(lineStart, offset))) continue;
+        run.push({ from: offset, to: from + match.index + match[0].length,
+          number: Number(match[2]), insert: match[2] + ". " });
+      }
+    }
+  }
+  finish();
+  return edits;
+}
+
 export function markdownSpacingEdits(source: string): SpacingEdit[] {
   const root = parser.parse(source);
   const newline = source.includes("\r\n") ? "\r\n" : "\n";
@@ -67,14 +109,17 @@ export function markdownSpacingEdits(source: string): SpacingEdit[] {
     if (node.type === "list") formatList(node);
     previous = node;
   }
-  return edits;
+  edits.push(...chineseListEdits(source, root, protectedEnd));
+  return edits.sort((a, b) => a.from - b.from);
 }
 
 export function formatMarkdownSpacing(view: EditorView) {
-  if (view.state.readOnly) return;
+  if (view.state.readOnly) return false;
   const changes = markdownSpacingEdits(view.state.doc.toString());
-  if (changes.length) view.dispatch({
+  if (!changes.length) return false;
+  view.dispatch({
     changes,
     annotations: [Transaction.userEvent.of("input.format"), isolateHistory.of("full")]
   });
+  return true;
 }
