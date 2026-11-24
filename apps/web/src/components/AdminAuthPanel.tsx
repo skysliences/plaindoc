@@ -154,13 +154,13 @@ export function AdminAuthPanel({
         <CardContent>
           <form className="space-y-4" onSubmit={(event) => void handleSubmit(event)}>
             <label className="admin-auth-form__field">
-              <span>邮箱</span>
+              <span>账号（邮箱或用户名）</span>
               <Input
-                type="email"
+                type="text"
                 value={email}
                 onChange={(event) => setEmail(event.target.value)}
-                placeholder="admin@example.com"
-                autoComplete="email"
+                placeholder="admin@example.com 或 username"
+                autoComplete="username"
                 disabled={checking || submitting}
               />
             </label>
