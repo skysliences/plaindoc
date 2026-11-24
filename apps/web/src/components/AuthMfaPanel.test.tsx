@@ -4,6 +4,43 @@ import { AdminAuthPanel } from "./AdminAuthPanel";
 import { AuthPanel } from "./AuthPanel";
 
 describe("authentication with Google Authenticator", () => {
+  it("shows the BUGO wordmark and toggles password visibility without submitting login", async () => {
+    const onLogin = vi.fn().mockResolvedValue(null);
+    render(<AuthPanel
+      mode="login"
+      switchPath="/register"
+      forgotPasswordPath="/forgot-password"
+      redirectTarget="/r/space/document"
+      checking={false}
+      submitting={false}
+      errorMessage={null}
+      loginMode="local_only"
+      allowUserRegister
+      allowPasswordReset
+      providerOptions={[]}
+      authChallenge={null}
+      onLogin={onLogin}
+      onRegister={vi.fn()}
+      onVerifyMfa={vi.fn()}
+      onRefreshCaptcha={vi.fn()}
+    />);
+    expect(screen.getByRole("img", { name: "BUGO" })).toHaveAttribute("src", "/assets/favicon.png?v=bugo");
+    expect(screen.getByRole("link", { name: "BUGO 首页" })).toHaveAttribute("href", "/");
+    expect(screen.getByRole("link", { name: "忘记密码？" })).toHaveAttribute("href", "/forgot-password?redirect=%2Fr%2Fspace%2Fdocument");
+    const password = screen.getByLabelText("密码", { exact: true });
+    fireEvent.change(screen.getByLabelText("账号（邮箱或用户名）"), { target: { value: "reader@example.test" } });
+    fireEvent.change(password, { target: { value: "example-password" } });
+    fireEvent.click(screen.getByRole("button", { name: "显示密码" }));
+    expect(password).toHaveAttribute("type", "text");
+    expect(onLogin).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "隐藏密码" }));
+    expect(password).toHaveAttribute("type", "password");
+    fireEvent.click(screen.getByRole("button", { name: "登录" }));
+    await waitFor(() => expect(onLogin).toHaveBeenCalledWith(expect.objectContaining({
+      identifier: "reader@example.test", password: "example-password"
+    })));
+  });
+
   it("requires setup verification before completing registration", async () => {
     const onRegister = vi.fn().mockResolvedValue({
       mode: "setup",

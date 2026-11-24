@@ -1,6 +1,6 @@
-import { LoaderCircle, LogIn, UserPlus } from "lucide-react";
+import { Eye, EyeOff, LoaderCircle } from "lucide-react";
 import type { FormEvent } from "react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import type {
   AuthCaptchaChallenge,
   AuthCaptchaRefreshInput,
@@ -12,9 +12,8 @@ import type {
   AuthRegisterInput
 } from "../data-access";
 import { AuthMfaPanel } from "./AuthMfaPanel";
-import { Badge } from "./ui/badge";
+import { SiteAuthLayout } from "./SiteAuthLayout";
 import { Button } from "./ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card";
 import { Input } from "./ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 
@@ -63,6 +62,8 @@ export function AuthPanel({
   const [identifier, setIdentifier] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [passwordVisible, setPasswordVisible] = useState(false);
+  const passwordId = useId();
   const [confirmPassword, setConfirmPassword] = useState("");
   const [provider, setProvider] = useState("__auto__");
   const [captchaAnswer, setCaptchaAnswer] = useState("");
@@ -153,9 +154,8 @@ export function AuthPanel({
 
   const switchActionText = mode === "login" ? "注册新账号" : "去登录";
   const switchPromptText = mode === "login" ? "还没有账号？" : "已有账号？";
-  const headingText = mode === "login" ? "bugodoc 登录" : "bugodoc 注册";
-  const introText = mode === "login" ? "登录后开始编辑文档" : "注册时需绑定 Google Authenticator";
-  const badgeText = mode === "login" ? "账号登录" : "账号注册";
+  const headingText = mode === "login" ? "登录" : "注册";
+  const introText = mode === "login" ? "访问你的团队文档空间。" : "注册时需绑定 Google Authenticator。";
   const showProviderSelector =
     mode === "login" && loginMode !== "local_only" && providerOptions.length > 0;
   const canSwitchToRegister = mode === "register" || allowUserRegister;
@@ -187,6 +187,7 @@ export function AuthPanel({
         captchaAnswer: captchaAnswer.trim()
       });
       setPassword("");
+      setPasswordVisible(false);
       setMfaChallenge(challenge);
       return;
     }
@@ -234,6 +235,7 @@ export function AuthPanel({
     return (
       <AuthMfaPanel
         challenge={mfaChallenge}
+        publicEntry
         registration={mode === "register"}
         onVerify={onVerifyMfa}
         onBack={() => setMfaChallenge(null)}
@@ -242,175 +244,179 @@ export function AuthPanel({
   }
 
   return (
-    <div className="admin-auth-page">
-      <Card className="mx-auto w-full max-w-md border-slate-200 shadow-xl">
-        <CardHeader className="space-y-4 pb-4">
-          <Badge variant="outline" className="w-fit gap-1 border-cyan-200 bg-cyan-50 text-cyan-700">
-            {mode === "login" ? <LogIn size={13} /> : <UserPlus size={13} />}
-            <span>{badgeText}</span>
-          </Badge>
-          <div className="space-y-2">
-            <CardTitle className="text-2xl tracking-tight">{headingText}</CardTitle>
-            <CardDescription>{introText}</CardDescription>
-          </div>
-        </CardHeader>
-        <CardContent>
-          <form className="space-y-4" onSubmit={(event) => void handleSubmit(event)}>
-            {mode === "register" ? (
-              <label className="admin-auth-form__field">
-                <span>昵称</span>
-                <Input
-                  type="text"
-                  value={name}
-                  onChange={(event) => setName(event.target.value)}
-                  placeholder="输入昵称"
-                  autoComplete="name"
-                  disabled={checking || submitting}
-                />
-              </label>
-            ) : null}
+    <SiteAuthLayout title={headingText} description={introText}>
+      <form className="site-auth-form" onSubmit={(event) => void handleSubmit(event)}>
+        {mode === "register" ? (
+          <label className="site-auth-field">
+            <span>昵称</span>
+            <Input
+              type="text"
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+              placeholder="输入昵称"
+              autoComplete="name"
+              disabled={checking || submitting}
+            />
+          </label>
+        ) : null}
 
-            {mode === "login" ? (
-              <label className="admin-auth-form__field">
-                <span>账号（邮箱或用户名）</span>
-                <Input
-                  type="text"
-                  value={identifier}
-                  onChange={(event) => setIdentifier(event.target.value)}
-                  placeholder="name@example.com 或 username"
-                  autoComplete="username"
-                  disabled={checking || submitting}
-                />
-              </label>
-            ) : (
-              <label className="admin-auth-form__field">
-                <span>邮箱</span>
-                <Input
-                  type="email"
-                  value={email}
-                  onChange={(event) => setEmail(event.target.value)}
-                  placeholder="name@example.com"
-                  autoComplete="email"
-                  disabled={checking || submitting}
-                />
-              </label>
+        {mode === "login" ? (
+          <label className="site-auth-field">
+            <span>账号（邮箱或用户名）</span>
+            <Input
+              type="text"
+              value={identifier}
+              onChange={(event) => setIdentifier(event.target.value)}
+              placeholder="输入邮箱或用户名"
+              autoComplete="username"
+              autoCapitalize="none"
+              spellCheck={false}
+              disabled={checking || submitting}
+            />
+          </label>
+        ) : (
+          <label className="site-auth-field">
+            <span>邮箱</span>
+            <Input
+              type="email"
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
+              placeholder="name@example.com"
+              autoComplete="email"
+              disabled={checking || submitting}
+            />
+          </label>
+        )}
+
+        {showProviderSelector ? (
+          <label className="site-auth-field">
+            <span>认证源（可选）</span>
+            <Select
+              value={provider}
+              onValueChange={(value) => setProvider(value)}
+              disabled={checking || submitting}
+            >
+              <SelectTrigger aria-label="认证源（可选）">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__auto__">自动选择（推荐）</SelectItem>
+                {loginMode === "mixed" ? <SelectItem value="local">本地账号（local）</SelectItem> : null}
+                {providerOptions.map((providerOption) => (
+                  <SelectItem key={providerOption.id} value={providerOption.id}>
+                    {providerOption.name}（{providerOption.id}）
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </label>
+        ) : null}
+
+        <div className="site-auth-field">
+          <div className="site-auth-field__heading">
+            <label htmlFor={passwordId}>密码</label>
+            {mode === "login" && allowPasswordReset && (
+              <a href={forgotPasswordHref} className="site-auth-link">忘记密码？</a>
             )}
+          </div>
+          <div className="site-auth-password">
+            <Input
+              id={passwordId}
+              type={mode === "login" && passwordVisible ? "text" : "password"}
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              placeholder={mode === "login" ? "输入密码" : "至少 6 位"}
+              autoComplete={mode === "login" ? "current-password" : "new-password"}
+              spellCheck={false}
+              autoCapitalize="none"
+              disabled={checking || submitting}
+            />
+            {mode === "login" && (
+              <button
+                type="button"
+                aria-label={passwordVisible ? "隐藏密码" : "显示密码"}
+                aria-controls={passwordId}
+                disabled={checking || submitting}
+                onClick={() => setPasswordVisible((visible) => !visible)}
+              >
+                {passwordVisible ? <EyeOff size={18} aria-hidden="true" /> : <Eye size={18} aria-hidden="true" />}
+              </button>
+            )}
+          </div>
+        </div>
 
-            {showProviderSelector ? (
-              <label className="admin-auth-form__field">
-                <span>认证源（可选）</span>
-                <Select
-                  value={provider}
-                  onValueChange={(value) => setProvider(value)}
-                  disabled={checking || submitting}
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="__auto__">自动选择（推荐）</SelectItem>
-                    {loginMode === "mixed" ? <SelectItem value="local">本地账号（local）</SelectItem> : null}
-                    {providerOptions.map((providerOption) => (
-                      <SelectItem key={providerOption.id} value={providerOption.id}>
-                        {providerOption.name}（{providerOption.id}）
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </label>
-            ) : null}
+        {mode === "register" ? (
+          <label className="site-auth-field">
+            <span>确认密码</span>
+            <Input
+              type="password"
+              value={confirmPassword}
+              onChange={(event) => setConfirmPassword(event.target.value)}
+              placeholder="再次输入密码"
+              autoComplete="new-password"
+              disabled={checking || submitting}
+            />
+          </label>
+        ) : null}
 
-            <label className="admin-auth-form__field">
-              <span>密码</span>
+        {authChallenge ? (
+          <div className="space-y-2 rounded-md border border-slate-200 bg-slate-50 p-3">
+            <p className="text-xs text-slate-600">
+              已触发验证码校验（{authChallenge.level} 位数字）
+            </p>
+            <button
+              type="button"
+              onClick={() => void handleRefreshCaptcha()}
+              disabled={!canRefreshCaptcha}
+              className="inline-block max-w-full disabled:cursor-not-allowed disabled:opacity-70"
+              title="看不清？点击刷新验证码"
+            >
+              <span className="flex min-h-14 items-center justify-center">
+                <img
+                  src={authChallenge.captchaImageDataUrl}
+                  alt="验证码（点击刷新）"
+                  className="block h-auto w-auto max-w-full rounded border border-slate-200"
+                />
+              </span>
+            </button>
+            <p className="text-[11px] text-slate-500">
+              看不清图片可点击刷新{refreshingCaptcha ? "（刷新中...）" : ""}
+            </p>
+            <label className="site-auth-field">
+              <span>验证码</span>
               <Input
-                type="password"
-                value={password}
-                onChange={(event) => setPassword(event.target.value)}
-                placeholder="至少 6 位"
-                autoComplete={mode === "login" ? "current-password" : "new-password"}
+                type="text"
+                value={captchaAnswer}
+                onChange={(event) => setCaptchaAnswer(event.target.value)}
+                placeholder="输入图片中的验证码"
+                inputMode="numeric"
+                autoComplete="off"
                 disabled={checking || submitting}
               />
             </label>
-            {mode === "login" && allowPasswordReset ? (
-              <p className="text-right text-xs text-slate-600">
-                <a href={forgotPasswordHref} className="font-medium text-cyan-700 hover:text-cyan-800 hover:underline">
-                  忘记密码？
-                </a>
-              </p>
-            ) : null}
+          </div>
+        ) : null}
 
-            {mode === "register" ? (
-              <label className="admin-auth-form__field">
-                <span>确认密码</span>
-                <Input
-                  type="password"
-                  value={confirmPassword}
-                  onChange={(event) => setConfirmPassword(event.target.value)}
-                  placeholder="再次输入密码"
-                  autoComplete="new-password"
-                  disabled={checking || submitting}
-                />
-              </label>
-            ) : null}
+        {(validationErrorMessage || errorMessage) && (
+          <p className="site-auth-error" role="alert">{validationErrorMessage ?? errorMessage}</p>
+        )}
 
-            {authChallenge ? (
-              <div className="space-y-2 rounded-md border border-slate-200 bg-slate-50 p-3">
-                <p className="text-xs text-slate-600">
-                  已触发验证码校验（{authChallenge.level} 位数字）
-                </p>
-                <button
-                  type="button"
-                  onClick={() => void handleRefreshCaptcha()}
-                  disabled={!canRefreshCaptcha}
-                  className="inline-block max-w-full disabled:cursor-not-allowed disabled:opacity-70"
-                  title="看不清？点击刷新验证码"
-                >
-                  <div className="flex min-h-14 items-center justify-center">
-                    <img
-                      src={authChallenge.captchaImageDataUrl}
-                      alt="验证码（点击刷新）"
-                      className="block h-auto w-auto max-w-full rounded border border-slate-200"
-                    />
-                  </div>
-                </button>
-                <p className="text-[11px] text-slate-500">
-                  看不清图片可点击刷新{refreshingCaptcha ? "（刷新中...）" : ""}
-                </p>
-                <label className="admin-auth-form__field">
-                  <span>验证码</span>
-                  <Input
-                    type="text"
-                    value={captchaAnswer}
-                    onChange={(event) => setCaptchaAnswer(event.target.value)}
-                    placeholder="输入图片中的验证码"
-                    autoComplete="off"
-                    disabled={checking || submitting}
-                  />
-                </label>
-              </div>
-            ) : null}
+        <Button type="submit" className="site-auth-submit" disabled={!canSubmit}>
+          {checking || submitting ? <LoaderCircle className="admin-auth-form__submit-loader" size={14} aria-hidden="true" /> : null}
+          <span>{submitText}</span>
+        </Button>
 
-            {validationErrorMessage ? <p className="admin-auth-form__error">{validationErrorMessage}</p> : null}
-            {!validationErrorMessage && errorMessage ? <p className="admin-auth-form__error">{errorMessage}</p> : null}
-
-            <Button type="submit" className="w-full" disabled={!canSubmit}>
-              {checking || submitting ? <LoaderCircle className="admin-auth-form__submit-loader" size={14} /> : null}
-              <span>{submitText}</span>
-            </Button>
-
-            {canSwitchToRegister ? (
-              <p className="text-center text-sm text-slate-600">
-                <span>{switchPromptText}</span>
-                <a href={switchHref} className="ml-2 font-medium text-cyan-700 hover:text-cyan-800 hover:underline">
-                  {switchActionText}
-                </a>
-              </p>
-            ) : (
-              <p className="text-center text-sm text-slate-500">当前站点已关闭注册入口。</p>
-            )}
-          </form>
-        </CardContent>
-      </Card>
-    </div>
+        {canSwitchToRegister ? (
+          <p className="site-auth-switch">
+            <span>{switchPromptText}</span>
+            <a href={switchHref} className="site-auth-link">
+              {switchActionText}
+            </a>
+          </p>
+        ) : (
+          <p className="site-auth-switch">当前站点已关闭注册入口。</p>
+        )}
+      </form>
+    </SiteAuthLayout>
   );
 }

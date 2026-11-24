@@ -253,6 +253,7 @@ ONLYOFFICE 相关字段约束：
 
 1. `apps/web/src/components/AuthPanel.tsx`
    - 登录/注册共用验证码展示与提交
+   - 站点登录、注册和对应的二次验证共用 `SiteAuthLayout` 的居中单栏表单，沿用原登录页配色。顶部 BUGO 标志链接到首页，登录密码可以切换显示状态。
 2. `apps/web/src/components/AdminAuthPanel.tsx`
    - 后台登录同样支持验证码会话
 3. `apps/web/src/admin/AdminApp.tsx`
