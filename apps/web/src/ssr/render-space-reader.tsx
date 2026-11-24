@@ -70,7 +70,7 @@ interface ReaderTreeProps {
   nodes: ReaderTreeNode[];
   spaceId: string;
   activeDocId: string;
-  allowTreeDeletion: boolean;
+  createUrl?: string;
   linkBasePath: string;
   depth?: number;
 }
@@ -216,7 +216,7 @@ function renderVisibilityMarker(visibilityInput: unknown) {
   );
 }
 
-function ReaderTree({ nodes, spaceId, activeDocId, linkBasePath, allowTreeDeletion, depth = 0 }: ReaderTreeProps) {
+function ReaderTree({ nodes, spaceId, activeDocId, linkBasePath, createUrl, depth = 0 }: ReaderTreeProps) {
   if (!nodes.length) {
     return <p className="reader-tree__label reader-tree__label--folder">暂无目录</p>;
   }
@@ -293,7 +293,20 @@ function ReaderTree({ nodes, spaceId, activeDocId, linkBasePath, allowTreeDeleti
           </>
         );
 
-        const deletable = allowTreeDeletion && !node.deleteRestricted && (isFolderNode || !hasChildren);
+        const deletable = Boolean(createUrl) && !node.deleteRestricted && (isFolderNode || !hasChildren);
+        const addButton = createUrl && !isUnsupportedFile && !node.createRestricted ? (
+          <button
+            type="button"
+            className="reader-tree__add"
+            data-reader-create-document={createUrl}
+            data-reader-create-parent={node.id}
+            aria-haspopup="dialog"
+            aria-label={`添加到：${title}`}
+            title={`添加到：${title}`}
+          >
+            <Plus size={16} aria-hidden="true" />
+          </button>
+        ) : null;
         const deleteLabel = `删除${isFolderNode ? "文件夹" : "文件"}：${title}`;
         const deleteButton = deletable ? (
           <button
@@ -312,7 +325,8 @@ function ReaderTree({ nodes, spaceId, activeDocId, linkBasePath, allowTreeDeleti
 
         if (isExpandable) {
           return (
-            <li key={node.id} className={deletable ? "reader-tree__item reader-tree__folder-actions" : "reader-tree__item"}>
+            <li key={node.id} className={addButton || deletable ? "reader-tree__item reader-tree__folder-actions" : "reader-tree__item"}>
+              {addButton}
               {deleteButton}
               <details className="reader-tree__details" data-reader-hook="tree-details" data-reader-node-id={node.id}>
                 <summary className="reader-tree__summary" data-reader-hook="tree-summary">
@@ -327,7 +341,7 @@ function ReaderTree({ nodes, spaceId, activeDocId, linkBasePath, allowTreeDeleti
                 </summary>
                 {hasChildren ? (
                   <ReaderTree
-                    allowTreeDeletion={allowTreeDeletion}
+                    createUrl={createUrl}
                     nodes={node.children}
                     spaceId={spaceId}
                     activeDocId={activeDocId}
@@ -341,7 +355,7 @@ function ReaderTree({ nodes, spaceId, activeDocId, linkBasePath, allowTreeDeleti
         }
 
         return (
-          <li key={node.id} className={deletable ? "reader-tree__item reader-tree__file-actions" : "reader-tree__item"}>
+          <li key={node.id} className={addButton || deletable ? "reader-tree__item reader-tree__file-actions" : "reader-tree__item"}>
             {isDocumentNode ? (
               <a
                 className={rowClassName}
@@ -371,6 +385,7 @@ function ReaderTree({ nodes, spaceId, activeDocId, linkBasePath, allowTreeDeleti
                 {rowContent}
               </div>
             )}
+            {addButton}
             {deleteButton}
           </li>
         );
@@ -738,7 +753,7 @@ export function renderSpaceReader(payload: ReaderPagePayload): SpaceReaderRender
                 </div>
                 <div className="reader-sidebar__tree-scroll">
                   <ReaderTree
-                    allowTreeDeletion={allowTreeDeletion}
+                    createUrl={allowTreeDeletion ? payload.createDocumentUrl : undefined}
                     nodes={payload.tree}
                     spaceId={payload.space.id}
                     activeDocId={payload.activeDocId || payload.document.id}

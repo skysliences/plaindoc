@@ -368,6 +368,7 @@ body:has(.reader-main[data-reader-editing="1"]) .reader-sidebar__create {
   position: relative;
 }
 
+.reader-tree__folder-actions > .reader-tree__add,
 .reader-tree__folder-actions > .reader-tree__delete {
   position: absolute;
   top: 2px;
@@ -379,6 +380,24 @@ body:has(.reader-main[data-reader-editing="1"]) .reader-sidebar__create {
   margin-right: 32px;
 }
 
+.reader-tree__folder-actions:has(> .reader-tree__delete) > .reader-tree__add {
+  right: 32px;
+}
+
+.reader-tree__folder-actions:has(> .reader-tree__add):has(> .reader-tree__delete) > details > summary {
+  margin-right: 64px;
+}
+
+body:has(.reader-main[data-reader-editing="1"]) .reader-tree__add {
+  display: none;
+}
+
+.reader-tree__add:hover, .reader-tree__add:focus-visible {
+  background: #eef4ff;
+  color: #264d97;
+}
+
+.reader-tree__add,
 .reader-tree__delete {
   display: grid;
   place-items: center;

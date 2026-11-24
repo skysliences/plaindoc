@@ -12,6 +12,7 @@ import { isHiddenWorkspaceName } from "./workspace-node-name";
 interface ReaderCreateDocumentFormProps {
   spaceId: string;
   parentOrigin: string;
+  initialParentId?: string;
   gateway: Pick<WorkspaceGateway, "createNode" | "getTree" | "importDocuments">;
   onCreated: (docId: string, identifier?: string) => void;
   onDocumentImported: (docId: string) => void;
@@ -29,27 +30,28 @@ const CREATE_MODES = [
 
 type CreateMode = typeof CREATE_MODES[number]["id"];
 
-interface FolderLocation {
+interface SaveLocation {
   id: string;
   path: string;
 }
 
-function collectFolders(nodes: TreeNode[]): FolderLocation[] {
-  const folders: FolderLocation[] = [];
+function collectLocations(nodes: TreeNode[]): SaveLocation[] {
+  const locations: SaveLocation[] = [];
   function visit(children: TreeNode[], parents: string[]) {
     for (const node of children) {
       const path = [...parents, node.title];
-      if (node.type === "folder") folders.push({ id: node.id, path: path.join(" / ") });
+      if (node.importedFileKind !== "unsupported") locations.push({ id: node.id, path: path.join(" / ") });
       visit(node.children, path);
     }
   }
   visit(nodes, []);
-  return folders;
+  return locations;
 }
 
 export function ReaderCreateDocumentForm({
   spaceId,
   parentOrigin,
+  initialParentId = "",
   gateway,
   onCreated,
   onDocumentImported,
@@ -65,9 +67,10 @@ export function ReaderCreateDocumentForm({
   const [title, setTitle] = useState("");
   const [identifier, setIdentifier] = useState("");
   const [folderName, setFolderName] = useState("");
-  const [folders, setFolders] = useState<FolderLocation[]>([]);
-  const [folderLoadFailed, setFolderLoadFailed] = useState(false);
-  const [location, setLocation] = useState("");
+  const [locations, setLocations] = useState<SaveLocation[]>([]);
+  const [locationLoadFailed, setLocationLoadFailed] = useState(false);
+  const [location, setLocation] = useState(initialParentId);
+  const [locationsLoaded, setLocationsLoaded] = useState(false);
   const [folderSelection, setFolderSelection] = useState<FolderUploadSelection | null>(null);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [hasPartialImport, setHasPartialImport] = useState(false);
@@ -86,9 +89,12 @@ export function ReaderCreateDocumentForm({
   useEffect(() => {
     let active = true;
     void gateway.getTree(spaceId).then((nodes) => {
-      if (active) setFolders(collectFolders(nodes));
+      if (active) {
+        setLocations(collectLocations(nodes));
+        setLocationsLoaded(true);
+      }
     }).catch(() => {
-      if (active) setFolderLoadFailed(true);
+      if (active) setLocationLoadFailed(true);
     });
     return () => { active = false; };
   }, [gateway, spaceId]);
@@ -231,6 +237,7 @@ export function ReaderCreateDocumentForm({
     endSubmission();
   }
 
+  const locationUnavailable = Boolean(location) && !locations.some((item) => item.id === location);
   const controlsDisabled = isSubmitting || hasPartialImport;
   const folderMode = mode === "folder";
   const submitLabel = CREATE_MODES.find((item) => item.id === mode)?.submitLabel;
@@ -243,7 +250,7 @@ export function ReaderCreateDocumentForm({
         aria-busy={isSubmitting}
         onSubmit={(event) => {
           event.preventDefault();
-          if (submittingRef.current) return;
+          if (submittingRef.current || locationUnavailable) return;
           void (uploadMode ? importSelection() : createNode());
         }}
         onKeyDown={(event) => {
@@ -363,21 +370,26 @@ export function ReaderCreateDocumentForm({
                 className="h-10 w-full min-w-0 cursor-pointer appearance-none truncate rounded-lg border border-solid border-slate-300 bg-white pr-8 pl-9 text-sm text-slate-700 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-blue-600 disabled:cursor-not-allowed disabled:opacity-60"
                 value={location}
                 disabled={controlsDisabled}
-                aria-describedby={folderLoadFailed ? "reader-create-folder-load-error" : undefined}
+                aria-describedby={locationLoadFailed ? "reader-create-location-error" : undefined}
                 onChange={(event) => {
                   setLocation(event.target.value);
                   setError("");
                 }}
               >
                 <option value="">空间根目录</option>
-                {folders.map((folder) => <option key={folder.id} value={folder.id}>{folder.path}</option>)}
+                {locationUnavailable && (
+                  <option value={location} disabled>
+                    {locationsLoaded || locationLoadFailed ? "所选位置不可用，请重新选择" : "正在加载所选位置…"}
+                  </option>
+                )}
+                {locations.map((item) => <option key={item.id} value={item.id}>{item.path}</option>)}
               </select>
               <ChevronDown size={15} aria-hidden="true" className="pointer-events-none absolute top-3 right-3 text-slate-600" />
             </span>
           </label>
 
-          {folderLoadFailed && (
-            <p id="reader-create-folder-load-error" className="m-0 text-xs text-slate-600">暂时无法加载文件夹，当前可保存到空间根目录。</p>
+          {locationLoadFailed && (
+            <p id="reader-create-location-error" className="m-0 text-xs text-slate-600">暂时无法加载保存位置，可以选择空间根目录或重新打开表单。</p>
           )}
           {error && (
             <p className="m-0 rounded-lg bg-red-50 px-3 py-2 text-sm break-words text-red-800" role="alert">{error}</p>
@@ -391,7 +403,7 @@ export function ReaderCreateDocumentForm({
             <>
               <Button type="button" variant="outline" className="h-10 rounded-lg" onClick={close} disabled={isSubmitting}>取消</Button>
               <Button type="submit" className="h-10 rounded-lg bg-blue-700 hover:bg-blue-800"
-                disabled={isSubmitting || (uploadFolderMode && !folderSelection) || (uploadFileMode && !selectedFile)}>
+                disabled={isSubmitting || locationUnavailable || (uploadFolderMode && !folderSelection) || (uploadFileMode && !selectedFile)}>
                 {isSubmitting && <LoaderCircle size={16} className="motion-safe:animate-spin" aria-hidden="true" />}
                 {isSubmitting ? (uploadMode ? "导入中…" : "创建中…") : submitLabel}
               </Button>

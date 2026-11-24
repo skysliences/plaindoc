@@ -3640,6 +3640,7 @@ export default function App() {
         spaceId={route.spaceId}
         gateway={dataGateway.workspace}
         parentOrigin={readerCreateParentOrigin}
+        initialParentId={new URLSearchParams(location.search).get("parentId") ?? ""}
         onCancel={() => window.parent.postMessage({ type: "plaindoc:reader-create-canceled" }, readerCreateParentOrigin)}
         onCreated={(documentId, identifier) => window.parent.postMessage({
           type: "plaindoc:reader-document-created", documentId, identifier

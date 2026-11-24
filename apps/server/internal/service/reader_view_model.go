@@ -20,6 +20,7 @@ func buildSharedImportedImageURL(spaceID, docKey string) string {
 
 // ReaderTreeNodeViewModel 表示阅读页目录树节点。
 type ReaderTreeNodeViewModel struct {
+	CreateRestricted            bool                      `json:"createRestricted,omitempty"`
 	DeleteRestricted            bool                      `json:"deleteRestricted,omitempty"`
 	ImportedOriginalDownloadURL string                    `json:"importedOriginalDownloadUrl,omitempty"`
 	ImportedFileKind            models.ImportedFileKind   `json:"importedFileKind,omitempty"`

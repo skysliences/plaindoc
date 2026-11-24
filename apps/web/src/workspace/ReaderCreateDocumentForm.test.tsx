@@ -14,9 +14,9 @@ const folder: TreeNode = {
   children: []
 };
 
-function setup() {
+function setup(nodes: TreeNode[] = [folder], initialParentId?: string) {
   const createNode = vi.fn<WorkspaceGateway["createNode"]>();
-  const getTree = vi.fn<WorkspaceGateway["getTree"]>().mockResolvedValue([folder]);
+  const getTree = vi.fn<WorkspaceGateway["getTree"]>().mockResolvedValue(nodes);
   const importDocuments = vi.fn<WorkspaceGateway["importDocuments"]>();
   const onCancel = vi.fn();
   const onCreated = vi.fn();
@@ -27,6 +27,7 @@ function setup() {
     <ReaderCreateDocumentForm
       spaceId="space-1"
       parentOrigin={parentOrigin}
+      initialParentId={initialParentId}
       gateway={{ createNode, getTree, importDocuments }}
       onCancel={onCancel}
       onCreated={onCreated}
@@ -57,6 +58,23 @@ describe("ReaderCreateDocumentForm", () => {
       title: "项目资料"
     });
     expect(onCreated).not.toHaveBeenCalled();
+  });
+
+  it("preselects a nested document and excludes unsupported import placeholders", async () => {
+    const doc: TreeNode = { ...folder, type: "doc", id: "project", title: "项目" };
+    const broken: TreeNode = { ...doc, id: "broken", title: "旧文件", importedFileKind: "unsupported" };
+    setup([{ ...folder, title: "运维", children: [doc, broken] }], doc.id);
+    await screen.findByRole("option", { name: "运维 / 项目" });
+    expect(screen.getByLabelText("保存位置")).toHaveValue(doc.id);
+    expect(screen.queryByRole("option", { name: "运维 / 旧文件" })).toBeNull();
+  });
+
+  it("requires an explicit new destination when the requested node is unavailable", async () => {
+    setup([folder], "removed");
+    await screen.findByRole("option", { name: "所选位置不可用，请重新选择" });
+    expect(screen.getByRole("button", { name: "创建文档" })).toBeDisabled();
+    fireEvent.change(screen.getByLabelText("保存位置"), { target: { value: "" } });
+    expect(screen.getByRole("button", { name: "创建文档" })).toBeEnabled();
   });
 
   it("keeps the root directory as the default for a document", async () => {

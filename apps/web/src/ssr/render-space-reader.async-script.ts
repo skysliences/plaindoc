@@ -2307,6 +2307,8 @@ export const READER_ASYNC_ENHANCEMENT_SCRIPT = `(() => {
     const url = new URL(formURL, window.location.href);
     if (url.protocol !== "https:" && url.protocol !== "http:") return;
     url.searchParams.set("dialog", "create-document");
+    const parentId = trigger.getAttribute("data-reader-create-parent");
+    if (parentId) url.searchParams.set("parentId", parentId);
 
     const dialog = document.createElement("dialog");
     dialog.className = "reader-create-dialog";
