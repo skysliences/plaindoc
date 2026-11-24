@@ -746,6 +746,16 @@ export function renderSpaceReader(payload: ReaderPagePayload): SpaceReaderRender
                   />
                 </div>
               </section>
+              <div
+                className="reader-sidebar__resizer"
+                data-reader-hook="sidebar-resizer"
+                role="separator"
+                tabIndex={0}
+                aria-orientation="vertical"
+                aria-controls="plaindoc-reader-sidebar"
+                aria-label="调整目录栏宽度"
+                hidden
+              />
             </aside>
           ) : null}
           <main

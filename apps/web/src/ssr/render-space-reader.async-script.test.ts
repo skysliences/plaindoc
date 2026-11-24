@@ -106,6 +106,41 @@ describe("READER_ASYNC_ENHANCEMENT_SCRIPT", () => {
     document.body.classList.remove("reader-mobile-sidebar-open");
   });
 
+  it("clamps the displayed sidebar width for the current viewport and remembers keyboard adjustments", () => {
+    const storageKey = "reader.sidebar.width";
+    vi.stubGlobal("innerWidth", 1200);
+    window.localStorage.setItem(storageKey, "640");
+    document.body.innerHTML = `
+      <div class="reader-layout">
+        <aside><div data-reader-hook="sidebar-resizer" role="separator" hidden></div></aside>
+        <main data-reader-hook="main"></main>
+      </div>
+    `;
+    try {
+      window.eval(READER_ASYNC_ENHANCEMENT_SCRIPT);
+      const layout = document.querySelector<HTMLElement>(".reader-layout")!;
+      const handle = document.querySelector<HTMLElement>("[role='separator']")!;
+      expect(handle).not.toHaveAttribute("hidden");
+      expect(handle).toHaveAttribute("aria-valuenow", "600");
+      expect(window.localStorage.getItem(storageKey)).toBe("640");
+
+      vi.stubGlobal("innerWidth", 1600);
+      window.dispatchEvent(new Event("resize"));
+      expect(layout.style.getPropertyValue("--reader-documents-width")).toBe("640px");
+
+      handle.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight" }));
+      expect(handle).toHaveAttribute("aria-valuenow", "664");
+      expect(window.localStorage.getItem(storageKey)).toBe("664");
+
+      vi.stubGlobal("innerWidth", 390);
+      window.dispatchEvent(new Event("resize"));
+      handle.dispatchEvent(new KeyboardEvent("keydown", { key: "Home" }));
+      expect(window.localStorage.getItem(storageKey)).toBe("664");
+    } finally {
+      window.localStorage.removeItem(storageKey);
+    }
+  });
+
   it("opens an imported Office file in the reader at its canonical link", async () => {
     const initialURL = window.location.href;
     const readerURL = new URL("/r/space-test/office-report", initialURL).href;

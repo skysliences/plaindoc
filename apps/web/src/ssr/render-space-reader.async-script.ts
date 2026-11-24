@@ -93,6 +93,83 @@ export const READER_ASYNC_ENHANCEMENT_SCRIPT = `(() => {
 
   const isMobileSidebarViewport = () => window.innerWidth <= MOBILE_SIDEBAR_BREAKPOINT;
 
+  const setupDesktopSidebarResize = () => {
+    const handle = document.querySelector("[data-reader-hook='sidebar-resizer']");
+    if (!(handle instanceof HTMLElement)) return;
+    const layout = handle.closest(".reader-layout");
+    if (!(layout instanceof HTMLElement)) return;
+
+    const storageKey = "reader.sidebar.width";
+    const minWidth = 240;
+    const maxWidth = () => Math.max(minWidth, Math.min(800, Math.floor(window.innerWidth / 2)));
+    let preferredWidth = 248;
+    try {
+      const storedWidth = Number(window.localStorage.getItem(storageKey));
+      if (Number.isFinite(storedWidth) && storedWidth > 0) preferredWidth = storedWidth;
+    } catch {
+      // The separator still works when local storage is unavailable.
+    }
+
+    let width = preferredWidth;
+    const applyWidth = (nextWidth) => {
+      const maximum = maxWidth();
+      width = Math.min(maximum, Math.max(minWidth, Math.round(nextWidth)));
+      layout.style.setProperty("--reader-documents-width", width + "px");
+      handle.setAttribute("aria-valuemax", String(maximum));
+      handle.setAttribute("aria-valuenow", String(width));
+    };
+    const saveWidth = () => {
+      preferredWidth = width;
+      try {
+        window.localStorage.setItem(storageKey, String(preferredWidth));
+      } catch {
+        // The width remains in effect for the current page.
+      }
+      scheduleOutlineActiveSync();
+      syncSpreadsheetStickyHeaders(document);
+    };
+
+    let drag = null;
+    handle.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0 || !event.isPrimary || drag || isMobileSidebarViewport()) return;
+      event.preventDefault();
+      handle.focus({ preventScroll: true });
+      handle.setPointerCapture(event.pointerId);
+      drag = { pointerId: event.pointerId, startX: event.clientX, startWidth: width };
+      layout.classList.add("reader-layout--resizing");
+    });
+    handle.addEventListener("pointermove", (event) => {
+      if (!drag || drag.pointerId !== event.pointerId || isMobileSidebarViewport()) return;
+      applyWidth(drag.startWidth + event.clientX - drag.startX);
+    });
+    const finishDrag = (event) => {
+      if (!drag || drag.pointerId !== event.pointerId) return;
+      const moved = width !== drag.startWidth;
+      drag = null;
+      layout.classList.remove("reader-layout--resizing");
+      if (moved && event.type === "pointerup" && !isMobileSidebarViewport()) saveWidth();
+      else applyWidth(preferredWidth);
+    };
+    for (const eventName of ["pointerup", "pointercancel", "lostpointercapture"]) {
+      handle.addEventListener(eventName, finishDrag);
+    }
+    handle.addEventListener("keydown", (event) => {
+      if (drag || isMobileSidebarViewport()) return;
+      const widths = { ArrowLeft: width - 24, ArrowRight: width + 24, Home: minWidth, End: maxWidth() };
+      if (!Object.hasOwn(widths, event.key)) return;
+      event.preventDefault();
+      applyWidth(widths[event.key]);
+      saveWidth();
+    });
+    window.addEventListener("resize", () => {
+      if (!drag) applyWidth(preferredWidth);
+    }, { passive: true });
+
+    handle.setAttribute("aria-valuemin", String(minWidth));
+    applyWidth(preferredWidth);
+    handle.hidden = false;
+  };
+
   const collectMobileSidebarOpenButtons = () =>
     Array.from(document.querySelectorAll(MOBILE_SIDEBAR_OPEN_TRIGGER_SELECTOR)).filter(
       (node) => node instanceof HTMLButtonElement
@@ -2381,6 +2458,7 @@ export const READER_ASYNC_ENHANCEMENT_SCRIPT = `(() => {
     markActiveTreeItemByPathname(window.location.pathname);
     refreshOutlineRegistry();
     setMobileSidebarOpen(false);
+    setupDesktopSidebarResize();
     syncSpreadsheetTabs();
     void syncReaderImageViewerRegistry();
     void renderReaderMermaidBlocks()
