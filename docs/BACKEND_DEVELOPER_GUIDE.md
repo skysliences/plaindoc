@@ -332,6 +332,8 @@
 2. 导入按相对路径创建目录树并保留文件名。Markdown 和受支持的 Office 文件复用各自的文档存储。纯文本沿用 Markdown 文档的版本和编辑接口，同时通过 `importedFileKind: "text"` 标记正文按原样显示。
 3. 无法读取或不支持的文件作为 `type: "doc"`、`importedFileKind: "unsupported"` 的目录条目保留名称，没有文档 ID。工作区和阅读页树都返回 `importedFileKind`。SQLite、MySQL 和 PostgreSQL 的迁移为现有节点保留空标记。
 4. 可解码的 PNG、JPEG、GIF、WebP 和 BMP 导入为 `importedFileKind: "image"`。文档和阅读页数据通过 `importedImageUrl` 提供同源预览地址，预览路由按文档或分享链接的读权限返回图片。早期导入为不支持条目的图片需要重新上传原文件。
+5. 工作区上传单文件、文件夹或 ZIP 时，跳过路径中以点号开头的文件及目录。工作区创建和重命名禁止以点号开头的名称。普通目录树和搜索会隐藏现有点号节点及其后代，数据库保留这些节点。
+6. 单独上传、目录内上传和嵌套的 ZIP 都在原位置创建一个取自压缩包文件名的目录，目录名去掉 `.zip` 后缀。工作区保存导入结果，ZIP 本身不落为目录节点。单独导入 ZIP 时保留压缩包内部已有的 README 组织及公共外层目录折叠规则，文件夹上传保留压缩包内相对路径。
 
 ONLYOFFICE 一等文档规则：
 

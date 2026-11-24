@@ -395,6 +395,11 @@ func (h *workspaceHandler) GetTree(c *gin.Context) {
 		response.InternalError(c)
 		return
 	}
+	paths := make([]models.WorkspaceNodePathEntry, 0, len(rows))
+	for _, row := range rows {
+		paths = append(paths, models.WorkspaceNodePathEntry{ID: row.NodeID, ParentID: row.ParentNodeID, Title: row.Title})
+	}
+	hiddenNodes := models.HiddenWorkspaceNodeIDs(paths)
 
 	hasEditableDocument := false
 	treeNodes := make(map[string]*workspaceTreeNode, len(rows))
@@ -410,6 +415,9 @@ func (h *workspaceHandler) GetTree(c *gin.Context) {
 				continue
 			}
 			hasEditableDocument = true
+		}
+		if _, hidden := hiddenNodes[nodeID]; hidden {
+			continue
 		}
 		documentIdentifier := normalizeOptionalString(row.ReaderSlug)
 		documentRouteKey := resolveWorkspaceDocumentRouteKey(documentID, documentIdentifier)
@@ -580,6 +588,10 @@ func (h *workspaceHandler) CreateNode(c *gin.Context) {
 				title = "未命名文档"
 			}
 		}
+	}
+	if models.IsHiddenWorkspaceName(title) {
+		response.WorkspaceErrHiddenNodeName.Write(c)
+		return
 	}
 	readerSlug, identifierValidationErr := normalizeWorkspaceDocumentIdentifier(req.DocumentIdentifier)
 	if identifierValidationErr != nil {
@@ -799,6 +811,10 @@ func (h *workspaceHandler) UpdateNode(c *gin.Context) {
 	nextTitle := strings.TrimSpace(node.Title)
 	if req.Title != nil {
 		resolvedTitle := strings.TrimSpace(*req.Title)
+		if models.IsHiddenWorkspaceName(resolvedTitle) {
+			response.WorkspaceErrHiddenNodeName.Write(c)
+			return
+		}
 		if resolvedTitle == "" {
 			if node.Type == models.NodeTypeFolder {
 				resolvedTitle = "未命名目录"

@@ -379,10 +379,6 @@ type readerPageTreeNodeRowDB struct {
 	DocumentFormat     *string                 `gorm:"column:document_format"`
 }
 
-type readerPageDocumentIDRowDB struct {
-	DocumentID string `gorm:"column:document_id"`
-}
-
 type readerPageResolvedDocumentRowDB struct {
 	DocumentID string `gorm:"column:document_id"`
 }

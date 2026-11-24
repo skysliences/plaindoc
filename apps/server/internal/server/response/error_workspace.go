@@ -53,6 +53,12 @@ var (
 		Code:    CodeInvalidRequest,
 		Message: "节点类型无效",
 	}
+	// WorkspaceErrHiddenNodeName 对应场景：目录节点名称以点号开头。
+	WorkspaceErrHiddenNodeName = ErrorTemplate{
+		Status:  http.StatusBadRequest,
+		Code:    CodeInvalidRequest,
+		Message: "文件或文件夹名称不能以「.」开头",
+	}
 	// WorkspaceErrParentNodeNotFound 对应场景：parent node not found
 	WorkspaceErrParentNodeNotFound = ErrorTemplate{
 		Status:  http.StatusBadRequest,

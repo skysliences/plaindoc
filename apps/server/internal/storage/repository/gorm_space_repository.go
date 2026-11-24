@@ -317,6 +317,7 @@ func (r *gormSpaceRepository) ListVisibleForHomepage(
 			Joins("JOIN "+tableName(models.Node{})+" AS n ON "+qualifiedColumn("n", models.NodeColumns.NodeID)+" = "+qualifiedColumn("d", models.DocumentColumns.NodeID)).
 			Where(qualifiedColumn("n", models.NodeColumns.SpaceID)+" = "+qualifiedColumn("s", models.SpaceColumns.SpaceID)).
 			Where(normalizedDocumentStatusExpr+" = ?", models.EntityStatusActive)
+		query = excludeHiddenWorkspaceNodes(query, "n")
 
 		if viewerUserID == "" {
 			return query.Where(
@@ -348,12 +349,13 @@ func (r *gormSpaceRepository) ListVisibleForHomepage(
 	buildSpaceHasAnyDocumentQuery := func() *gorm.DB {
 		// 空间无文档时也允许展示（点击后会进入“无可读文档”的友好提示），
 		// 仅在存在文档时要求至少有一篇可读文档。
-		return r.db.WithContext(ctx).
+		query := r.db.WithContext(ctx).
 			Table(tableWithAlias(models.Document{}, "d_any")).
 			Select("1").
 			Joins("JOIN " + tableName(models.Node{}) + " AS n_any ON " + qualifiedColumn("n_any", models.NodeColumns.NodeID) + " = " + qualifiedColumn("d_any", models.DocumentColumns.NodeID)).
 			Where(qualifiedColumn("n_any", models.NodeColumns.SpaceID) + " = " + qualifiedColumn("s", models.SpaceColumns.SpaceID)).
 			Where(qualifiedColumn("d_any", models.DocumentColumns.DeletedAt) + " IS NULL")
+		return excludeHiddenWorkspaceNodes(query, "n_any")
 	}
 
 	// 列表与总数使用同一组可见性条件。

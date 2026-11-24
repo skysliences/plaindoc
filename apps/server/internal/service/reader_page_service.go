@@ -75,32 +75,22 @@ func (s *ReaderPageService) ResolveLandingDocumentID(
 		return "", err
 	}
 
-	candidateDocumentRows, err := s.loadSpaceDocumentIDs(ctx, normalizedSpaceID)
+	candidateRows, err := s.loadVisibleTreeRows(ctx, normalizedSpaceID)
 	if err != nil {
 		return "", err
-	}
-	if len(candidateDocumentRows) == 0 {
-		return "", ErrDocumentNotFound
 	}
 
 	hasDocumentAccessDenied := false
 	hasLoginRequired := false
-	for _, item := range candidateDocumentRows {
-		documentID := strings.TrimSpace(item)
-		if documentID == "" {
+	for _, row := range candidateRows {
+		documentID := normalizeReaderOptionalString(row.DocumentID)
+		if documentID == nil {
 			continue
 		}
 
-		_, readErr := s.visibilityService.GetDocument(ctx, documentID, normalizedViewerUserID)
+		_, readErr := s.visibilityService.GetDocument(ctx, *documentID, normalizedViewerUserID)
 		if readErr == nil {
-			documentRow, loadErr := s.loadDocumentRow(ctx, documentID)
-			if loadErr != nil {
-				if errors.Is(loadErr, gorm.ErrRecordNotFound) {
-					continue
-				}
-				return "", loadErr
-			}
-			return resolveReaderDocumentRouteKey(documentRow.DocumentID, documentRow.ReaderSlug), nil
+			return resolveReaderDocumentRouteKey(*documentID, row.ReaderSlug), nil
 		}
 
 		switch {
@@ -346,28 +336,36 @@ func (s *ReaderPageService) loadDocumentRow(
 	return *row, nil
 }
 
-func (s *ReaderPageService) loadSpaceDocumentIDs(
+func (s *ReaderPageService) loadVisibleTreeRows(
 	ctx context.Context,
 	spaceID string,
-) ([]string, error) {
+) ([]repository.ReaderPageTreeNodeRecord, error) {
 	if s == nil || s.readerPageRepo == nil {
 		return nil, errors.New("reader page repository is nil")
 	}
-	rows, err := s.readerPageRepo.ListSpaceDocumentIDs(ctx, spaceID)
+	rows, err := s.readerPageRepo.ListTreeNodesBySpaceID(ctx, spaceID)
 	if err != nil {
 		return nil, err
 	}
-	return rows, nil
+	paths := make([]models.WorkspaceNodePathEntry, 0, len(rows))
+	for _, row := range rows {
+		paths = append(paths, models.WorkspaceNodePathEntry{ID: row.NodeID, ParentID: row.ParentNodeID, Title: row.Title})
+	}
+	hiddenNodes := models.HiddenWorkspaceNodeIDs(paths)
+	visibleRows := rows[:0]
+	for _, row := range rows {
+		if _, hidden := hiddenNodes[strings.TrimSpace(row.NodeID)]; !hidden {
+			visibleRows = append(visibleRows, row)
+		}
+	}
+	return visibleRows, nil
 }
 
 func (s *ReaderPageService) loadTree(
 	ctx context.Context,
 	spaceID string, viewerUserID string,
 ) ([]ReaderTreeNodeViewModel, error) {
-	if s == nil || s.readerPageRepo == nil {
-		return nil, errors.New("reader page repository is nil")
-	}
-	rows, err := s.readerPageRepo.ListTreeNodesBySpaceID(ctx, spaceID)
+	rows, err := s.loadVisibleTreeRows(ctx, spaceID)
 	if err != nil {
 		return nil, err
 	}

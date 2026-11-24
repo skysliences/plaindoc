@@ -151,6 +151,7 @@ func TestRouter_ImportDocuments_ImportsHTMLFromZIPAndLocalImages(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected import status 200, got %d body=%s", rec.Code, rec.Body.String())
 	}
+	archiveFolderID := findWorkspaceImportedZIPFolder(t, database, spaceID, "资料", "")
 
 	payload := decodeJSONResultData[struct {
 		SuccessCount int `json:"successCount"`
@@ -160,7 +161,7 @@ func TestRouter_ImportDocuments_ImportsHTMLFromZIPAndLocalImages(t *testing.T) {
 			Status     string `json:"status"`
 		} `json:"items"`
 	}](t, rec.Body.Bytes())
-	if payload.SuccessCount != 1 || payload.FailedCount != 0 {
+	if payload.SuccessCount != 2 || payload.FailedCount != 0 {
 		t.Fatalf("unexpected import counts: %+v body=%s", payload, rec.Body.String())
 	}
 	for _, item := range payload.Items {
@@ -187,7 +188,7 @@ func TestRouter_ImportDocuments_ImportsHTMLFromZIPAndLocalImages(t *testing.T) {
 	if err := database.ORM.Table("documents").
 		Select("documents.title", "documents.format", "documents.content_md").
 		Joins("JOIN nodes ON nodes.node_id = documents.node_id").
-		Where("nodes.space_id = ? AND documents.title = ?", spaceID, "index").
+		Where("nodes.space_id = ? AND documents.title = ? AND nodes.parent_node_id = ?", spaceID, "index", archiveFolderID).
 		Take(&persistedDocument).Error; err != nil {
 		t.Fatalf("query imported html document failed: %v", err)
 	}
@@ -234,6 +235,7 @@ func TestRouter_ImportDocuments_UsesReadmeAsParentAndSkipsEmptyAssetFolders(t *t
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected import status 200, got %d body=%s", rec.Code, rec.Body.String())
 	}
+	archiveFolderID := findWorkspaceImportedZIPFolder(t, database, spaceID, "guide", "")
 
 	var readmeNode struct {
 		NodeID string `gorm:"column:node_id"`
@@ -242,7 +244,7 @@ func TestRouter_ImportDocuments_UsesReadmeAsParentAndSkipsEmptyAssetFolders(t *t
 	}
 	if err := database.ORM.Table("nodes").
 		Select("nodes.node_id", "nodes.title", "nodes.type").
-		Where("space_id = ? AND title = ? AND parent_node_id IS NULL", spaceID, "README").
+		Where("space_id = ? AND title = ? AND parent_node_id = ?", spaceID, "README", archiveFolderID).
 		Take(&readmeNode).Error; err != nil {
 		t.Fatalf("query readme parent node failed: %v", err)
 	}
@@ -289,7 +291,7 @@ func TestRouter_ImportDocuments_UsesReadmeAsParentAndSkipsEmptyAssetFolders(t *t
 		Take(&communityFolderNode).Error; err != nil {
 		t.Fatalf("query community folder node failed: %v", err)
 	}
-	if communityFolderNode.ParentNodeID != nil {
+	if communityFolderNode.ParentNodeID == nil || strings.TrimSpace(*communityFolderNode.ParentNodeID) != archiveFolderID {
 		t.Fatalf("expected community folder to be sibling of guide readme, got parent=%+v", communityFolderNode.ParentNodeID)
 	}
 	if communityPostNode.ParentNodeID == nil || strings.TrimSpace(*communityPostNode.ParentNodeID) != communityFolderNode.NodeID {
@@ -313,7 +315,7 @@ func TestRouter_ImportDocuments_UsesReadmeAsParentAndSkipsEmptyAssetFolders(t *t
 		Take(&gocnFolderNode).Error; err != nil {
 		t.Fatalf("query gocn folder node failed: %v", err)
 	}
-	if gocnFolderNode.ParentNodeID != nil {
+	if gocnFolderNode.ParentNodeID == nil || strings.TrimSpace(*gocnFolderNode.ParentNodeID) != archiveFolderID {
 		t.Fatalf("expected gocn folder to be sibling of guide readme, got parent=%+v", gocnFolderNode.ParentNodeID)
 	}
 	if err := database.ORM.Table("nodes").
@@ -367,8 +369,8 @@ func TestRouter_ImportDocuments_UsesReadmeAsParentAndSkipsEmptyAssetFolders(t *t
 		Count(&guideFolderCount).Error; err != nil {
 		t.Fatalf("count guide folders failed: %v", err)
 	}
-	if guideFolderCount != 0 {
-		t.Fatalf("expected no guide folder when readme acts as parent, got %d", guideFolderCount)
+	if guideFolderCount != 1 {
+		t.Fatalf("expected one named archive folder with the inner guide wrapper trimmed, got %d", guideFolderCount)
 	}
 
 	var assetsFolderCount int64
@@ -490,6 +492,7 @@ func TestRouter_ImportDocuments_RootReadmeOwnsDescendantsUntilNestedReadmeOverri
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected import status 200, got %d body=%s", rec.Code, rec.Body.String())
 	}
+	archiveFolderID := findWorkspaceImportedZIPFolder(t, database, spaceID, "root-readme", "")
 
 	var rootReadmeNode struct {
 		NodeID string `gorm:"column:node_id"`
@@ -498,7 +501,7 @@ func TestRouter_ImportDocuments_RootReadmeOwnsDescendantsUntilNestedReadmeOverri
 	}
 	if err := database.ORM.Table("nodes").
 		Select("nodes.node_id", "nodes.title", "nodes.type").
-		Where("space_id = ? AND title = ? AND parent_node_id IS NULL", spaceID, "README").
+		Where("space_id = ? AND title = ? AND parent_node_id = ?", spaceID, "README", archiveFolderID).
 		Take(&rootReadmeNode).Error; err != nil {
 		t.Fatalf("query root readme node failed: %v", err)
 	}
@@ -538,7 +541,7 @@ func TestRouter_ImportDocuments_RootReadmeOwnsDescendantsUntilNestedReadmeOverri
 		Take(&docsFolderNode).Error; err != nil {
 		t.Fatalf("query docs folder failed: %v", err)
 	}
-	if docsFolderNode.ParentNodeID != nil {
+	if docsFolderNode.ParentNodeID == nil || strings.TrimSpace(*docsFolderNode.ParentNodeID) != archiveFolderID {
 		t.Fatalf("expected docs folder to be sibling of root readme, got %+v", docsFolderNode.ParentNodeID)
 	}
 	assertParentNode("intro", docsFolderNode.NodeID)
@@ -554,7 +557,7 @@ func TestRouter_ImportDocuments_RootReadmeOwnsDescendantsUntilNestedReadmeOverri
 		Take(&gocnFolderNode).Error; err != nil {
 		t.Fatalf("query gocn folder failed: %v", err)
 	}
-	if gocnFolderNode.ParentNodeID != nil {
+	if gocnFolderNode.ParentNodeID == nil || strings.TrimSpace(*gocnFolderNode.ParentNodeID) != archiveFolderID {
 		t.Fatalf("expected gocn folder to be sibling of root readme, got %+v", gocnFolderNode.ParentNodeID)
 	}
 	if err := database.ORM.Table("nodes").
@@ -615,13 +618,14 @@ func TestRouter_ImportDocuments_NestedReadmeKeepsSameDirectoryFilesAsChildren(t 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected import status 200, got %d body=%s", rec.Code, rec.Body.String())
 	}
+	archiveFolderID := findWorkspaceImportedZIPFolder(t, database, spaceID, "nested-readme", "")
 
 	var rootReadmeNode struct {
 		NodeID string `gorm:"column:node_id"`
 	}
 	if err := database.ORM.Table("nodes").
 		Select("nodes.node_id").
-		Where("space_id = ? AND title = ? AND parent_node_id IS NULL", spaceID, "README").
+		Where("space_id = ? AND title = ? AND parent_node_id = ?", spaceID, "README", archiveFolderID).
 		Take(&rootReadmeNode).Error; err != nil {
 		t.Fatalf("query root readme node failed: %v", err)
 	}
@@ -683,13 +687,14 @@ func TestRouter_ImportDocuments_NestedReadmeCollapsesSingleGrandchildDirectory(t
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected import status 200, got %d body=%s", rec.Code, rec.Body.String())
 	}
+	archiveFolderID := findWorkspaceImportedZIPFolder(t, database, spaceID, "nested-readme-grandchild", "")
 
 	var rootReadmeNode struct {
 		NodeID string `gorm:"column:node_id"`
 	}
 	if err := database.ORM.Table("nodes").
 		Select("nodes.node_id").
-		Where("space_id = ? AND title = ? AND parent_node_id IS NULL", spaceID, "README").
+		Where("space_id = ? AND title = ? AND parent_node_id = ?", spaceID, "README", archiveFolderID).
 		Take(&rootReadmeNode).Error; err != nil {
 		t.Fatalf("query root readme node failed: %v", err)
 	}
@@ -763,6 +768,7 @@ func TestRouter_ImportDocuments_ReadmdAliasBehavesLikeNestedReadme(t *testing.T)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected import status 200, got %d body=%s", rec.Code, rec.Body.String())
 	}
+	archiveFolderID := findWorkspaceImportedZIPFolder(t, database, spaceID, "readmd-alias", "")
 	payload := decodeJSONResultData[struct {
 		CreatedNodes []struct {
 			NodeID   string  `json:"nodeId"`
@@ -777,7 +783,7 @@ func TestRouter_ImportDocuments_ReadmdAliasBehavesLikeNestedReadme(t *testing.T)
 	}
 	if err := database.ORM.Table("nodes").
 		Select("nodes.node_id").
-		Where("space_id = ? AND title = ? AND parent_node_id IS NULL", spaceID, "README").
+		Where("space_id = ? AND title = ? AND parent_node_id = ?", spaceID, "README", archiveFolderID).
 		Take(&rootReadmeNode).Error; err != nil {
 		t.Fatalf("query root readme node failed: %v", err)
 	}
@@ -852,13 +858,14 @@ func TestRouter_ImportDocuments_ReadmePreservesSiblingDirectoriesWhenMultipleBra
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected import status 200, got %d body=%s", rec.Code, rec.Body.String())
 	}
+	archiveFolderID := findWorkspaceImportedZIPFolder(t, database, spaceID, "readme-branches", "")
 
 	var rootReadmeNode struct {
 		NodeID string `gorm:"column:node_id"`
 	}
 	if err := database.ORM.Table("nodes").
 		Select("nodes.node_id").
-		Where("space_id = ? AND title = ? AND parent_node_id IS NULL", spaceID, "README").
+		Where("space_id = ? AND title = ? AND parent_node_id = ?", spaceID, "README", archiveFolderID).
 		Take(&rootReadmeNode).Error; err != nil {
 		t.Fatalf("query root readme failed: %v", err)
 	}
@@ -873,7 +880,7 @@ func TestRouter_ImportDocuments_ReadmePreservesSiblingDirectoriesWhenMultipleBra
 		Take(&gocnFolderNode).Error; err != nil {
 		t.Fatalf("query gocn folder failed: %v", err)
 	}
-	if gocnFolderNode.ParentNodeID != nil {
+	if gocnFolderNode.ParentNodeID == nil || strings.TrimSpace(*gocnFolderNode.ParentNodeID) != archiveFolderID {
 		t.Fatalf("expected gocn folder to be sibling of root readme, got %+v", gocnFolderNode.ParentNodeID)
 	}
 
@@ -887,7 +894,7 @@ func TestRouter_ImportDocuments_ReadmePreservesSiblingDirectoriesWhenMultipleBra
 		Take(&gocn1FolderNode).Error; err != nil {
 		t.Fatalf("query gocn1 folder failed: %v", err)
 	}
-	if gocn1FolderNode.ParentNodeID != nil {
+	if gocn1FolderNode.ParentNodeID == nil || strings.TrimSpace(*gocn1FolderNode.ParentNodeID) != archiveFolderID {
 		t.Fatalf("expected gocn1 folder to be sibling of root readme, got %+v", gocn1FolderNode.ParentNodeID)
 	}
 
@@ -958,6 +965,7 @@ func TestRouter_ImportDocuments_ReadmePeersWithMultipleChildDirsAndPreservesFile
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected import status 200, got %d body=%s", rec.Code, rec.Body.String())
 	}
+	archiveFolderID := findWorkspaceImportedZIPFolder(t, database, spaceID, "readme-peer-ident", "")
 
 	var rootReadmeNode struct {
 		NodeID     string  `gorm:"column:node_id"`
@@ -965,7 +973,7 @@ func TestRouter_ImportDocuments_ReadmePeersWithMultipleChildDirsAndPreservesFile
 	}
 	if err := database.ORM.Table("nodes").
 		Select("nodes.node_id", "nodes.reader_slug").
-		Where("space_id = ? AND title = ? AND parent_node_id IS NULL", spaceID, "README").
+		Where("space_id = ? AND title = ? AND parent_node_id = ?", spaceID, "README", archiveFolderID).
 		Take(&rootReadmeNode).Error; err != nil {
 		t.Fatalf("query root readme failed: %v", err)
 	}
@@ -1091,6 +1099,7 @@ func TestRouter_ImportDocuments_TrimsLeadingEmptyZipDirectoriesToFirstImportable
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected import status 200, got %d body=%s", rec.Code, rec.Body.String())
 	}
+	archiveFolderID := findWorkspaceImportedZIPFolder(t, database, spaceID, "trim-root", "")
 
 	var aFolderCount int64
 	if err := database.ORM.Table("nodes").
@@ -1118,7 +1127,7 @@ func TestRouter_ImportDocuments_TrimsLeadingEmptyZipDirectoriesToFirstImportable
 	}
 	if err := database.ORM.Table("nodes").
 		Select("nodes.node_id", "nodes.parent_node_id").
-		Where("space_id = ? AND title = ? AND type = ? AND parent_node_id IS NULL", spaceID, "c", "folder").
+		Where("space_id = ? AND title = ? AND type = ? AND parent_node_id = ?", spaceID, "c", "folder", archiveFolderID).
 		Take(&cFolderNode).Error; err != nil {
 		t.Fatalf("query c folder failed: %v", err)
 	}
@@ -1129,7 +1138,7 @@ func TestRouter_ImportDocuments_TrimsLeadingEmptyZipDirectoriesToFirstImportable
 	}
 	if err := database.ORM.Table("nodes").
 		Select("nodes.node_id", "nodes.parent_node_id").
-		Where("space_id = ? AND title = ? AND type = ? AND parent_node_id IS NULL", spaceID, "d", "folder").
+		Where("space_id = ? AND title = ? AND type = ? AND parent_node_id = ?", spaceID, "d", "folder", archiveFolderID).
 		Take(&dFolderNode).Error; err != nil {
 		t.Fatalf("query d folder failed: %v", err)
 	}
@@ -1176,6 +1185,7 @@ func TestRouter_ImportDocuments_UsesTargetDocumentAsParentWhenImportingFromDocum
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected import status 200, got %d body=%s", rec.Code, rec.Body.String())
 	}
+	archiveFolderID := findWorkspaceImportedZIPFolder(t, database, spaceID, "document-menu", targetNodeID)
 
 	var rootReadmeNode struct {
 		NodeID       string  `gorm:"column:node_id"`
@@ -1187,8 +1197,8 @@ func TestRouter_ImportDocuments_UsesTargetDocumentAsParentWhenImportingFromDocum
 		Take(&rootReadmeNode).Error; err != nil {
 		t.Fatalf("query imported root readme node failed: %v", err)
 	}
-	if rootReadmeNode.ParentNodeID == nil || strings.TrimSpace(*rootReadmeNode.ParentNodeID) != targetNodeID {
-		t.Fatalf("expected imported root readme parent=%s, got %+v", targetNodeID, rootReadmeNode.ParentNodeID)
+	if rootReadmeNode.ParentNodeID == nil || strings.TrimSpace(*rootReadmeNode.ParentNodeID) != archiveFolderID {
+		t.Fatalf("expected imported root readme parent=%s, got %+v", archiveFolderID, rootReadmeNode.ParentNodeID)
 	}
 
 	var nestedDocumentNode struct {

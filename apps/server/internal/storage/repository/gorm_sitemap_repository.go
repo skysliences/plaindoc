@@ -32,7 +32,7 @@ func (r *gormSitemapRepository) ListPublicDocuments(
 	nodeAlias := "n"
 	spaceAlias := "s"
 	rows := make([]sitemapPublicDocumentSourceRow, 0, 256)
-	if err := r.db.WithContext(ctx).
+	query := r.db.WithContext(ctx).
 		Table(tableWithAlias(models.Document{}, documentAlias)).
 		Select(
 			qualifiedColumn(spaceAlias, models.SpaceColumns.SpaceID)+" AS space_id",
@@ -60,7 +60,8 @@ func (r *gormSitemapRepository) ListPublicDocuments(
 		Where(qualifiedColumn(documentAlias, models.DocumentColumns.Visibility)+" = ?", models.VisibilityPublic).
 		Where(qualifiedColumn(documentAlias, models.DocumentColumns.Status)+" = ?", models.EntityStatusActive).
 		Where(qualifiedColumn(documentAlias, models.DocumentColumns.DeletedAt)+" IS NULL").
-		Where(qualifiedColumn(documentAlias, models.DocumentColumns.Format)+" = ?", models.DocumentFormatMarkdown).
+		Where(qualifiedColumn(documentAlias, models.DocumentColumns.Format)+" = ?", models.DocumentFormatMarkdown)
+	if err := excludeHiddenWorkspaceNodes(query, nodeAlias).
 		Order(qualifiedColumn(spaceAlias, models.SpaceColumns.SpaceID) + " ASC, " + qualifiedColumn(documentAlias, models.DocumentColumns.DocumentID) + " ASC").
 		Find(&rows).Error; err != nil {
 		return nil, err

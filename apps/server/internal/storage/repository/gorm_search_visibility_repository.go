@@ -327,6 +327,7 @@ func (r *gormSearchVisibilityRepository) baseVisibleDocumentsQuery(
 			query = query.Where(qualifiedColumn("s", models.SpaceColumns.SpaceID)+" IN ?", normalizedScopeSpaceIDs)
 		}
 	}
+	query = excludeHiddenWorkspaceNodes(query, "n")
 	if canViewAllDocuments && strings.TrimSpace(actorUserID) != "" {
 		return query
 	}

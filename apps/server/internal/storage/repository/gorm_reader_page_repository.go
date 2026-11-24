@@ -20,8 +20,6 @@ type readerPageDocumentRow = readerPageDocumentRowDB
 
 type readerPageTreeNodeRow = readerPageTreeNodeRowDB
 
-type readerPageDocumentIDRow = readerPageDocumentIDRowDB
-
 type readerPageResolvedDocumentRow = readerPageResolvedDocumentRowDB
 
 // NewGormReaderPageRepository 创建阅读页数据仓储实现。
@@ -203,43 +201,6 @@ func (r *gormReaderPageRepository) GetDocumentByDocumentID(
 	}, nil
 }
 
-func (r *gormReaderPageRepository) ListSpaceDocumentIDs(
-	ctx context.Context,
-	spaceID string,
-) ([]string, error) {
-	if r == nil || r.db == nil {
-		return nil, fmt.Errorf("reader page repository db is nil")
-	}
-	normalizedSpaceID := strings.TrimSpace(spaceID)
-	if normalizedSpaceID == "" {
-		return []string{}, nil
-	}
-
-	rows := make([]readerPageDocumentIDRow, 0, 64)
-	if err := r.db.WithContext(ctx).
-		Table(tableWithAlias(models.Document{}, "d")).
-		Select("d."+models.DocumentColumns.DocumentID+" AS document_id").
-		Joins("JOIN "+tableName(models.Node{})+" AS n ON n."+models.NodeColumns.NodeID+" = d."+models.DocumentColumns.NodeID).
-		Where("n."+models.NodeColumns.SpaceID+" = ?", normalizedSpaceID).
-		Where("d." + models.DocumentColumns.DeletedAt + " IS NULL").
-		Order("CASE WHEN n." + models.NodeColumns.ParentNodeID + " IS NULL THEN 0 ELSE 1 END ASC").
-		Order("n." + models.NodeColumns.ParentNodeID + " ASC").
-		Order("n." + models.NodeColumns.Sort + " ASC, n." + models.NodeColumns.ID + " ASC, d." + models.DocumentColumns.ID + " ASC").
-		Find(&rows).Error; err != nil {
-		return nil, err
-	}
-
-	result := make([]string, 0, len(rows))
-	for _, row := range rows {
-		documentID := strings.TrimSpace(row.DocumentID)
-		if documentID == "" {
-			continue
-		}
-		result = append(result, documentID)
-	}
-	return result, nil
-}
-
 func (r *gormReaderPageRepository) ListTreeNodesBySpaceID(
 	ctx context.Context,
 	spaceID string,
@@ -274,7 +235,8 @@ func (r *gormReaderPageRepository) ListTreeNodesBySpaceID(
 		Joins("LEFT JOIN "+tableName(models.Document{})+" AS d ON d."+models.DocumentColumns.NodeID+" = n."+models.NodeColumns.NodeID).
 		Where("n."+models.NodeColumns.SpaceID+" = ?", normalizedSpaceID).
 		Where(r.db.WithContext(ctx).Where(qualifiedColumn("d", models.DocumentColumns.DocumentID) + " IS NULL").Or(activeDocument)).
-		Order("n." + models.NodeColumns.ParentNodeID + " ASC, n." + models.NodeColumns.Sort + " ASC, n." + models.NodeColumns.ID + " ASC").
+		Order("CASE WHEN n." + models.NodeColumns.ParentNodeID + " IS NULL THEN 0 ELSE 1 END ASC").
+		Order("n." + models.NodeColumns.ParentNodeID + " ASC, n." + models.NodeColumns.Sort + " ASC, n." + models.NodeColumns.ID + " ASC, d." + models.DocumentColumns.ID + " ASC").
 		Find(&rows).Error; err != nil {
 		return nil, err
 	}

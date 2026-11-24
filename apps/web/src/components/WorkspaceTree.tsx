@@ -63,6 +63,7 @@ import type {
 import { formatError } from "../editor/status-utils";
 import { validateDocumentIdentifier } from "../workspace/document-identifier";
 import { FolderUploadPicker, getWorkspaceFolderName, type FolderUploadSelection } from "../workspace/FolderUploadPicker";
+import { isHiddenWorkspaceName } from "../workspace/workspace-node-name";
 import { useConfirmDialog } from "./ConfirmDialog";
 import {
   DropdownMenu,
@@ -1037,6 +1038,10 @@ export const WorkspaceTree = memo(function WorkspaceTree({
     if (!editingNodeId || isCommittingInlineEditRef.current) {
       return;
     }
+    if (isHiddenWorkspaceName(editingNodeTitle)) {
+      toast.error("名称不能以点号开头");
+      return;
+    }
 
     const editingDraftNode = draftNodeByID.get(editingNodeId);
     if (editingDraftNode) {
@@ -1365,7 +1370,10 @@ export const WorkspaceTree = memo(function WorkspaceTree({
     if (!fileList) {
       return;
     }
-    const selectedFiles = Array.from(fileList);
+    const selectedFiles = Array.from(fileList).filter((file) => !isHiddenWorkspaceName(file.name));
+    if (selectedFiles.length < fileList.length) {
+      toast.info("已跳过点号开头的文件");
+    }
     setImportDialog((previousDialog) =>
       previousDialog
         ? {
@@ -1433,6 +1441,10 @@ export const WorkspaceTree = memo(function WorkspaceTree({
     }
     const fallbackTitle = createNodeDialog.type === "folder" ? DEFAULT_FOLDER_TITLE : DEFAULT_DOCUMENT_TITLE;
     const normalizedTitle = createNodeDialog.title.trim() || fallbackTitle;
+    if (isHiddenWorkspaceName(normalizedTitle)) {
+      toast.error("名称不能以点号开头");
+      return;
+    }
     const normalizedFormat: DocumentFormat =
       createNodeDialog.type === "doc" ? createNodeDialog.format : "markdown";
 
@@ -2345,7 +2357,7 @@ export const WorkspaceTree = memo(function WorkspaceTree({
                     <p className="mt-1 mb-0 text-[12px] text-[#64748b]">
                       {isFolderImport
                         ? "保留原来的文件名和目录结构。"
-                        : "支持 docx、xlsx、md、txt、html 和 zip。"}
+                        : "支持 docx、xlsx、md、txt、html 和 zip。ZIP 会解压到同名目录。"}
                     </p>
                   </div>
                   {isFolderImport ? (

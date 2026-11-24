@@ -98,7 +98,7 @@ describe("ReaderCreateDocumentForm", () => {
     fireEvent.click(screen.getByRole("button", { name: "上传文件" }));
     const picker = screen.getByLabelText("本地文件");
     const submit = screen.getByRole("button", { name: "导入" });
-    expect(picker).toHaveAttribute("accept", ".docx,.xlsx");
+    expect(picker).toHaveAttribute("accept", ".docx,.xlsx,.zip");
     expect(submit).toBeDisabled();
     const file = new File(["fixture"], name);
     fireEvent.change(picker, { target: { files: [file] } });
@@ -115,6 +115,31 @@ describe("ReaderCreateDocumentForm", () => {
       autoExtractTitle: false
     });
     expect(onCreated).not.toHaveBeenCalled();
+  });
+
+  it("refreshes the directory after extracting a ZIP instead of opening an extracted document", async () => {
+    const { importDocuments, onFolderImported, onDocumentImported } = setup();
+    importDocuments.mockResolvedValue({
+      totalCount: 2,
+      successCount: 2,
+      failedCount: 0,
+      items: [{
+        sourceName: "notes.md", sourcePath: "项目/notes.md", detectedType: "markdown",
+        status: "success", stage: "done", createdDocumentId: "archive-doc"
+      }],
+      failureItems: [],
+      createdNodes: [{ nodeId: "archive-folder", title: "项目", type: "folder" }]
+    });
+    fireEvent.click(screen.getByRole("button", { name: "上传文件" }));
+    const file = new File(["fixture"], "项目.ZIP");
+    fireEvent.change(screen.getByLabelText("本地文件"), { target: { files: [file] } });
+    fireEvent.click(screen.getByRole("button", { name: "导入" }));
+
+    await waitFor(() => expect(onFolderImported).toHaveBeenCalledOnce());
+    expect(onDocumentImported).not.toHaveBeenCalled();
+    expect(importDocuments).toHaveBeenCalledWith({
+      spaceId: "space-1", targetNodeId: null, files: [file], autoExtractTitle: false
+    });
   });
 
   it("shows the single-file import failure without navigating away", async () => {

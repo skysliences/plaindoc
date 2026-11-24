@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"mime/multipart"
 	"os"
@@ -32,8 +33,9 @@ type workspaceFolderManifest struct {
 }
 
 type workspaceFolderImport struct {
-	files       []workspaceImportedSource
-	directories []string
+	files           []workspaceImportedSource
+	directories     []string
+	unimportedItems []workspaceImportItemResponse
 }
 
 func collectWorkspaceFolderImport(rawManifest string, headers []*multipart.FileHeader) (workspaceFolderImport, error) {
@@ -109,27 +111,90 @@ func collectWorkspaceFolderImport(rawManifest string, headers []*multipart.FileH
 		files:       make([]workspaceImportedSource, 0, len(headers)),
 		directories: make([]string, 0, len(directoryPaths)),
 	}
-	for dirPath := range directoryPaths {
-		folder.directories = append(folder.directories, dirPath)
-	}
-	// A parent path sorts before any of its descendants.
-	slices.Sort(folder.directories)
+	var zipEntryCount int
+	var zipExpandedBytes int64
 	for index, header := range headers {
+		filePath := manifest.Paths[index]
+		if isHiddenWorkspaceImportPath(filePath) {
+			folder.unimportedItems = append(folder.unimportedItems, skippedHiddenWorkspaceImportItem(filePath, false))
+			continue
+		}
 		content, err := readWorkspaceImportFileHeader(header)
 		if err != nil {
 			return workspaceFolderImport{}, err
 		}
-		filePath := manifest.Paths[index]
+		if detectWorkspaceImportType(filePath) == importDetectedTypeZIP {
+			parentDir := path.Dir(filePath)
+			archiveName := uniqueWorkspaceFolderArchiveName(filePath, directoryPaths, filePaths)
+			archive := workspaceZipImportState{entryCount: zipEntryCount, totalBytes: zipExpandedBytes}
+			err := expandWorkspaceImportZip(content, parentDir, archiveName, 0, &archive)
+			// Keep limits cumulative even when an archive's partial output is discarded.
+			zipEntryCount, zipExpandedBytes = archive.entryCount, archive.totalBytes
+			if err != nil {
+				folder.unimportedItems = append(folder.unimportedItems, workspaceImportItemResponse{
+					SourceName:   path.Base(filePath),
+					SourcePath:   filePath,
+					DetectedType: importDetectedTypeZIP,
+					Status:       importItemStatusFailed,
+					Stage:        importItemStageUnzipping,
+					ErrorMessage: "解压 ZIP 失败：" + err.Error(),
+				})
+				continue
+			}
+			for _, dir := range archive.containerDirs {
+				directoryPaths[dir] = struct{}{}
+			}
+			for _, dir := range archive.directories {
+				directoryPaths[dir] = struct{}{}
+			}
+			folder.files = append(folder.files, archive.files...)
+			folder.unimportedItems = append(folder.unimportedItems, archive.skippedItems...)
+			continue
+		}
 		folder.files = append(folder.files, workspaceImportedSource{
 			SourceName: path.Base(filePath),
 			SourcePath: filePath,
 			Content:    content,
 		})
 	}
+	for dirPath := range directoryPaths {
+		if isHiddenWorkspaceImportPath(dirPath) {
+			folder.unimportedItems = append(folder.unimportedItems, skippedHiddenWorkspaceImportItem(dirPath, true))
+			continue
+		}
+		folder.directories = append(folder.directories, dirPath)
+	}
+	// A parent path sorts before any of its descendants.
+	slices.Sort(folder.directories)
 	slices.SortFunc(folder.files, func(left, right workspaceImportedSource) int {
 		return strings.Compare(left.SourcePath, right.SourcePath)
 	})
+	slices.SortFunc(folder.unimportedItems, func(left, right workspaceImportItemResponse) int {
+		return strings.Compare(left.SourcePath, right.SourcePath)
+	})
 	return folder, nil
+}
+
+func uniqueWorkspaceFolderArchiveName(filePath string, directoryPaths, filePaths map[string]struct{}) string {
+	name := path.Base(filePath)
+	extension := path.Ext(name)
+	stem := strings.TrimSpace(strings.TrimSuffix(name, extension))
+	dir := path.Dir(filePath)
+	for suffix := 0; ; suffix++ {
+		candidate := name
+		if suffix > 0 {
+			candidate = fmt.Sprintf("%s (%d)%s", stem, suffix, extension)
+		}
+		extractedPath := workspaceZipContainerPath(dir, candidate)
+		if extractedPath == "" {
+			return candidate
+		}
+		_, directoryExists := directoryPaths[extractedPath]
+		_, fileExists := filePaths[extractedPath]
+		if !directoryExists && (!fileExists || detectWorkspaceImportType(extractedPath) == importDetectedTypeZIP) {
+			return candidate
+		}
+	}
 }
 
 func validWorkspaceFolderPart(part string) bool {
@@ -149,7 +214,7 @@ func (h *workspaceHandler) importWorkspaceFolder(
 		runtimeState.assetSourcesByPath[source.SourcePath] = source
 	}
 
-	items := make([]workspaceImportItemResponse, 0, len(folder.directories)+len(folder.files))
+	items := make([]workspaceImportItemResponse, 0, len(folder.directories)+len(folder.files)+len(folder.unimportedItems))
 	for _, dirPath := range folder.directories {
 		item := workspaceImportItemResponse{
 			SourceName:   path.Base(dirPath),
@@ -175,7 +240,7 @@ func (h *workspaceHandler) importWorkspaceFolder(
 		item.CreatedDocumentID = docID
 		items = append(items, finishWorkspaceFolderItem(item, err))
 	}
-	return items
+	return append(items, folder.unimportedItems...)
 }
 
 func finishWorkspaceFolderItem(item workspaceImportItemResponse, err error) workspaceImportItemResponse {
@@ -260,8 +325,6 @@ func (h *workspaceHandler) convertWorkspaceFolderFile(
 		}
 		conversion.ImportedFileKind = models.ImportedFileKindImage
 		conversion.ImageSource = imageSource
-	case importDetectedTypeZIP:
-		return workspaceImportConversionResult{}, errWorkspaceImportUnsupportedType
 	case importDetectedTypeMarkdown:
 		content, err := decodeWorkspaceFolderText(source.Content, true)
 		if err != nil {

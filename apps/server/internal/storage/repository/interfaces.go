@@ -383,10 +383,6 @@ type ReaderPageRepository interface {
 		documentID string,
 	) (*ReaderPageDocumentRecord, error)
 	SaveOfficePreview(ctx context.Context, documentID string, contentVersion int, sourceBlobID, renderedHTML string, renderedAt time.Time) (bool, error)
-	ListSpaceDocumentIDs(
-		ctx context.Context,
-		spaceID string,
-	) ([]string, error)
 	ListTreeNodesBySpaceID(
 		ctx context.Context,
 		spaceID string,

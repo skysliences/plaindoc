@@ -2878,7 +2878,8 @@ export default function App() {
         }
         const firstImportedDocumentID =
           result.createdNodes.find((item) => item.type === "doc" && item.documentId)?.documentId ?? null;
-        if (!input.folderManifest && firstImportedDocumentID) {
+        const archiveOnly = input.files.every((file) => /\.zip$/i.test(file.name));
+        if (!input.folderManifest && !archiveOnly && firstImportedDocumentID) {
           void handleOpenWorkspaceDocument(firstImportedDocumentID);
         }
         setStatusMessage(

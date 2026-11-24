@@ -7,6 +7,7 @@ import type { TreeNode, WorkspaceGateway } from "../data-access";
 import { formatError } from "../editor/status-utils";
 import { validateDocumentIdentifier } from "./document-identifier";
 import { FolderUploadPicker, getWorkspaceFolderName, type FolderUploadSelection } from "./FolderUploadPicker";
+import { isHiddenWorkspaceName } from "./workspace-node-name";
 
 interface ReaderCreateDocumentFormProps {
   spaceId: string;
@@ -138,6 +139,10 @@ export function ReaderCreateDocumentForm({
       setError(`请输入${nameLabel}`);
       return;
     }
+    if (isHiddenWorkspaceName(normalizedTitle)) {
+      setError(`${nameLabel}不能以点号开头。`);
+      return;
+    }
     if ([...normalizedTitle].length > 255) {
       setError(`${nameLabel}长度不能超过 255 个字符`);
       return;
@@ -179,6 +184,7 @@ export function ReaderCreateDocumentForm({
   const uploadFolderMode = mode === "upload-folder";
   const uploadFileMode = mode === "upload-file";
   const uploadMode = uploadFolderMode || uploadFileMode;
+  const selectedArchive = uploadFileMode && selectedFile !== null && /\.zip$/i.test(selectedFile.name);
 
   async function importSelection() {
     const selection = uploadFolderMode ? folderSelection : selectedFile ? { files: [selectedFile] } : null;
@@ -193,7 +199,7 @@ export function ReaderCreateDocumentForm({
         autoExtractTitle: false
       });
       if (result.failedCount === 0) {
-        if (uploadFolderMode) {
+        if (uploadFolderMode || selectedArchive) {
           onFolderImported();
           return;
         }
@@ -281,16 +287,21 @@ export function ReaderCreateDocumentForm({
                 ref={fileInputRef}
                 className="hidden"
                 type="file"
-                accept=".docx,.xlsx"
+                accept=".docx,.xlsx,.zip"
                 aria-label="本地文件"
                 disabled={controlsDisabled}
                 onChange={(event) => {
                   const file = event.currentTarget.files?.[0];
                   event.currentTarget.value = "";
                   if (!file) return;
-                  if (!/\.(docx|xlsx)$/i.test(file.name)) {
+                  if (isHiddenWorkspaceName(file.name)) {
                     setSelectedFile(null);
-                    setError("请选择 Word（.docx）或 Excel（.xlsx）文件。");
+                    setError("点号开头的文件不会上传。");
+                    return;
+                  }
+                  if (!/\.(docx|xlsx|zip)$/i.test(file.name)) {
+                    setSelectedFile(null);
+                    setError("请选择 Word（.docx）、Excel（.xlsx）或 ZIP 文件。");
                     return;
                   }
                   setSelectedFile(file);
@@ -303,7 +314,7 @@ export function ReaderCreateDocumentForm({
                 {selectedFile ? "更换文件" : "选择文件"}
               </Button>
               <p className={`m-0 min-w-0 ${selectedFile ? "break-all text-sm text-slate-700" : "text-center text-xs text-slate-600"}`}>
-                {selectedFile ? selectedFile.name : "支持 Word（.docx）和 Excel（.xlsx）。"}
+                {selectedFile ? selectedFile.name : "支持 Word、Excel 和 ZIP。ZIP 会解压到同名目录。"}
               </p>
             </div>
           ) : (

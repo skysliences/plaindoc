@@ -422,7 +422,9 @@ CREATE TABLE spaces (
 	if err := db.Exec(`
 CREATE TABLE nodes (
   node_id TEXT PRIMARY KEY,
-  space_id TEXT
+  space_id TEXT,
+  parent_node_id TEXT,
+  title TEXT NOT NULL DEFAULT ''
 )`).Error; err != nil {
 		return err
 	}

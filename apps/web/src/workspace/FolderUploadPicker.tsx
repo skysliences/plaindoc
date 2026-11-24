@@ -2,6 +2,7 @@ import { FolderUp } from "lucide-react";
 import { useEffect, useRef, useState, type DragEvent } from "react";
 import { toast } from "sonner";
 import type { WorkspaceFolderManifest } from "../data-access";
+import { isHiddenWorkspaceName } from "./workspace-node-name";
 
 export interface FolderUploadSelection {
   files: File[];
@@ -32,6 +33,7 @@ async function readFolderSelection(root: FileSystemDirectoryEntry, signal: Abort
         if (signal.aborted) {
           return;
         }
+        if (isHiddenWorkspaceName(entry.name)) continue;
         const entryPath = `${path}/${entry.name}`;
         if (entry.isDirectory) {
           await readDirectory(entry as FileSystemDirectoryEntry, entryPath);
@@ -72,6 +74,10 @@ export function FolderUploadPicker({ disabled, onSelect }: FolderUploadPickerPro
     const entries = Array.from(event.dataTransfer.items).map((item) => item.webkitGetAsEntry?.());
     if (entries.length !== 1 || !entries[0]?.isDirectory) {
       toast.error("请拖入一个文件夹");
+      return;
+    }
+    if (isHiddenWorkspaceName(entries[0].name)) {
+      toast.error("点号开头的文件夹不会上传");
       return;
     }
 
@@ -117,7 +123,26 @@ export function FolderUploadPicker({ disabled, onSelect }: FolderUploadPickerPro
             toast.error("未读取到文件。可以把空文件夹拖到选择按钮上。");
             return;
           }
-          onSelect({ files, folderManifest: { paths } });
+          const rootName = getWorkspaceFolderName({ paths });
+          if (isHiddenWorkspaceName(rootName)) {
+            toast.error("点号开头的文件夹不会上传");
+            return;
+          }
+          const visibleFiles: File[] = [];
+          const folderManifest: WorkspaceFolderManifest = { paths: [] };
+          const visibleDirectories = new Set<string>();
+          for (const [index, path] of paths.entries()) {
+            const parts = path.split("/");
+            const hiddenIndex = parts.findIndex(isHiddenWorkspaceName);
+            if (hiddenIndex >= 0) {
+              if (hiddenIndex > 0) visibleDirectories.add(parts.slice(0, hiddenIndex).join("/"));
+              continue;
+            }
+            visibleFiles.push(files[index]);
+            folderManifest.paths.push(path);
+          }
+          if (visibleDirectories.size) folderManifest.directories = [...visibleDirectories];
+          onSelect({ files: visibleFiles, folderManifest });
         }}
       />
       <button

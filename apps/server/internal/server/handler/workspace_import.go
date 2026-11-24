@@ -107,6 +107,15 @@ type workspaceImportedSource struct {
 	Content    []byte
 }
 
+type workspaceImportBatch struct {
+	archiveRoot  string
+	archiveRoots []string
+	emptyDirs    []string
+	sources      []workspaceImportedSource
+	assetSources []workspaceImportedSource
+	skippedItems []workspaceImportItemResponse
+}
+
 type workspaceImportRuntime struct {
 	spaceID                       string
 	actorUserID                   string
@@ -119,6 +128,7 @@ type workspaceImportRuntime struct {
 	createdLogicalDirectoryByPath map[string]string
 	createdReadmeNodeByDir        map[string]string
 	directoryReadmeSourcePath     map[string]string
+	archiveBoundaries             map[string]struct{}
 	importableChildDirsByDir      map[string][]string
 	assetSourcesByPath            map[string]workspaceImportedSource
 	localizedImageURLBySource     map[string]string
@@ -270,7 +280,7 @@ func (h *workspaceHandler) ImportDocuments(c *gin.Context) {
 		return
 	}
 
-	sources, assetSources, skippedItems, err := h.collectWorkspaceImportedSources(fileHeaders)
+	batches, err := h.collectWorkspaceImportedSources(fileHeaders)
 	if err != nil {
 		setRequestErrmsg(c, err, "收集导入源文件失败")
 		switch {
@@ -285,45 +295,91 @@ func (h *workspaceHandler) ImportDocuments(c *gin.Context) {
 		}
 		return
 	}
-	for _, source := range assetSources {
-		runtimeState.assetSourcesByPath[source.SourcePath] = source
+	items := make([]workspaceImportItemResponse, 0)
+	for _, batch := range batches {
+		items = append(items, h.importWorkspaceBatch(c.Request.Context(), &runtimeState, batch)...)
+	}
+	response.JSON(c, http.StatusOK, buildWorkspaceImportResponse(items, runtimeState.createdNodes))
+}
+
+func (h *workspaceHandler) importWorkspaceBatch(
+	ctx context.Context,
+	runtimeState *workspaceImportRuntime,
+	batch workspaceImportBatch,
+) []workspaceImportItemResponse {
+	// An archive is a separate source tree. A root README or absolute image link
+	// in one upload must not affect another upload in the same request.
+	scope := *runtimeState
+	scope.createdDirectoryByPath = make(map[string]string)
+	scope.createdLogicalDirectoryByPath = make(map[string]string)
+	scope.createdReadmeNodeByDir = make(map[string]string)
+	scope.directoryReadmeSourcePath = make(map[string]string)
+	scope.archiveBoundaries = make(map[string]struct{}, len(batch.archiveRoots))
+	scope.assetSourcesByPath = make(map[string]workspaceImportedSource)
+	scope.localizedImageURLBySource = make(map[string]string)
+
+	items := batch.skippedItems
+	if batch.archiveRoot != "" {
+		item := h.importWorkspaceBatchDirectory(ctx, &scope, batch.archiveRoot, batch.archiveRoot)
+		items = append(items, item)
+		if item.CreatedNodeID == nil {
+			return items
+		}
+		scope.rootParentID = item.CreatedNodeID
+		clear(scope.createdDirectoryByPath)
+	}
+
+	directories := append(batch.archiveRoots, batch.emptyDirs...)
+	sort.Strings(directories)
+	for _, directory := range directories {
+		items = append(items, h.importWorkspaceBatchDirectory(ctx, &scope, directory, path.Join(batch.archiveRoot, directory)))
+	}
+	for _, directory := range batch.archiveRoots {
+		scope.archiveBoundaries[directory] = struct{}{}
+	}
+	for _, source := range batch.assetSources {
+		scope.assetSourcesByPath[source.SourcePath] = source
 		if isWorkspaceImportReadmeSourcePath(source.SourcePath) {
 			dirPath := normalizeWorkspaceImportDirPath(path.Dir(source.SourcePath))
-			runtimeState.directoryReadmeSourcePath[dirPath] = source.SourcePath
+			scope.directoryReadmeSourcePath[dirPath] = source.SourcePath
 		}
 	}
-	runtimeState.importableChildDirsByDir = buildWorkspaceImportChildDirIndex(sources)
+	scope.importableChildDirsByDir = buildWorkspaceImportChildDirIndex(batch.sources)
 
-	items := make([]workspaceImportItemResponse, 0, len(sources)+len(skippedItems))
-	items = append(items, skippedItems...)
-	sortWorkspaceImportedSources(sources)
-
-	for _, source := range sources {
+	sortWorkspaceImportedSources(batch.sources)
+	for _, source := range batch.sources {
 		item := workspaceImportItemResponse{
 			SourceName:   source.SourceName,
-			SourcePath:   source.SourcePath,
+			SourcePath:   path.Join(batch.archiveRoot, source.SourcePath),
 			DetectedType: detectWorkspaceImportType(source.SourcePath),
-			Status:       importItemStatusFailed,
 			Stage:        importItemStageParsing,
 		}
-		createdNodeID, createdDocID, processErr := h.processWorkspaceImportSource(c.Request.Context(), &runtimeState, source, &item)
-		if createdNodeID != nil {
-			item.CreatedNodeID = createdNodeID
-		}
-		if createdDocID != nil {
-			item.CreatedDocumentID = createdDocID
-		}
-		if processErr != nil {
-			item.ErrorMessage = strings.TrimSpace(processErr.Error())
-			items = append(items, item)
-			continue
-		}
-		item.Status = importItemStatusSuccess
-		item.Stage = importItemStageDone
-		items = append(items, item)
+		var err error
+		item.CreatedNodeID, item.CreatedDocumentID, err = h.processWorkspaceImportSource(ctx, &scope, source, &item)
+		items = append(items, finishWorkspaceFolderItem(item, err))
 	}
 
-	response.JSON(c, http.StatusOK, buildWorkspaceImportResponse(items, runtimeState.createdNodes))
+	runtimeState.createdNodes = scope.createdNodes
+	return items
+}
+
+func (h *workspaceHandler) importWorkspaceBatchDirectory(
+	ctx context.Context,
+	runtimeState *workspaceImportRuntime,
+	directory string,
+	sourcePath string,
+) workspaceImportItemResponse {
+	item := workspaceImportItemResponse{
+		SourceName:   path.Base(directory),
+		SourcePath:   sourcePath,
+		DetectedType: importDetectedTypeDirectory,
+		Stage:        importItemStageCreatingFolder,
+	}
+	nodeID, err := h.ensureWorkspaceImportDirectory(ctx, runtimeState, directory)
+	if err == nil {
+		item.CreatedNodeID = &nodeID
+	}
+	return finishWorkspaceFolderItem(item, err)
 }
 
 func buildWorkspaceImportResponse(items []workspaceImportItemResponse, createdNodes []workspaceImportCreatedNodeResponse) workspaceImportResponse {
@@ -383,13 +439,11 @@ func (h *workspaceHandler) resolveWorkspaceImportParentID(
 	return &node.NodeID, nil
 }
 
-func (h *workspaceHandler) collectWorkspaceImportedSources(
-	fileHeaders []*multipart.FileHeader,
-) ([]workspaceImportedSource, []workspaceImportedSource, []workspaceImportItemResponse, error) {
-	sources := make([]workspaceImportedSource, 0, len(fileHeaders))
-	assetSources := make([]workspaceImportedSource, 0, len(fileHeaders))
-	skippedItems := make([]workspaceImportItemResponse, 0)
-	state := workspaceZipImportState{}
+func (h *workspaceHandler) collectWorkspaceImportedSources(fileHeaders []*multipart.FileHeader) ([]workspaceImportBatch, error) {
+	var regular workspaceImportBatch
+	var archives []workspaceImportBatch
+	var entryCount int
+	var totalBytes int64
 
 	for _, fileHeader := range fileHeaders {
 		if fileHeader == nil {
@@ -399,59 +453,130 @@ func (h *workspaceHandler) collectWorkspaceImportedSources(
 		if fileName == "" {
 			fileName = "未命名文件"
 		}
-		content, err := readWorkspaceImportFileHeader(fileHeader)
-		if err != nil {
-			return nil, nil, nil, err
+		// The multipart parser may strip directory segments from FileHeader.Filename.
+		_, parameters, _ := mime.ParseMediaType(fileHeader.Header.Get("Content-Disposition"))
+		originalPath := strings.TrimSpace(parameters["filename"])
+		if originalPath == "" {
+			originalPath = fileName
+		}
+		if isHiddenWorkspaceImportPath(originalPath) {
+			sourcePath := strings.ReplaceAll(originalPath, "\\", "/")
+			regular.skippedItems = append(regular.skippedItems, skippedHiddenWorkspaceImportItem(sourcePath, false))
+			continue
 		}
 		normalizedPath := sanitizeWorkspaceImportPath(fileName)
 		if normalizedPath == "" {
 			normalizedPath = "未命名文件"
 		}
+		content, err := readWorkspaceImportFileHeader(fileHeader)
+		if err != nil {
+			return nil, err
+		}
 		if detectWorkspaceImportType(normalizedPath) == importDetectedTypeZIP {
-			if err := expandWorkspaceImportZip(content, path.Dir(normalizedPath), path.Base(normalizedPath), 0, &state); err != nil {
-				return nil, nil, nil, err
+			archive := workspaceZipImportState{entryCount: entryCount, totalBytes: totalBytes}
+			archiveName := path.Base(normalizedPath)
+			if err := expandWorkspaceImportZip(content, "", archiveName, 0, &archive); err != nil {
+				return nil, err
 			}
+			entryCount, totalBytes = archive.entryCount, archive.totalBytes
+			archives = append(archives, prepareWorkspaceImportArchive(workspaceZipContainerPath("", archiveName), archive))
 			continue
 		}
-		state.files = append(state.files, workspaceImportedSource{
+		regular.addSource(workspaceImportedSource{
 			SourceName: path.Base(normalizedPath),
 			SourcePath: normalizedPath,
 			Content:    content,
 		})
 	}
 
-	assetSources = append(assetSources, state.files...)
-	for _, file := range state.files {
-		switch detectWorkspaceImportType(file.SourcePath) {
-		case importDetectedTypeUnsupported, importDetectedTypeZIP, importDetectedTypeImage:
-			skippedItems = append(skippedItems, workspaceImportItemResponse{
-				SourceName:   file.SourceName,
-				SourcePath:   file.SourcePath,
-				DetectedType: detectWorkspaceImportType(file.SourcePath),
-				Status:       importItemStatusSkipped,
-				Stage:        importItemStageParsing,
-				ErrorMessage: "当前文件类型不会作为文档直接导入",
-			})
-		default:
-			sources = append(sources, file)
+	return append([]workspaceImportBatch{regular}, archives...), nil
+}
+
+func (batch *workspaceImportBatch) addSource(source workspaceImportedSource) {
+	batch.assetSources = append(batch.assetSources, source)
+	detectedType := detectWorkspaceImportType(source.SourcePath)
+	switch detectedType {
+	case importDetectedTypeUnsupported, importDetectedTypeZIP, importDetectedTypeImage:
+		batch.skippedItems = append(batch.skippedItems, workspaceImportItemResponse{
+			SourceName:   source.SourceName,
+			SourcePath:   path.Join(batch.archiveRoot, source.SourcePath),
+			DetectedType: detectedType,
+			Status:       importItemStatusSkipped,
+			Stage:        importItemStageParsing,
+			ErrorMessage: "当前文件类型不会作为文档直接导入",
+		})
+	default:
+		batch.sources = append(batch.sources, source)
+	}
+}
+
+func prepareWorkspaceImportArchive(root string, archive workspaceZipImportState) workspaceImportBatch {
+	batch := workspaceImportBatch{archiveRoot: root, skippedItems: archive.skippedItems}
+	files := trimWorkspaceImportedSourcePaths(archive.files, root)
+	for _, file := range files {
+		batch.addSource(file)
+	}
+
+	// Keep the legacy trimming of common wrapper directories inside the archive,
+	// while treating each ZIP container as a real directory.
+	trimPrefix := detectWorkspaceImportRootTrimPrefix(batch.sources)
+	for _, directory := range archive.containerDirs {
+		if directory == root {
+			continue
+		}
+		relative := trimWorkspaceImportTrimmedPath(directory, root)
+		if trimPrefix == relative || strings.HasPrefix(trimPrefix, relative+"/") {
+			trimPrefix = normalizeWorkspaceImportDirPath(path.Dir(relative))
+		}
+		batch.archiveRoots = append(batch.archiveRoots, relative)
+	}
+	batch.assetSources = trimWorkspaceImportedSourcePaths(batch.assetSources, trimPrefix)
+	batch.sources = trimWorkspaceImportedSourcePaths(batch.sources, trimPrefix)
+
+	occupiedDirs := make(map[string]struct{})
+	markParents := func(directory string) {
+		for ; directory != "." && directory != ""; directory = path.Dir(directory) {
+			occupiedDirs[directory] = struct{}{}
 		}
 	}
-	trimPrefix := detectWorkspaceImportRootTrimPrefix(sources)
-	if trimPrefix != "" {
-		assetSources = trimWorkspaceImportedSourcePaths(assetSources, trimPrefix)
-		sources = trimWorkspaceImportedSourcePaths(sources, trimPrefix)
-		for index := range skippedItems {
-			skippedItems[index].SourcePath = trimWorkspaceImportTrimmedPath(skippedItems[index].SourcePath, trimPrefix)
-			skippedItems[index].SourceName = path.Base(skippedItems[index].SourcePath)
-		}
+	for _, file := range files {
+		markParents(path.Dir(file.SourcePath))
 	}
-	return sources, assetSources, skippedItems, nil
+	for index, directory := range batch.archiveRoots {
+		markParents(directory)
+		batch.archiveRoots[index] = trimWorkspaceImportTrimmedPath(directory, trimPrefix)
+	}
+	for _, directory := range archive.directories {
+		relative := trimWorkspaceImportTrimmedPath(directory, root)
+		if _, occupied := occupiedDirs[relative]; occupied || relative == trimPrefix ||
+			strings.HasPrefix(trimPrefix, relative+"/") {
+			continue
+		}
+		batch.emptyDirs = append(batch.emptyDirs, trimWorkspaceImportTrimmedPath(relative, trimPrefix))
+	}
+	return batch
 }
 
 type workspaceZipImportState struct {
-	files      []workspaceImportedSource
-	entryCount int
-	totalBytes int64
+	files         []workspaceImportedSource
+	directories   []string
+	containerDirs []string
+	skippedItems  []workspaceImportItemResponse
+	entryCount    int
+	totalBytes    int64
+}
+
+func workspaceZipContainerPath(parentDir, fileName string) string {
+	extension := path.Ext(fileName)
+	if !strings.EqualFold(extension, ".zip") {
+		return ""
+	}
+	containerName := strings.TrimSpace(strings.TrimSuffix(fileName, extension))
+	if !utf8.ValidString(containerName) || !validWorkspaceFolderPart(containerName) ||
+		strings.ContainsAny(containerName, "/:") || models.IsHiddenWorkspaceName(containerName) {
+		return ""
+	}
+	return path.Join(parentDir, containerName)
 }
 
 func expandWorkspaceImportZip(
@@ -464,20 +589,18 @@ func expandWorkspaceImportZip(
 	if depth > workspaceImportMaxZipRecursionDepth {
 		return fmt.Errorf("%w: nested zip depth exceeds limit", errWorkspaceImportZipPathInvalid)
 	}
+	baseDir := workspaceZipContainerPath(parentDir, fileName)
+	if baseDir == "" {
+		return errWorkspaceImportZipPathInvalid
+	}
 	reader, err := zip.NewReader(bytes.NewReader(content), int64(len(content)))
+	if errors.Is(err, zip.ErrInsecurePath) {
+		return errWorkspaceImportZipPathInvalid
+	}
 	if err != nil {
 		return err
 	}
-
-	containerDir := strings.TrimSpace(strings.TrimSuffix(fileName, path.Ext(fileName)))
-	baseDir := strings.Trim(strings.TrimSpace(parentDir), "/")
-	if containerDir != "" && depth > 0 {
-		if baseDir == "" {
-			baseDir = containerDir
-		} else {
-			baseDir = path.Join(baseDir, containerDir)
-		}
-	}
+	state.containerDirs = append(state.containerDirs, baseDir)
 
 	for _, zipFile := range reader.File {
 		state.entryCount++
@@ -488,12 +611,37 @@ func expandWorkspaceImportZip(
 		if err != nil {
 			return err
 		}
+		mode := zipFile.Mode()
+		isDirectory = isDirectory || mode.IsDir()
+		if isHiddenWorkspaceImportPath(zipFile.Name) || isHiddenWorkspaceImportPath(normalizedEntryPath) {
+			state.skippedItems = append(state.skippedItems, skippedHiddenWorkspaceImportItem(normalizedEntryPath, isDirectory))
+			continue
+		}
+		if !mode.IsRegular() && !mode.IsDir() {
+			state.skippedItems = append(state.skippedItems, workspaceImportItemResponse{
+				SourceName:   path.Base(normalizedEntryPath),
+				SourcePath:   normalizedEntryPath,
+				DetectedType: importDetectedTypeUnsupported,
+				Status:       importItemStatusSkipped,
+				Stage:        importItemStageUnzipping,
+				ErrorMessage: "已跳过压缩包中的特殊文件",
+			})
+			continue
+		}
 		if isDirectory {
+			if normalizedEntryPath != baseDir {
+				state.directories = append(state.directories, normalizedEntryPath)
+			}
 			continue
 		}
-		if normalizedEntryPath == "" {
-			continue
+		if zipFile.UncompressedSize64 > workspaceImportMaxFileSizeBytes {
+			return errWorkspaceImportFileTooLarge
 		}
+		remainingBytes := workspaceImportMaxZipExpandedBytes - state.totalBytes
+		if remainingBytes < 0 || zipFile.UncompressedSize64 > uint64(remainingBytes) {
+			return errWorkspaceImportZipExpandedTooBig
+		}
+		state.totalBytes += int64(zipFile.UncompressedSize64)
 
 		fileReader, err := zipFile.Open()
 		if err != nil {
@@ -503,10 +651,6 @@ func expandWorkspaceImportZip(
 		_ = fileReader.Close()
 		if readErr != nil {
 			return readErr
-		}
-		state.totalBytes += int64(len(entryContent))
-		if state.totalBytes > workspaceImportMaxZipExpandedBytes {
-			return errWorkspaceImportZipExpandedTooBig
 		}
 		if detectWorkspaceImportType(normalizedEntryPath) == importDetectedTypeZIP {
 			if err := expandWorkspaceImportZip(entryContent, path.Dir(normalizedEntryPath), path.Base(normalizedEntryPath), depth+1, state); err != nil {
@@ -525,25 +669,49 @@ func expandWorkspaceImportZip(
 
 func normalizeWorkspaceImportZipEntryPath(baseDir string, rawPath string) (string, bool, error) {
 	normalized := strings.ReplaceAll(strings.TrimSpace(rawPath), "\\", "/")
-	normalized = strings.TrimPrefix(normalized, "/")
-	if normalized == "" {
+	if normalized == "" || !utf8.ValidString(normalized) || strings.HasPrefix(normalized, "/") || strings.ContainsRune(normalized, ':') {
 		return "", false, errWorkspaceImportZipPathInvalid
 	}
 	isDirectory := strings.HasSuffix(normalized, "/")
-	cleaned := path.Clean(strings.TrimSuffix(normalized, "/"))
-	if cleaned == "." || cleaned == "" || strings.HasPrefix(cleaned, "../") || strings.Contains(cleaned, "/../") {
+	parts := make([]string, 0)
+	for _, segment := range strings.Split(normalized, "/") {
+		if segment == "" || segment == "." {
+			continue
+		}
+		if !validWorkspaceFolderPart(segment) {
+			return "", false, errWorkspaceImportZipPathInvalid
+		}
+		parts = append(parts, segment)
+	}
+	if len(parts) > workspaceImportMaxZipDirectoryDepth || (len(parts) == 0 && !isDirectory) {
 		return "", false, errWorkspaceImportZipPathInvalid
 	}
-	if strings.Contains(cleaned, ":") {
-		return "", false, errWorkspaceImportZipPathInvalid
+	return path.Join(baseDir, strings.Join(parts, "/")), isDirectory, nil
+}
+
+// Hidden directories also hide their descendants, even if an archive does not list a directory entry.
+func isHiddenWorkspaceImportPath(rawPath string) bool {
+	for _, segment := range strings.Split(strings.ReplaceAll(rawPath, "\\", "/"), "/") {
+		if segment != "." && segment != ".." && models.IsHiddenWorkspaceName(segment) {
+			return true
+		}
 	}
-	if strings.Count(cleaned, "/") >= workspaceImportMaxZipDirectoryDepth {
-		return "", false, errWorkspaceImportZipPathInvalid
+	return false
+}
+
+func skippedHiddenWorkspaceImportItem(sourcePath string, isDirectory bool) workspaceImportItemResponse {
+	detectedType := detectWorkspaceImportType(sourcePath)
+	if isDirectory {
+		detectedType = importDetectedTypeDirectory
 	}
-	if strings.TrimSpace(baseDir) != "" {
-		cleaned = path.Join(strings.Trim(baseDir, "/"), cleaned)
+	return workspaceImportItemResponse{
+		SourceName:   path.Base(sourcePath),
+		SourcePath:   sourcePath,
+		DetectedType: detectedType,
+		Status:       importItemStatusSkipped,
+		Stage:        importItemStageParsing,
+		ErrorMessage: "已跳过隐藏文件或文件夹",
 	}
-	return cleaned, isDirectory, nil
 }
 
 func readWorkspaceImportFileHeader(fileHeader *multipart.FileHeader) ([]byte, error) {
@@ -1041,7 +1209,7 @@ func (h *workspaceHandler) resolveWorkspaceImportDirectoryContainerNodeID(
 ) (*string, error) {
 	normalizedDirPath := normalizeWorkspaceImportDirPath(dirPath)
 	normalizedLookupDirPath := normalizeWorkspaceImportDirPath(readmeLookupDirPath)
-	if readmeDirPath, readmePath, hasReadme := findWorkspaceImportNearestReadmeDir(runtimeState.directoryReadmeSourcePath, normalizedLookupDirPath); hasReadme {
+	if readmeDirPath, readmePath, hasReadme := findWorkspaceImportNearestReadmeDir(runtimeState.directoryReadmeSourcePath, runtimeState.archiveBoundaries, normalizedLookupDirPath); hasReadme {
 		readmeNodeID, exists := runtimeState.createdReadmeNodeByDir[readmeDirPath]
 		if !exists || strings.TrimSpace(readmeNodeID) == "" {
 			return nil, fmt.Errorf("readme container is not ready for %s", readmePath)
@@ -1094,6 +1262,7 @@ func (h *workspaceHandler) resolveWorkspaceImportDirectoryContainerNodeID(
 
 func findWorkspaceImportNearestReadmeDir(
 	readmeSourcePathByDir map[string]string,
+	archiveBoundaries map[string]struct{},
 	dirPath string,
 ) (string, string, bool) {
 	currentDirPath := normalizeWorkspaceImportDirPath(dirPath)
@@ -1101,7 +1270,8 @@ func findWorkspaceImportNearestReadmeDir(
 		if readmePath, exists := readmeSourcePathByDir[currentDirPath]; exists {
 			return currentDirPath, readmePath, true
 		}
-		if currentDirPath == "" {
+		_, archiveRoot := archiveBoundaries[currentDirPath]
+		if currentDirPath == "" || archiveRoot {
 			break
 		}
 		parentDirPath := parentWorkspaceImportDirPath(currentDirPath)
@@ -1172,7 +1342,10 @@ func (h *workspaceHandler) convertWorkspaceImportSource(
 			return workspaceImportConversionResult{}, err
 		}
 		if runtimeState.autoExtractTitle {
-			title = extractWorkspaceImportMarkdownTitle(content, title)
+			extracted := extractWorkspaceImportMarkdownTitle(content, title)
+			if !models.IsHiddenWorkspaceName(extracted) {
+				title = extracted
+			}
 		}
 		content, err = h.rewriteWorkspaceImportMarkdownImageSources(ctx, runtimeState, source.SourcePath, content)
 		if err != nil {
@@ -1201,7 +1374,10 @@ func (h *workspaceHandler) convertWorkspaceImportSource(
 			return workspaceImportConversionResult{}, err
 		}
 		if runtimeState.autoExtractTitle {
-			title = extractWorkspaceImportHTMLTitle(content, title)
+			extracted := extractWorkspaceImportHTMLTitle(content, title)
+			if !models.IsHiddenWorkspaceName(extracted) {
+				title = extracted
+			}
 		}
 		cleanHTML, err := h.normalizeWorkspaceImportedHTML(ctx, runtimeState, source.SourcePath, content)
 		if err != nil {
