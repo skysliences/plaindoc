@@ -63,6 +63,28 @@ describe("createHttpAdapter administrator authenticator reset", () => {
   });
 });
 
+describe("createHttpAdapter workspace file download", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("reads original bytes and the upload filename and rejects a denied request", async () => {
+    const contents = new Uint8Array([0, 255, 2, 13]);
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response(contents, { headers: {
+        "Content-Type": "application/octet-stream",
+        "Content-Disposition": "attachment; filename*=UTF-8''%E5%8E%9F%E6%96%87.bin"
+      } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ code: 4003, message: "没有下载权限" }), { status: 403 }));
+    const gateway = createHttpAdapter({ baseUrl: "https://api.example.test/api" });
+
+    const original = await gateway.workspace.downloadImportedOriginal("original-doc");
+    expect(original.fileName).toBe("原文.bin");
+    expect(new Uint8Array(await original.blob.arrayBuffer())).toEqual(contents);
+    expect(fetchMock).toHaveBeenCalledWith("https://api.example.test/api/docs/original-doc/imported-original",
+      expect.objectContaining({ credentials: "include" }));
+    await expect(gateway.workspace.downloadImportedOriginal("original-doc")).rejects.toThrow("没有下载权限");
+  });
+});
+
 class FakeEventSource {
   static instances: FakeEventSource[] = [];
 

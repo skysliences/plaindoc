@@ -193,6 +193,7 @@ describe("renderSpaceReader", () => {
           type: "doc",
           title: "备份.zip",
           importedFileKind: "unsupported",
+          importedOriginalDownloadUrl: "/api/docs/unreadable-file/imported-original",
           sort: 1,
           children: []
         }
@@ -209,7 +210,9 @@ describe("renderSpaceReader", () => {
     expect(unsupportedFile?.textContent).toContain("备份.zip");
     expect(unsupportedFile?.querySelector('svg.lucide-file')).not.toBeNull();
     expect(unsupportedFile?.closest('[data-reader-doc-link]')).toBeNull();
-    expect(reader.querySelector('dialog[data-reader-unsupported-file-dialog]')?.textContent).toContain("无法打开文件");
+    expect(unsupportedFile?.getAttribute("data-reader-original-download")).toBe("/api/docs/unreadable-file/imported-original");
+    expect(reader.querySelector('dialog[data-reader-unsupported-file-dialog]')?.textContent).toContain("文件无法打开");
+    expect(reader.querySelector('[data-reader-original-download-action]')?.hasAttribute("hidden")).toBe(true);
   });
 
   it("shows imported plain text without interpreting its heading or HTML", () => {

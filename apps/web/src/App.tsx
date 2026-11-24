@@ -64,6 +64,7 @@ import { ResetPasswordPanel } from "./components/ResetPasswordPanel";
 import { ReaderCreateDocumentForm } from "./workspace/ReaderCreateDocumentForm";
 import { WorkspaceHome, getSpaceManagementParentOrigin, isSpaceManagementFrame } from "./workspace/WorkspaceHome";
 import { WorkspaceSidebar } from "./components/WorkspaceSidebar";
+import { readContentDispositionFileName } from "./data-access/http/content-disposition";
 import { WorkspaceImagePane } from "./components/WorkspaceImagePane";
 import { ThemeMenu } from "./components/ThemeMenu";
 import { TocMenu } from "./components/TocMenu";
@@ -663,36 +664,6 @@ function readStoredAccessToken(): string | null {
   }
 }
 
-function decodeAttachmentFileName(value: string): string {
-  try {
-    return decodeURIComponent(value);
-  } catch {
-    return value;
-  }
-}
-
-function resolveAttachmentFileNameFromContentDisposition(
-  contentDisposition: string | null
-): string | null {
-  if (!contentDisposition) {
-    return null;
-  }
-
-  const encodedMatch = /filename\*=UTF-8''([^;]+)/i.exec(contentDisposition);
-  if (encodedMatch?.[1]) {
-    const decodedName = decodeAttachmentFileName(encodedMatch[1].trim());
-    return decodedName || null;
-  }
-
-  const plainMatch = /filename=\"?([^\";]+)\"?/i.exec(contentDisposition);
-  if (plainMatch?.[1]) {
-    const fileName = plainMatch[1].trim();
-    return fileName || null;
-  }
-
-  return null;
-}
-
 function resolveAttachmentAccessURL(rawURL: string): string {
   const normalizedURL = rawURL.trim();
   if (!normalizedURL) {
@@ -784,7 +755,7 @@ async function fetchAttachmentBlobWithAuth(resourceURL: string): Promise<{
     throw new Error(`附件访问失败（${response.status}）`);
   }
   const blob = await response.blob();
-  const fileName = resolveAttachmentFileNameFromContentDisposition(
+  const fileName = readContentDispositionFileName(
     response.headers.get("Content-Disposition")
   );
   return { blob, fileName };
@@ -2877,7 +2848,7 @@ export default function App() {
           return result;
         }
         const firstImportedDocumentID =
-          result.createdNodes.find((item) => item.type === "doc" && item.documentId)?.documentId ?? null;
+          result.createdNodes.find((item) => item.type === "doc" && item.importedFileKind !== "unsupported" && item.documentId)?.documentId ?? null;
         const archiveOnly = input.files.every((file) => /\.zip$/i.test(file.name));
         if (!input.folderManifest && !archiveOnly && firstImportedDocumentID) {
           void handleOpenWorkspaceDocument(firstImportedDocumentID);
@@ -3676,8 +3647,8 @@ export default function App() {
         onDocumentImported={(documentId) => window.parent.postMessage({
           type: "plaindoc:reader-document-imported", documentId, spaceId: route.spaceId
         }, readerCreateParentOrigin)}
-        onFolderImported={() => window.parent.postMessage({
-          type: "plaindoc:reader-folder-imported", spaceId: route.spaceId
+        onFolderImported={(nodeId) => window.parent.postMessage({
+          type: "plaindoc:reader-folder-imported", spaceId: route.spaceId, nodeId
         }, readerCreateParentOrigin)}
         onFolderCreated={(nodeId) => window.parent.postMessage({
           type: "plaindoc:reader-folder-created", spaceId: route.spaceId, nodeId
@@ -4012,6 +3983,7 @@ export default function App() {
                 activeDocId={activeDocId}
                 officeCreationEnabled={!isOnlyOfficeConfigLoading && onlyOfficeConfig.enabled}
                 workspaceTree={workspaceTree}
+                downloadImportedOriginal={dataGateway.workspace.downloadImportedOriginal}
                 onOpenDocument={handleOpenWorkspaceDocument}
                 onCreateNode={handleCreateWorkspaceNode}
                 onImportDocuments={handleImportWorkspaceDocuments}

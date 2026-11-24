@@ -163,6 +163,7 @@ interface WorkspaceTreeProps {
   activeDocId: string | null;
   officeCreationEnabled: boolean;
   onOpenDocument: (docId: string) => Promise<void>;
+  onOpenUnsupportedFile: (node: TreeNode) => void;
   onCreateNode: (input: {
     parentId: string | null;
     type: NodeType;
@@ -560,6 +561,7 @@ export const WorkspaceTree = memo(function WorkspaceTree({
   activeDocId,
   officeCreationEnabled,
   onOpenDocument,
+  onOpenUnsupportedFile,
   onCreateNode,
   onImportDocuments,
   onListDocumentTemplates,
@@ -1148,7 +1150,7 @@ export const WorkspaceTree = memo(function WorkspaceTree({
       }
       setOpenActionNodeId(null);
       if (currentNode.importedFileKind === "unsupported") {
-        toast.error("无法打开此文件");
+        onOpenUnsupportedFile(currentNode);
         return;
       }
       const documentID = resolveTreeDocumentId(currentNode);
@@ -1159,7 +1161,7 @@ export const WorkspaceTree = memo(function WorkspaceTree({
         // 上层会统一更新状态与路由，这里吞掉 Promise rejection 避免控制台噪音。
       });
     },
-    [draftNodeByID, nodeById, onOpenDocument]
+    [draftNodeByID, nodeById, onOpenDocument, onOpenUnsupportedFile]
   );
 
   const handlePrimaryAction = useCallback(
@@ -1422,9 +1424,15 @@ export const WorkspaceTree = memo(function WorkspaceTree({
         toast.error(`导入完成，存在 ${result.failedCount} 个失败项`);
       }
       const targetNodeId = importDialog.targetNodeId;
-      if (targetNodeId && result.createdNodes.length > 0) {
+      const directoriesToExpand = targetNodeId && result.createdNodes.length ? [targetNodeId] : [];
+      if (importDialog.mode === "files" && importDialog.files.some((file) => /\.zip$/i.test(file.name))) {
+        for (const node of result.createdNodes) {
+          if (node.type === "folder" && (node.parentId ?? null) === targetNodeId) directoriesToExpand.push(node.nodeId);
+        }
+      }
+      if (directoriesToExpand.length) {
         setManuallyExpandedNodeIds((previousNodeIds) =>
-          previousNodeIds.includes(targetNodeId) ? previousNodeIds : [...previousNodeIds, targetNodeId]
+          [...new Set([...previousNodeIds, ...directoriesToExpand])]
         );
       }
     } catch (error) {
@@ -1904,6 +1912,7 @@ export const WorkspaceTree = memo(function WorkspaceTree({
             <InteractiveComponent
               type={interactiveType}
               {...treeInteractiveElementProps}
+              aria-haspopup={isUnsupportedFile && !isInlineEditing ? "dialog" : undefined}
               onClick={
                 !isInlineEditing && currentNode?.type === "doc"
                   ? (event: MouseEvent<HTMLElement>) => {
@@ -2357,7 +2366,7 @@ export const WorkspaceTree = memo(function WorkspaceTree({
                     <p className="mt-1 mb-0 text-[12px] text-[#64748b]">
                       {isFolderImport
                         ? "保留原来的文件名和目录结构。"
-                        : "支持 docx、xlsx、md、txt、html 和 zip。ZIP 会解压到同名目录。"}
+                        : "ZIP 会解压到同名目录。"}
                     </p>
                   </div>
                   {isFolderImport ? (
@@ -2372,7 +2381,7 @@ export const WorkspaceTree = memo(function WorkspaceTree({
                         type="file"
                         multiple
                         className="hidden"
-                        accept=".md,.markdown,.txt,.html,.htm,.docx,.xlsx,.zip"
+                        aria-label="导入文件"
                         onChange={(event) => {
                           handleImportDialogFileSelection(event.target.files);
                           event.target.value = "";

@@ -235,9 +235,10 @@ func (h *workspaceHandler) importWorkspaceFolder(
 			DetectedType: detectWorkspaceImportType(source.SourcePath),
 			Stage:        importItemStageCreatingFolder,
 		}
-		nodeID, docID, err := h.importWorkspaceFolderFile(ctx, runtimeState, source, &item)
-		item.CreatedNodeID = nodeID
-		item.CreatedDocumentID = docID
+		parentID, err := h.ensureWorkspaceImportDirectory(ctx, runtimeState, path.Dir(source.SourcePath))
+		if err == nil {
+			item.CreatedNodeID, item.CreatedDocumentID, err = h.importWorkspaceFileAtParent(ctx, runtimeState, &parentID, source, &item)
+		}
 		items = append(items, finishWorkspaceFolderItem(item, err))
 	}
 	return append(items, folder.unimportedItems...)
@@ -254,23 +255,17 @@ func finishWorkspaceFolderItem(item workspaceImportItemResponse, err error) work
 	return item
 }
 
-func (h *workspaceHandler) importWorkspaceFolderFile(
+func (h *workspaceHandler) importWorkspaceFileAtParent(
 	ctx context.Context,
 	runtimeState *workspaceImportRuntime,
+	parentID *string,
 	source workspaceImportedSource,
 	item *workspaceImportItemResponse,
 ) (*string, *string, error) {
-	parentID, err := h.ensureWorkspaceImportDirectory(ctx, runtimeState, path.Dir(source.SourcePath))
-	if err != nil {
-		return nil, nil, err
-	}
 	item.Stage = importItemStageConverting
 	conversion, err := h.convertWorkspaceFolderFile(ctx, runtimeState, source, item.DetectedType)
 	if errors.Is(err, errWorkspaceImportUnsupportedType) || errors.Is(err, errWorkspaceImportTextEncoding) {
-		item.DetectedType = importDetectedTypeUnsupported
-		item.Stage = importItemStageCreatingDocument
-		nodeID, createErr := h.createWorkspaceImportedUnsupportedFile(ctx, runtimeState, &parentID, source.SourceName)
-		return nodeID, nil, createErr
+		return h.createWorkspaceImportedUnsupportedFile(ctx, runtimeState, parentID, source, item)
 	}
 	if err != nil {
 		return nil, nil, err
@@ -278,9 +273,9 @@ func (h *workspaceHandler) importWorkspaceFolderFile(
 	item.Stage = importItemStageCreatingDocument
 	item.DetectedType = conversion.DetectedType
 	if models.IsOfficeDocumentFormat(conversion.Format) {
-		return h.createWorkspaceImportedOfficeDocument(ctx, runtimeState, &parentID, conversion, source.SourcePath)
+		return h.createWorkspaceImportedOfficeDocument(ctx, runtimeState, parentID, conversion, source.SourcePath)
 	}
-	nodeID, docID, err := h.createWorkspaceImportedMarkdownDocument(ctx, runtimeState, &parentID, conversion, source.SourcePath)
+	nodeID, docID, err := h.createWorkspaceImportedMarkdownDocument(ctx, runtimeState, parentID, conversion, source.SourcePath)
 	if err != nil && conversion.ImageSource != nil {
 		if cleanupErr := os.Remove(conversion.ImageSource.localPath); cleanupErr != nil && !errors.Is(cleanupErr, os.ErrNotExist) {
 			slog.WarnContext(ctx, "清理未写入文档的导入图片失败", "err", cleanupErr)
@@ -302,15 +297,9 @@ func (h *workspaceHandler) convertWorkspaceFolderFile(
 	}
 	switch detectedType {
 	case importDetectedTypeDOCX, importDetectedTypeXLSX:
-		if !workspaceFolderOfficePackageReadable(source.Content, detectedType) {
-			return workspaceImportConversionResult{}, errWorkspaceImportUnsupportedType
-		}
 		converted, err := h.convertWorkspaceImportSource(ctx, runtimeState, source)
 		if err != nil {
-			if ctx.Err() != nil {
-				return workspaceImportConversionResult{}, ctx.Err()
-			}
-			return workspaceImportConversionResult{}, errWorkspaceImportUnsupportedType
+			return workspaceImportConversionResult{}, err
 		}
 		converted.Title = source.SourceName
 		return converted, nil
@@ -326,7 +315,7 @@ func (h *workspaceHandler) convertWorkspaceFolderFile(
 		conversion.ImportedFileKind = models.ImportedFileKindImage
 		conversion.ImageSource = imageSource
 	case importDetectedTypeMarkdown:
-		content, err := decodeWorkspaceFolderText(source.Content, true)
+		content, err := decodeWorkspaceReadableText(source.Content, true)
 		if err != nil {
 			return workspaceImportConversionResult{}, err
 		}
@@ -340,7 +329,7 @@ func (h *workspaceHandler) convertWorkspaceFolderFile(
 		if !supported {
 			return workspaceImportConversionResult{}, errWorkspaceImportUnsupportedType
 		}
-		content, err := decodeWorkspaceFolderText(source.Content, knownText)
+		content, err := decodeWorkspaceReadableText(source.Content, knownText)
 		if err != nil {
 			return workspaceImportConversionResult{}, err
 		}
@@ -351,7 +340,7 @@ func (h *workspaceHandler) convertWorkspaceFolderFile(
 	return conversion, nil
 }
 
-func workspaceFolderOfficePackageReadable(content []byte, detectedType string) bool {
+func workspaceImportOfficePackageReadable(content []byte, detectedType string) bool {
 	reader, err := zip.NewReader(bytes.NewReader(content), int64(len(content)))
 	if err != nil || len(reader.File) > workspaceImportMaxZipEntryCount {
 		return false
@@ -394,7 +383,7 @@ func workspaceFolderTextType(name string) (knownText bool, supported bool) {
 	return false, true
 }
 
-func decodeWorkspaceFolderText(raw []byte, knownText bool) (string, error) {
+func decodeWorkspaceReadableText(raw []byte, knownText bool) (string, error) {
 	if len(raw) == 0 && !knownText {
 		return "", errWorkspaceImportTextEncoding
 	}
@@ -439,14 +428,21 @@ func (h *workspaceHandler) createWorkspaceImportedUnsupportedFile(
 	ctx context.Context,
 	runtimeState *workspaceImportRuntime,
 	parentID *string,
-	fileName string,
-) (*string, error) {
+	source workspaceImportedSource,
+	item *workspaceImportItemResponse,
+) (*string, *string, error) {
+	item.DetectedType = importDetectedTypeUnsupported
+	item.Stage = importItemStageCreatingDocument
 	maxSort, err := h.workspaceRepo.GetMaxNodeSort(ctx, runtimeState.spaceID, parentID)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
+	}
+	original, err := h.stageWorkspaceImportedFile(ctx, "application/octet-stream", source.Content, models.ImportedOriginalObjectPrefix, "", runtimeState.now)
+	if err != nil {
+		return nil, nil, err
 	}
 	nodeID := strings.ToLower(ulid.Make().String())
-	title := ensureWorkspaceImportUniqueTitle(runtimeState.existingSiblingTitles, parentID, fileName)
+	title := ensureWorkspaceImportUniqueTitle(runtimeState.existingSiblingTitles, parentID, source.SourceName)
 	node := &models.Node{
 		NodeID:           nodeID,
 		SpaceID:          runtimeState.spaceID,
@@ -460,12 +456,35 @@ func (h *workspaceHandler) createWorkspaceImportedUnsupportedFile(
 		CreatedAt:        runtimeState.now,
 		UpdatedAt:        runtimeState.now,
 	}
+	// Attach a document identity so existing user permissions can govern downloads.
+	document := &models.Document{
+		DocumentID:      nodeID,
+		NodeID:          nodeID,
+		ThemeID:         "default",
+		Visibility:      runtimeState.defaultDocumentVisibility,
+		Status:          models.EntityStatusActive,
+		Title:           title,
+		Format:          models.DocumentFormatMarkdown,
+		Version:         1,
+		ContentVersion:  1,
+		CreatedByUserID: &runtimeState.actorUserID,
+		UpdatedByUserID: &runtimeState.actorUserID,
+		CreatedAt:       runtimeState.now,
+		UpdatedAt:       runtimeState.now,
+	}
+	attachment := buildWorkspaceImportedFileAttachment(nodeID, source.SourceName, documentAttachmentPreviewKindNone, runtimeState, original.blob, runtimeState.now)
 	if err := h.workspaceRepo.CreateNode(ctx, repository.WorkspaceCreateNodeParams{
-		Node:       node,
-		TouchSpace: runtimeState.spaceID,
-		TouchedAt:  runtimeState.now,
+		Node:           node,
+		Document:       document,
+		AttachmentBlob: original.blob,
+		Attachment:     attachment,
+		TouchSpace:     runtimeState.spaceID,
+		TouchedAt:      runtimeState.now,
 	}); err != nil {
-		return nil, err
+		if cleanupErr := os.Remove(original.localPath); cleanupErr != nil && !errors.Is(cleanupErr, os.ErrNotExist) {
+			slog.WarnContext(ctx, "清理未登记的导入原文件失败", "err", cleanupErr)
+		}
+		return nil, nil, err
 	}
 	runtimeState.createdNodes = append(runtimeState.createdNodes, workspaceImportCreatedNodeResponse{
 		NodeID:           nodeID,
@@ -474,5 +493,5 @@ func (h *workspaceHandler) createWorkspaceImportedUnsupportedFile(
 		Type:             models.NodeTypeDoc,
 		ImportedFileKind: models.ImportedFileKindUnsupported,
 	})
-	return &nodeID, nil
+	return &nodeID, nil, nil
 }

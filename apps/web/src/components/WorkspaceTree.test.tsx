@@ -79,6 +79,7 @@ function createProps(overrides?: {
   onGetDocumentTemplate?: (templateId: string) => Promise<DocumentTemplateDetail>;
 }) {
   const onOpenDocument = vi.fn<(docId: string) => Promise<void>>().mockResolvedValue(undefined);
+  const onOpenUnsupportedFile = vi.fn<(node: TreeNode) => void>();
   const onCreateNode =
     overrides?.onCreateNode ??
     vi.fn<
@@ -168,6 +169,7 @@ function createProps(overrides?: {
     activeDocId: overrides?.activeDocId ?? null,
     officeCreationEnabled: overrides?.officeCreationEnabled ?? false,
     onOpenDocument,
+    onOpenUnsupportedFile,
     onCreateNode,
     onImportDocuments,
     onListDocumentTemplates,
@@ -470,7 +472,7 @@ describe("WorkspaceTree", () => {
     });
   });
 
-  it("opens import dialog and forwards selected files", async () => {
+  it("opens the import dialog and forwards a file without preview support", async () => {
     const onImportDocuments = vi
       .fn<
         (input: {
@@ -485,24 +487,22 @@ describe("WorkspaceTree", () => {
         failedCount: 0,
         items: [
           {
-            sourceName: "demo.txt",
-            sourcePath: "demo.txt",
-            detectedType: "text",
+            sourceName: "demo.bin",
+            sourcePath: "demo.bin",
+            detectedType: "unsupported",
             status: "success",
             stage: "done",
-            createdNodeId: "node-imported",
-            createdDocumentId: "doc-imported"
+            createdNodeId: "node-imported"
           }
         ],
         failureItems: [],
         createdNodes: [
           {
             nodeId: "node-imported",
-            documentId: "doc-imported",
             parentId: "folder-1",
-            title: "demo",
+            title: "demo.bin",
             type: "doc",
-            format: "markdown"
+            importedFileKind: "unsupported"
           }
         ]
       });
@@ -527,11 +527,8 @@ describe("WorkspaceTree", () => {
     await user.click(screen.getByRole("menuitem", { name: "导入" }));
     await screen.findByRole("heading", { name: "导入" });
 
-    const fileInput = document.querySelector('input[type="file"][accept*=".docx"]') as HTMLInputElement | null;
-    if (!fileInput) {
-      throw new Error("import file input not found");
-    }
-    const file = new File(["hello"], "demo.txt", { type: "text/plain" });
+    const fileInput = screen.getByLabelText("导入文件");
+    const file = new File([new Uint8Array([0, 255])], "demo.bin");
     await user.upload(fileInput, file);
     await user.click(screen.getByRole("button", { name: "开始导入" }));
 
@@ -584,10 +581,7 @@ describe("WorkspaceTree", () => {
     await user.click(screen.getByRole("menuitem", { name: "导入" }));
     await screen.findByRole("heading", { name: "导入" });
 
-    const fileInput = document.querySelector('input[type="file"][accept*=".docx"]') as HTMLInputElement | null;
-    if (!fileInput) {
-      throw new Error("import file input not found");
-    }
+    const fileInput = screen.getByLabelText("导入文件");
     const file = new File(["# Title"], "demo.md", { type: "text/markdown" });
     await user.upload(fileInput, file);
     await user.click(screen.getByRole("checkbox", { name: /自动提取文件名/i }));
@@ -709,6 +703,8 @@ describe("WorkspaceTree", () => {
           spaceId: "space-1",
           type: "doc",
           importedFileKind: "unsupported",
+          documentId: "doc-unsupported",
+          importedOriginalDownloadUrl: "/api/docs/doc-unsupported/imported-original",
           title: "asset.bin",
           sort: 1,
           children: []
@@ -733,7 +729,10 @@ describe("WorkspaceTree", () => {
     await user.click(screen.getByText("资料"));
     await user.click(screen.getByText("asset.bin"));
     expect(screen.getByLabelText("不支持的文件")).toBeInTheDocument();
-    expect(toastErrorMock).toHaveBeenCalledWith("无法打开此文件");
+    expect(props.onOpenUnsupportedFile).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      documentId: "doc-unsupported",
+      importedOriginalDownloadUrl: "/api/docs/doc-unsupported/imported-original"
+    }));
     expect(props.onOpenDocument).not.toHaveBeenCalled();
 
     await user.click(screen.getByText("notes.txt"));

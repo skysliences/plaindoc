@@ -19,18 +19,19 @@ type ReaderPageService struct {
 }
 
 type readerTreeNode struct {
-	ImportedFileKind models.ImportedFileKind
-	ID               string
-	DocumentID       *string
-	ReaderSlug       *string
-	DocumentPath     *string
-	DocumentFormat   *models.DocumentFormat
-	ParentID         *string
-	Type             models.NodeType
-	Title            string
-	Sort             int
-	Visibility       *models.Visibility
-	Children         []*readerTreeNode
+	ImportedOriginalDownloadURL string
+	ImportedFileKind            models.ImportedFileKind
+	ID                          string
+	DocumentID                  *string
+	ReaderSlug                  *string
+	DocumentPath                *string
+	DocumentFormat              *models.DocumentFormat
+	ParentID                    *string
+	Type                        models.NodeType
+	Title                       string
+	Sort                        int
+	Visibility                  *models.Visibility
+	Children                    []*readerTreeNode
 }
 
 // NewReaderPageService 创建阅读页聚合服务。
@@ -84,7 +85,7 @@ func (s *ReaderPageService) ResolveLandingDocumentID(
 	hasLoginRequired := false
 	for _, row := range candidateRows {
 		documentID := normalizeReaderOptionalString(row.DocumentID)
-		if documentID == nil {
+		if documentID == nil || row.ImportedFileKind == models.ImportedFileKindUnsupported {
 			continue
 		}
 
@@ -182,7 +183,7 @@ func (s *ReaderPageService) BuildPage(
 		return ReaderPageViewModel{}, ErrDocumentNotFound
 	}
 
-	tree, err := s.loadTree(ctx, normalizedSpaceID, normalizedViewerUserID)
+	tree, err := s.loadTree(ctx, normalizedSpaceID, normalizedViewerUserID, space)
 	if err != nil {
 		return ReaderPageViewModel{}, err
 	}
@@ -283,7 +284,7 @@ func (s *ReaderPageService) BuildSpaceContext(
 		return ReaderSpaceViewModel{}, nil, err
 	}
 
-	tree, err := s.loadTree(ctx, normalizedSpaceID, normalizedViewerUserID)
+	tree, err := s.loadTree(ctx, normalizedSpaceID, normalizedViewerUserID, space)
 	if err != nil {
 		return ReaderSpaceViewModel{}, nil, err
 	}
@@ -363,7 +364,7 @@ func (s *ReaderPageService) loadVisibleTreeRows(
 
 func (s *ReaderPageService) loadTree(
 	ctx context.Context,
-	spaceID string, viewerUserID string,
+	spaceID, viewerUserID string, originalFileScope *models.Space,
 ) ([]ReaderTreeNodeViewModel, error) {
 	rows, err := s.loadVisibleTreeRows(ctx, spaceID)
 	if err != nil {
@@ -380,6 +381,7 @@ func (s *ReaderPageService) loadTree(
 	}
 
 	treeNodes := make(map[string]*readerTreeNode, len(rows))
+	originalFiles := make(map[string]models.Visibility)
 	for _, row := range rows {
 		nodeID := strings.TrimSpace(row.NodeID)
 		if nodeID == "" {
@@ -394,7 +396,10 @@ func (s *ReaderPageService) loadTree(
 		documentVisibility := normalizeReaderDocumentVisibility(row.Type, row.DocumentVisibility)
 		documentFormat := normalizeReaderTreeDocumentFormat(row.Type, row.DocumentFormat)
 		if row.ImportedFileKind == models.ImportedFileKindUnsupported {
-			documentVisibility, documentFormat = nil, nil
+			if originalFileScope != nil && documentID != nil && documentVisibility != nil {
+				originalFiles[*documentID] = *documentVisibility
+			}
+			documentVisibility, documentFormat, readerSlug, documentPath = nil, nil, nil, nil
 		}
 		treeNodes[nodeID] = &readerTreeNode{
 			ID:               nodeID,
@@ -412,12 +417,22 @@ func (s *ReaderPageService) loadTree(
 		}
 	}
 
+	var urls map[string]string
+	if originalFileScope != nil {
+		urls, err = s.visibilityService.ImportedOriginalDownloadURLs(ctx, spaceID, originalFileScope.OwnerUserID, viewerUserID, originalFileScope.Visibility, originalFiles)
+		if err != nil {
+			return nil, err
+		}
+	}
 	roots := make([]*readerTreeNode, 0)
 	for _, row := range rows {
 		nodeID := strings.TrimSpace(row.NodeID)
 		node, ok := treeNodes[nodeID]
 		if !ok {
 			continue
+		}
+		if node.ImportedFileKind == models.ImportedFileKindUnsupported && node.DocumentID != nil {
+			node.ImportedOriginalDownloadURL = urls[*node.DocumentID]
 		}
 		parentID := normalizeReaderOptionalString(row.ParentNodeID)
 		if parentID == nil {
@@ -461,18 +476,19 @@ func mapReaderTreeNodes(nodes []*readerTreeNode) []ReaderTreeNodeViewModel {
 			continue
 		}
 		items = append(items, ReaderTreeNodeViewModel{
-			ID:                 node.ID,
-			DocumentID:         node.DocumentID,
-			DocumentIdentifier: node.ReaderSlug,
-			DocumentRouteKey:   node.DocumentPath,
-			DocumentFormat:     node.DocumentFormat,
-			ImportedFileKind:   node.ImportedFileKind,
-			ParentID:           node.ParentID,
-			Type:               normalizeReaderNodeType(node.Type),
-			Title:              node.Title,
-			Sort:               node.Sort,
-			Visibility:         node.Visibility,
-			Children:           mapReaderTreeNodes(node.Children),
+			ImportedOriginalDownloadURL: node.ImportedOriginalDownloadURL,
+			ID:                          node.ID,
+			DocumentID:                  node.DocumentID,
+			DocumentIdentifier:          node.ReaderSlug,
+			DocumentRouteKey:            node.DocumentPath,
+			DocumentFormat:              node.DocumentFormat,
+			ImportedFileKind:            node.ImportedFileKind,
+			ParentID:                    node.ParentID,
+			Type:                        normalizeReaderNodeType(node.Type),
+			Title:                       node.Title,
+			Sort:                        node.Sort,
+			Visibility:                  node.Visibility,
+			Children:                    mapReaderTreeNodes(node.Children),
 		})
 	}
 	return items
@@ -524,7 +540,7 @@ func (s *ReaderPageService) loadDocumentAttachments(
 
 	attachments := make([]ReaderDocumentAttachmentViewModel, 0, len(attachmentRows))
 	for _, item := range attachmentRows {
-		if models.IsImportedImageObjectKey(item.ObjectKey) {
+		if models.IsPrivateImportedAttachmentObjectKey(item.ObjectKey) {
 			continue
 		}
 		attachmentID := strings.TrimSpace(item.AttachmentID)

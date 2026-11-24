@@ -5,6 +5,8 @@
 **适用范围**: `apps/server`、`apps/web`、`docs`  
 **目标**: 在文档编辑器右侧子菜单增加“导入”能力，支持 `docx`、`xlsx`、`md`、`txt`、`html`、`zip` 导入；在启用 ONLYOFFICE 时优先保留 Office 原生格式，在未启用时统一转换为 Markdown 文档；支持 ZIP 目录结构恢复、`README.md` 作为目录父文档、空目录抑制、部分失败、失败清单回显、文本编码统一转 UTF-8，以及 Office 内嵌图片落地为 Markdown 图片引用。
 
+当前工作区支持任意格式文件导入，包括 ZIP 中的独立图片和正文图片素材。无法预览的条目保留原文件，并沿用文档权限校验下载。现行接口和界面以 [后端开发指南](BACKEND_DEVELOPER_GUIDE.md) 和 [前端开发指南](FRONTEND_DEVELOPER_GUIDE.md) 为准，以下保留早期设计记录。
+
 ---
 
 ## 1. 方案结论

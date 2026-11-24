@@ -424,6 +424,7 @@ CREATE TABLE nodes (
   node_id TEXT PRIMARY KEY,
   space_id TEXT,
   parent_node_id TEXT,
+  imported_file_kind TEXT NOT NULL DEFAULT '',
   title TEXT NOT NULL DEFAULT ''
 )`).Error; err != nil {
 		return err

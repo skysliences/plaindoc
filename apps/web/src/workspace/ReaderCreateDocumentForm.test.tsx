@@ -98,7 +98,6 @@ describe("ReaderCreateDocumentForm", () => {
     fireEvent.click(screen.getByRole("button", { name: "上传文件" }));
     const picker = screen.getByLabelText("本地文件");
     const submit = screen.getByRole("button", { name: "导入" });
-    expect(picker).toHaveAttribute("accept", ".docx,.xlsx,.zip");
     expect(submit).toBeDisabled();
     const file = new File(["fixture"], name);
     fireEvent.change(picker, { target: { files: [file] } });
@@ -115,6 +114,36 @@ describe("ReaderCreateDocumentForm", () => {
       autoExtractTitle: false
     });
     expect(onCreated).not.toHaveBeenCalled();
+  });
+
+  it("accepts an unsupported file and refreshes the destination folder without trying to open it", async () => {
+    const { importDocuments, onFolderImported, onDocumentImported } = setup();
+    const file = new File([new Uint8Array([0, 255])], "archive.bin");
+    importDocuments.mockResolvedValue({
+      totalCount: 1,
+      successCount: 1,
+      failedCount: 0,
+      items: [{
+        sourceName: file.name, sourcePath: file.name, detectedType: "unsupported",
+        status: "success", stage: "done", createdNodeId: "file-1"
+      }],
+      failureItems: [],
+      createdNodes: [{ nodeId: "file-1", parentId: folder.id, title: file.name, type: "doc", importedFileKind: "unsupported" }]
+    });
+    fireEvent.click(screen.getByRole("button", { name: "上传文件" }));
+    const picker = screen.getByLabelText("本地文件");
+    expect(picker).not.toHaveAttribute("accept");
+    fireEvent.change(picker, { target: { files: [file] } });
+    await screen.findByRole("option", { name: "项目" });
+    fireEvent.change(screen.getByLabelText("保存位置"), { target: { value: folder.id } });
+    fireEvent.click(screen.getByRole("button", { name: "导入" }));
+
+    await waitFor(() => expect(onFolderImported).toHaveBeenCalledWith(folder.id));
+    expect(importDocuments).toHaveBeenCalledWith({
+      spaceId: "space-1", targetNodeId: folder.id, files: [file], autoExtractTitle: false
+    });
+    expect(onDocumentImported).not.toHaveBeenCalled();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("refreshes the directory after extracting a ZIP instead of opening an extracted document", async () => {
@@ -135,7 +164,7 @@ describe("ReaderCreateDocumentForm", () => {
     fireEvent.change(screen.getByLabelText("本地文件"), { target: { files: [file] } });
     fireEvent.click(screen.getByRole("button", { name: "导入" }));
 
-    await waitFor(() => expect(onFolderImported).toHaveBeenCalledOnce());
+    await waitFor(() => expect(onFolderImported).toHaveBeenCalledWith("archive-folder"));
     expect(onDocumentImported).not.toHaveBeenCalled();
     expect(importDocuments).toHaveBeenCalledWith({
       spaceId: "space-1", targetNodeId: null, files: [file], autoExtractTitle: false

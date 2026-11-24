@@ -130,6 +130,7 @@ func (r *gormSearchIndexSourceRepository) baseActiveDocumentsQuery(ctx context.C
 		Table(tableWithAlias(models.Document{}, "d")).
 		Joins("JOIN "+tableName(models.Node{})+" AS n ON "+qualifiedColumn("n", models.NodeColumns.NodeID)+" = "+qualifiedColumn("d", models.DocumentColumns.NodeID)).
 		Joins("JOIN "+tableName(models.Space{})+" AS s ON "+qualifiedColumn("s", models.SpaceColumns.SpaceID)+" = "+qualifiedColumn("n", models.NodeColumns.SpaceID)).
+		Where(qualifiedColumn("n", models.NodeColumns.ImportedFileKind)+" <> ?", models.ImportedFileKindUnsupported).
 		Where(qualifiedColumn("s", models.SpaceColumns.Status)+" = ?", models.EntityStatusActive).
 		Where(qualifiedColumn("s", models.SpaceColumns.DeletedAt)+" IS NULL").
 		Where(qualifiedColumn("d", models.DocumentColumns.Status)+" = ?", models.EntityStatusActive).

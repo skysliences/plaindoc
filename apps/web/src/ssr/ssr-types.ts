@@ -5,6 +5,7 @@ export interface ReaderTreeNode {
   documentRouteKey?: string;
   documentFormat?: "markdown" | "docx" | "xlsx";
   importedFileKind?: "text" | "image" | "unsupported";
+  importedOriginalDownloadUrl?: string;
   parentId?: string | null;
   type: "folder" | "doc";
   title: string;

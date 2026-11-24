@@ -471,7 +471,7 @@ func (s *DocumentShareService) BuildReaderPageByRouteKey(
 		return DocumentSharePageResult{}, ErrDocumentShareNotFound
 	}
 
-	tree, err := readerSvc.loadTree(ctx, spaceID, viewerID)
+	tree, err := readerSvc.loadTree(ctx, spaceID, viewerID, nil)
 	if err != nil {
 		return DocumentSharePageResult{}, err
 	}
@@ -585,7 +585,7 @@ func (s *DocumentShareService) BuildAttachmentAccessURLByRouteKey(
 	}
 	if strings.TrimSpace(targetAttachment.DocumentID) != resolvedShare.DocumentID ||
 		targetAttachment.Status == models.EntityStatusDeleted ||
-		models.IsImportedImageObjectKey(targetAttachment.ObjectKey) {
+		models.IsPrivateImportedAttachmentObjectKey(targetAttachment.ObjectKey) {
 		return DocumentShareAttachmentAccessResult{}, ErrDocumentShareNotFound
 	}
 

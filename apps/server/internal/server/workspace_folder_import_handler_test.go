@@ -112,6 +112,7 @@ func TestRouter_ImportDocuments_FolderImagePreviewChecksDocumentAndShareAccess(t
 }
 
 func TestRouter_ImportDocuments_FolderPreservesTreeAndEditableText(t *testing.T) {
+	t.Chdir(t.TempDir())
 	database, serve := setupAuthTestRouter(t)
 	t.Cleanup(func() { _ = database.Close() })
 
@@ -128,13 +129,14 @@ func TestRouter_ImportDocuments_FolderPreservesTreeAndEditableText(t *testing.T)
 	}
 
 	rawText := "  # 保留首尾空白\n<b>文本</b>\n\n"
+	const invalidPNG = "\x89PNG\x00\xff"
 	sourcePaths := []string{"工作资料/README.md", "工作资料/子目录/记录.txt", "工作资料/子目录/图像.png"}
 	var body bytes.Buffer
 	form := multipart.NewWriter(&body)
 	if err := form.WriteField("folderManifest", `{"paths":["工作资料/README.md","工作资料/子目录/记录.txt","工作资料/子目录/图像.png"],"directories":["工作资料/空目录"]}`); err != nil {
 		t.Fatal(err)
 	}
-	for index, content := range []string{"# 欢迎", rawText, "\x89PNG\x00\xff"} {
+	for index, content := range []string{"# 欢迎", rawText, invalidPNG} {
 		part, err := form.CreateFormFile("files", path.Base(sourcePaths[index]))
 		if err != nil {
 			t.Fatal(err)
@@ -193,9 +195,10 @@ func TestRouter_ImportDocuments_FolderPreservesTreeAndEditableText(t *testing.T)
 	if plain.ImportedFileKind != "text" || plain.DocumentID == "" || plain.DocumentRouteKey == "" {
 		t.Fatalf("plain text is not openable: %+v", plain)
 	}
-	if unsupported.ImportedFileKind != "unsupported" || unsupported.Type != "doc" || unsupported.DocumentID != "" || unsupported.DocumentRouteKey != "" {
+	if unsupported.ImportedFileKind != "unsupported" || unsupported.Type != "doc" || unsupported.DocumentID != unsupported.ID || unsupported.DocumentRouteKey != "" {
 		t.Fatalf("unexpected unsupported node: %+v", unsupported)
 	}
+	assertWorkspaceImportedOriginal(t, database, unsupported.DocumentID, unsupported.Title, []byte(invalidPNG))
 	if rec := apiRequest(http.MethodGet, "/api/docs/"+unsupported.ID, ""); decodeJSONResultCode(t, rec.Body.Bytes()) == 0 {
 		t.Fatalf("unsupported file resolved as a document: %s", rec.Body.String())
 	}

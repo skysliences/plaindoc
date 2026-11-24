@@ -1,6 +1,5 @@
 import { ChevronRight, FileQuestionMark, FileSpreadsheet, FileText, Folder } from "lucide-react";
-import { memo } from "react";
-import { toast } from "sonner";
+import { memo, useState } from "react";
 import type {
   CreateNodeResult,
   DocumentFormat,
@@ -12,8 +11,10 @@ import type {
   TreeNode,
   UpdateDocumentShareInput,
   Visibility,
-  WorkspaceFolderManifest
+  WorkspaceFolderManifest,
+  WorkspaceGateway
 } from "../data-access";
+import { UnsupportedFileDialog } from "./UnsupportedFileDialog";
 import { WorkspaceTree } from "./WorkspaceTree";
 
 function containsDocument(nodes: TreeNode[], docId: string): boolean {
@@ -21,13 +22,17 @@ function containsDocument(nodes: TreeNode[], docId: string): boolean {
 }
 
 function EditableDocumentList({
-  nodes, activeDocId, onOpenDocument
-}: Pick<WorkspaceSidebarProps, "activeDocId" | "onOpenDocument"> & { nodes: TreeNode[] }) {
+  nodes, activeDocId, onOpenDocument, onOpenUnsupportedFile
+}: Pick<WorkspaceSidebarProps, "activeDocId" | "onOpenDocument"> & {
+  nodes: TreeNode[];
+  onOpenUnsupportedFile: (node: TreeNode) => void;
+}) {
   return (
     <ul className="space-y-1 pl-2">
       {nodes.map((node) => {
         const children = node.children.length > 0 ? (
-            <EditableDocumentList nodes={node.children} activeDocId={activeDocId} onOpenDocument={onOpenDocument} />
+            <EditableDocumentList nodes={node.children} activeDocId={activeDocId} onOpenDocument={onOpenDocument}
+              onOpenUnsupportedFile={onOpenUnsupportedFile} />
         ) : null;
 
         if (node.type === "folder") {
@@ -53,10 +58,11 @@ function EditableDocumentList({
               type="button"
               className="flex w-full items-center gap-2 rounded px-2 py-1.5 pl-[29px] text-left text-sm hover:bg-slate-200 aria-[current=true]:bg-slate-200"
               aria-current={!!node.documentId && activeDocId === node.documentId}
+              aria-haspopup={unsupported ? "dialog" : undefined}
               title={node.title}
               onClick={() => {
                 if (unsupported) {
-                  toast.error("无法打开此文件");
+                  onOpenUnsupportedFile(node);
                 } else if (node.documentId) {
                   void onOpenDocument(node.documentId);
                 }
@@ -80,6 +86,7 @@ interface WorkspaceSidebarProps {
   canCreateNodes: boolean;
   onCreateDocumentRequestHandled?: () => void;
   workspaceTree: TreeNode[];
+  downloadImportedOriginal: WorkspaceGateway["downloadImportedOriginal"];
   onOpenDocument: (docId: string) => Promise<void>;
   officeCreationEnabled: boolean;
   onCreateNode: (input: {
@@ -117,6 +124,7 @@ export const WorkspaceSidebar = memo(function WorkspaceSidebar({
   canCreateNodes,
   onCreateDocumentRequestHandled,
   workspaceTree,
+  downloadImportedOriginal,
   onOpenDocument,
   officeCreationEnabled,
   onCreateNode,
@@ -133,11 +141,14 @@ export const WorkspaceSidebar = memo(function WorkspaceSidebar({
   onMoveNode,
   activeDocId
 }: WorkspaceSidebarProps) {
+  const [unsupportedFile, setUnsupportedFile] = useState<TreeNode | null>(null);
   return (
     <aside
       className="flex h-full min-h-0 max-h-[230px] flex-col overflow-auto bg-[#f3f3f4] p-3 transition-opacity duration-150 md:max-h-none md:px-[10px] md:pt-2 md:pb-3"
       aria-label={`${activeSpaceName} 目录`}
     >
+      {unsupportedFile && <UnsupportedFileDialog file={unsupportedFile} downloadImportedOriginal={downloadImportedOriginal}
+        onClose={() => setUnsupportedFile(null)} />}
       {onOpenReaderDirectory ? (
         <div className="flex items-center justify-between gap-2 px-2 py-2">
           <h2 className="truncate text-sm font-semibold" title={activeSpaceName}>{activeSpaceName}</h2>
@@ -156,6 +167,7 @@ export const WorkspaceSidebar = memo(function WorkspaceSidebar({
         activeDocId={activeDocId}
         officeCreationEnabled={officeCreationEnabled}
         onOpenDocument={onOpenDocument}
+        onOpenUnsupportedFile={setUnsupportedFile}
         onCreateNode={onCreateNode}
         onImportDocuments={onImportDocuments}
         onListDocumentTemplates={onListDocumentTemplates}
@@ -168,7 +180,8 @@ export const WorkspaceSidebar = memo(function WorkspaceSidebar({
         onRenameNode={onRenameNode}
         onDeleteNode={onDeleteNode}
         onMoveNode={onMoveNode}
-      /> : <EditableDocumentList nodes={workspaceTree} activeDocId={activeDocId} onOpenDocument={onOpenDocument} />}
+      /> : <EditableDocumentList nodes={workspaceTree} activeDocId={activeDocId} onOpenDocument={onOpenDocument}
+        onOpenUnsupportedFile={setUnsupportedFile} />}
     </aside>
   );
 });

@@ -242,7 +242,13 @@ body:has(.reader-main[data-reader-editing="1"]) .reader-sidebar__create {
 }
 
 .reader-unsupported-file-dialog form {
-  text-align: right;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.reader-unsupported-file-dialog a[hidden] {
+  display: none;
 }
 
 .reader-sidebar__create:hover {

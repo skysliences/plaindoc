@@ -11,6 +11,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"path"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -112,6 +113,7 @@ type workspaceImportBatch struct {
 	archiveRoots []string
 	emptyDirs    []string
 	sources      []workspaceImportedSource
+	extraSources []workspaceImportedSource
 	assetSources []workspaceImportedSource
 	skippedItems []workspaceImportItemResponse
 }
@@ -138,7 +140,7 @@ type workspaceImportRuntime struct {
 
 type workspaceImportConversionResult struct {
 	ImportedFileKind models.ImportedFileKind
-	ImageSource      *workspaceFolderImageSource
+	ImageSource      *workspaceImportedFileSource
 	Format           models.DocumentFormat
 	Title            string
 	ContentMD        string
@@ -339,6 +341,8 @@ func (h *workspaceHandler) importWorkspaceBatch(
 	}
 	for _, source := range batch.assetSources {
 		scope.assetSourcesByPath[source.SourcePath] = source
+	}
+	for _, source := range batch.sources {
 		if isWorkspaceImportReadmeSourcePath(source.SourcePath) {
 			dirPath := normalizeWorkspaceImportDirPath(path.Dir(source.SourcePath))
 			scope.directoryReadmeSourcePath[dirPath] = source.SourcePath
@@ -356,6 +360,28 @@ func (h *workspaceHandler) importWorkspaceBatch(
 		}
 		var err error
 		item.CreatedNodeID, item.CreatedDocumentID, err = h.processWorkspaceImportSource(ctx, &scope, source, &item)
+		items = append(items, finishWorkspaceFolderItem(item, err))
+	}
+
+	// Import additional files after README containers have been created.
+	for directory := range scope.directoryReadmeSourcePath {
+		if _, created := scope.createdReadmeNodeByDir[directory]; !created {
+			delete(scope.directoryReadmeSourcePath, directory)
+		}
+	}
+	sortWorkspaceImportedSources(batch.extraSources)
+	for _, source := range batch.extraSources {
+		item := workspaceImportItemResponse{
+			SourceName:   source.SourceName,
+			SourcePath:   path.Join(batch.archiveRoot, source.SourcePath),
+			DetectedType: detectWorkspaceImportType(source.SourcePath),
+			Stage:        importItemStageParsing,
+		}
+		directory := path.Dir(source.SourcePath)
+		parentID, err := h.resolveWorkspaceImportDirectoryContainerNodeID(ctx, &scope, directory, directory, &item)
+		if err == nil {
+			item.CreatedNodeID, item.CreatedDocumentID, err = h.importWorkspaceFileAtParent(ctx, &scope, parentID, source, &item)
+		}
 		items = append(items, finishWorkspaceFolderItem(item, err))
 	}
 
@@ -494,17 +520,9 @@ func (h *workspaceHandler) collectWorkspaceImportedSources(fileHeaders []*multip
 
 func (batch *workspaceImportBatch) addSource(source workspaceImportedSource) {
 	batch.assetSources = append(batch.assetSources, source)
-	detectedType := detectWorkspaceImportType(source.SourcePath)
-	switch detectedType {
-	case importDetectedTypeUnsupported, importDetectedTypeZIP, importDetectedTypeImage:
-		batch.skippedItems = append(batch.skippedItems, workspaceImportItemResponse{
-			SourceName:   source.SourceName,
-			SourcePath:   path.Join(batch.archiveRoot, source.SourcePath),
-			DetectedType: detectedType,
-			Status:       importItemStatusSkipped,
-			Stage:        importItemStageParsing,
-			ErrorMessage: "当前文件类型不会作为文档直接导入",
-		})
+	switch detectWorkspaceImportType(source.SourcePath) {
+	case importDetectedTypeUnsupported, importDetectedTypeImage:
+		batch.extraSources = append(batch.extraSources, source)
 	default:
 		batch.sources = append(batch.sources, source)
 	}
@@ -520,6 +538,11 @@ func prepareWorkspaceImportArchive(root string, archive workspaceZipImportState)
 	// Keep the legacy trimming of common wrapper directories inside the archive,
 	// while treating each ZIP container as a real directory.
 	trimPrefix := detectWorkspaceImportRootTrimPrefix(batch.sources)
+	for _, source := range batch.extraSources {
+		for trimPrefix != "" && !strings.HasPrefix(source.SourcePath, trimPrefix+"/") {
+			trimPrefix = parentWorkspaceImportDirPath(trimPrefix)
+		}
+	}
 	for _, directory := range archive.containerDirs {
 		if directory == root {
 			continue
@@ -532,6 +555,7 @@ func prepareWorkspaceImportArchive(root string, archive workspaceZipImportState)
 	}
 	batch.assetSources = trimWorkspaceImportedSourcePaths(batch.assetSources, trimPrefix)
 	batch.sources = trimWorkspaceImportedSourcePaths(batch.sources, trimPrefix)
+	batch.extraSources = trimWorkspaceImportedSourcePaths(batch.extraSources, trimPrefix)
 
 	occupiedDirs := make(map[string]struct{})
 	markParents := func(directory string) {
@@ -981,7 +1005,9 @@ func computeWorkspaceImportLogicalSubdirPath(
 		if strings.TrimSpace(segment) == "" {
 			continue
 		}
-		if len(runtimeState.importableChildDirsByDir[currentDir]) > 1 {
+		documentChildDirs := runtimeState.importableChildDirsByDir[currentDir]
+		// Keep directories containing only additional files without changing the document layout.
+		if len(documentChildDirs) > 1 || !slices.Contains(documentChildDirs, segment) {
 			preservedSegments = append(preservedSegments, segment)
 		}
 		currentDir = joinWorkspaceImportDirPath(currentDir, segment)
@@ -1299,6 +1325,12 @@ func (h *workspaceHandler) processWorkspaceImportSource(
 
 	item.Stage = importItemStageConverting
 	conversion, err := h.convertWorkspaceImportSource(ctx, runtimeState, source)
+	if errors.Is(err, errWorkspaceImportUnsupportedType) || errors.Is(err, errWorkspaceImportTextEncoding) {
+		if isWorkspaceImportReadmeSourcePath(source.SourcePath) {
+			delete(runtimeState.directoryReadmeSourcePath, normalizeWorkspaceImportDirPath(path.Dir(source.SourcePath)))
+		}
+		return h.createWorkspaceImportedUnsupportedFile(ctx, runtimeState, parentNodeID, source, item)
+	}
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1335,9 +1367,10 @@ func (h *workspaceHandler) convertWorkspaceImportSource(
 		title = "未命名文档"
 	}
 
-	switch detectWorkspaceImportType(source.SourcePath) {
+	detectedType := detectWorkspaceImportType(source.SourcePath)
+	switch detectedType {
 	case importDetectedTypeMarkdown:
-		content, err := decodeWorkspaceImportText(source.Content)
+		content, err := decodeWorkspaceReadableText(source.Content, true)
 		if err != nil {
 			return workspaceImportConversionResult{}, err
 		}
@@ -1358,7 +1391,7 @@ func (h *workspaceHandler) convertWorkspaceImportSource(
 			DetectedType: importDetectedTypeMarkdown,
 		}, nil
 	case importDetectedTypeText:
-		content, err := decodeWorkspaceImportText(source.Content)
+		content, err := decodeWorkspaceReadableText(source.Content, true)
 		if err != nil {
 			return workspaceImportConversionResult{}, err
 		}
@@ -1369,7 +1402,7 @@ func (h *workspaceHandler) convertWorkspaceImportSource(
 			DetectedType: importDetectedTypeText,
 		}, nil
 	case importDetectedTypeHTML:
-		content, err := decodeWorkspaceImportText(source.Content)
+		content, err := decodeWorkspaceReadableText(source.Content, true)
 		if err != nil {
 			return workspaceImportConversionResult{}, err
 		}
@@ -1393,15 +1426,22 @@ func (h *workspaceHandler) convertWorkspaceImportSource(
 			ContentMD:    markdown,
 			DetectedType: importDetectedTypeHTML,
 		}, nil
-	case importDetectedTypeDOCX:
+	case importDetectedTypeDOCX, importDetectedTypeXLSX:
+		if !workspaceImportOfficePackageReadable(source.Content, detectedType) {
+			return workspaceImportConversionResult{}, errWorkspaceImportUnsupportedType
+		}
+		format, mimeType := models.DocumentFormatDOCX, officeDocumentMIMEDOCX
+		if detectedType == importDetectedTypeXLSX {
+			format, mimeType = models.DocumentFormatXLSX, officeDocumentMIMEXLSX
+		}
 		if runtimeState.onlyOfficeEnabled {
 			return workspaceImportConversionResult{
-				Format:         models.DocumentFormatDOCX,
+				Format:         format,
 				Title:          title,
 				SourceContent:  bytes.Clone(source.Content),
 				SourceFileName: path.Base(source.SourcePath),
-				SourceMimeType: officeDocumentMIMEDOCX,
-				DetectedType:   importDetectedTypeDOCX,
+				SourceMimeType: mimeType,
+				DetectedType:   detectedType,
 			}, nil
 		}
 		if h.officeHTMLRenderService == nil {
@@ -1409,13 +1449,16 @@ func (h *workspaceHandler) convertWorkspaceImportSource(
 		}
 		renderedHTML, err := h.officeHTMLRenderService.RenderImportHTML(
 			ctx,
-			models.DocumentFormatDOCX,
+			format,
 			source.Content,
 			runtimeState.spaceID,
 			"",
 		)
 		if err != nil {
-			return workspaceImportConversionResult{}, err
+			if ctx.Err() != nil {
+				return workspaceImportConversionResult{}, ctx.Err()
+			}
+			return workspaceImportConversionResult{}, fmt.Errorf("%w: %v", errWorkspaceImportUnsupportedType, err)
 		}
 		markdown, err := h.importMarkdownConverter.Convert(ctx, renderedHTML)
 		if err != nil {
@@ -1425,41 +1468,7 @@ func (h *workspaceHandler) convertWorkspaceImportSource(
 			Format:       models.DocumentFormatMarkdown,
 			Title:        title,
 			ContentMD:    markdown,
-			DetectedType: importDetectedTypeDOCX,
-		}, nil
-	case importDetectedTypeXLSX:
-		if runtimeState.onlyOfficeEnabled {
-			return workspaceImportConversionResult{
-				Format:         models.DocumentFormatXLSX,
-				Title:          title,
-				SourceContent:  bytes.Clone(source.Content),
-				SourceFileName: path.Base(source.SourcePath),
-				SourceMimeType: officeDocumentMIMEXLSX,
-				DetectedType:   importDetectedTypeXLSX,
-			}, nil
-		}
-		if h.officeHTMLRenderService == nil {
-			return workspaceImportConversionResult{}, errors.New("office html render service is unavailable")
-		}
-		renderedHTML, err := h.officeHTMLRenderService.RenderImportHTML(
-			ctx,
-			models.DocumentFormatXLSX,
-			source.Content,
-			runtimeState.spaceID,
-			"",
-		)
-		if err != nil {
-			return workspaceImportConversionResult{}, err
-		}
-		markdown, err := h.importMarkdownConverter.Convert(ctx, renderedHTML)
-		if err != nil {
-			return workspaceImportConversionResult{}, err
-		}
-		return workspaceImportConversionResult{
-			Format:       models.DocumentFormatMarkdown,
-			Title:        title,
-			ContentMD:    markdown,
-			DetectedType: importDetectedTypeXLSX,
+			DetectedType: detectedType,
 		}, nil
 	default:
 		return workspaceImportConversionResult{}, errWorkspaceImportUnsupportedType
@@ -1980,8 +1989,8 @@ func (h *workspaceHandler) createWorkspaceImportedMarkdownDocument(
 		}
 		if conversion.ImageSource != nil {
 			params.AttachmentBlob = conversion.ImageSource.blob
-			params.Attachment = buildWorkspaceFolderImageAttachment(
-				documentID, conversion.Title, runtimeState, conversion.ImageSource.blob, now,
+			params.Attachment = buildWorkspaceImportedFileAttachment(
+				documentID, conversion.Title, documentAttachmentPreviewKindImage, runtimeState, conversion.ImageSource.blob, now,
 			)
 		}
 		if err := h.workspaceRepo.CreateNode(ctx, params); err != nil {

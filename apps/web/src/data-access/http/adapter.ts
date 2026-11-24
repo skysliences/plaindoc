@@ -113,6 +113,7 @@ import {
   type WorkspaceGateway
 } from "../types";
 import { createIndexedDbUserConfigGateway } from "../user-config/indexeddb-gateway";
+import { readContentDispositionFileName } from "./content-disposition";
 
 interface HttpAdapterOptions {
   baseUrl: string;
@@ -583,6 +584,7 @@ export function createHttpAdapter(options: HttpAdapterOptions): DataGateway {
     optionsOverride?: {
       skipAuth?: boolean;
       retryOnUnauthorized?: boolean;
+      readSuccess?: (response: Response) => Promise<T>;
     }
   ): Promise<T> => {
     const skipAuth = optionsOverride?.skipAuth ?? false;
@@ -603,6 +605,9 @@ export function createHttpAdapter(options: HttpAdapterOptions): DataGateway {
       headers,
       credentials: init?.credentials ?? "include"
     });
+    if (response.ok && optionsOverride?.readSuccess) {
+      return optionsOverride.readSuccess(response);
+    }
     const rawBody = await response.text();
     const payload = parseResponsePayload(rawBody);
     const envelope = isJsonResultEnvelope(payload) ? payload : null;
@@ -618,7 +623,8 @@ export function createHttpAdapter(options: HttpAdapterOptions): DataGateway {
       if (refreshed) {
         return request<T>(path, init, {
           skipAuth: false,
-          retryOnUnauthorized: false
+          retryOnUnauthorized: false,
+          readSuccess: optionsOverride?.readSuccess
         });
       }
     }
@@ -957,6 +963,14 @@ export function createHttpAdapter(options: HttpAdapterOptions): DataGateway {
     },
     async getTree(spaceId: string) {
       return request<TreeNode[]>(`/spaces/${spaceId}/tree`);
+    },
+    async downloadImportedOriginal(docId: string) {
+      return request(`/docs/${encodeURIComponent(docId)}/imported-original`, undefined, {
+        readSuccess: async (response) => ({
+          blob: await response.blob(),
+          fileName: readContentDispositionFileName(response.headers.get("Content-Disposition"))
+        })
+      });
     },
     async createNode(input: CreateNodeInput) {
       const documentIdentifier =

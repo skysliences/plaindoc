@@ -17,7 +17,7 @@ interface ReaderCreateDocumentFormProps {
   onDocumentImported: (docId: string) => void;
   onCancel: () => void;
   onFolderCreated: (nodeId: string) => void;
-  onFolderImported: () => void;
+  onFolderImported: (nodeId?: string) => void;
 }
 
 const CREATE_MODES = [
@@ -200,13 +200,20 @@ export function ReaderCreateDocumentForm({
       });
       if (result.failedCount === 0) {
         if (uploadFolderMode || selectedArchive) {
-          onFolderImported();
+          const archiveFolder = selectedArchive
+            ? result.createdNodes.find((node) => node.type === "folder" && (node.parentId ?? "") === location)
+            : undefined;
+          onFolderImported(archiveFolder?.nodeId);
           return;
         }
-        const documentId = result.items.find((item) => item.status === "success")?.createdDocumentId
-          ?? result.createdNodes.find((node) => node.type === "doc")?.documentId;
+        const documentId = result.items.find((item) => item.status === "success" && item.detectedType !== "unsupported")?.createdDocumentId
+          ?? result.createdNodes.find((node) => node.type === "doc" && node.importedFileKind !== "unsupported")?.documentId;
         if (documentId) {
           onDocumentImported(documentId);
+          return;
+        }
+        if (result.createdNodes.length > 0) {
+          onFolderImported(location || undefined);
           return;
         }
       }
@@ -287,7 +294,6 @@ export function ReaderCreateDocumentForm({
                 ref={fileInputRef}
                 className="hidden"
                 type="file"
-                accept=".docx,.xlsx,.zip"
                 aria-label="本地文件"
                 disabled={controlsDisabled}
                 onChange={(event) => {
@@ -297,11 +303,6 @@ export function ReaderCreateDocumentForm({
                   if (isHiddenWorkspaceName(file.name)) {
                     setSelectedFile(null);
                     setError("点号开头的文件不会上传。");
-                    return;
-                  }
-                  if (!/\.(docx|xlsx|zip)$/i.test(file.name)) {
-                    setSelectedFile(null);
-                    setError("请选择 Word（.docx）、Excel（.xlsx）或 ZIP 文件。");
                     return;
                   }
                   setSelectedFile(file);
@@ -314,7 +315,7 @@ export function ReaderCreateDocumentForm({
                 {selectedFile ? "更换文件" : "选择文件"}
               </Button>
               <p className={`m-0 min-w-0 ${selectedFile ? "break-all text-sm text-slate-700" : "text-center text-xs text-slate-600"}`}>
-                {selectedFile ? selectedFile.name : "支持 Word、Excel 和 ZIP。ZIP 会解压到同名目录。"}
+                {selectedFile ? selectedFile.name : "ZIP 会解压到同名目录。"}
               </p>
             </div>
           ) : (

@@ -339,6 +339,7 @@ function ReaderTree({ nodes, spaceId, activeDocId, linkBasePath, depth = 0 }: Re
                 className={`${rowClassName} reader-tree__row--unsupported`}
                 data-reader-hook="tree-row"
                 data-reader-unsupported-file={title}
+                data-reader-original-download={node.importedOriginalDownloadUrl?.startsWith("/api/") ? node.importedOriginalDownloadUrl : undefined}
                 aria-haspopup="dialog"
                 style={rowStyle}
               >
@@ -1078,10 +1079,11 @@ export function renderSpaceReader(payload: ReaderPagePayload): SpaceReaderRender
               aria-labelledby="plaindoc-reader-unsupported-file-title"
               aria-describedby="plaindoc-reader-unsupported-file-message"
             >
-              <h2 id="plaindoc-reader-unsupported-file-title">无法打开文件</h2>
-              <p id="plaindoc-reader-unsupported-file-message">当前页面不支持打开“<span data-reader-unsupported-filename="1" />”。</p>
+              <h2 id="plaindoc-reader-unsupported-file-title">文件无法打开</h2>
+              <p id="plaindoc-reader-unsupported-file-message">“<span data-reader-unsupported-filename="1" />”无法预览。</p>
               <form method="dialog">
                 <button type="submit" className="reader-article-action" autoFocus>关闭</button>
+                <a className="reader-article-action" data-reader-original-download-action="1" download="" hidden>下载原文件</a>
               </form>
             </dialog>
           </>

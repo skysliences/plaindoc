@@ -118,6 +118,7 @@ export interface TreeNode {
   documentRouteKey?: string;
   documentFormat?: DocumentFormat;
   importedFileKind?: ImportedFileKind;
+  importedOriginalDownloadUrl?: string;
   spaceId: string;
   parentId: string | null;
   type: NodeType;
@@ -425,6 +426,7 @@ export interface WorkspaceGateway {
   getSpace(spaceId: string): Promise<Space>;
   createSpace(input: CreateSpaceInput): Promise<CreatedSpace>;
   getTree(spaceId: string): Promise<TreeNode[]>;
+  downloadImportedOriginal(docId: string): Promise<{ blob: Blob; fileName: string | null }>;
   createNode(input: CreateNodeInput): Promise<CreateNodeResult>;
   importDocuments(input: ImportWorkspaceDocumentsInput): Promise<ImportWorkspaceDocumentsResult>;
   updateNode(input: UpdateNodeInput): Promise<void>;

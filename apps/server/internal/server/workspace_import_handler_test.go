@@ -11,9 +11,86 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/lifei6671/plaindoc/apps/server/internal/storage/models"
 	"github.com/xuri/excelize/v2"
 	"golang.org/x/text/encoding/simplifiedchinese"
 )
+
+func TestRouter_ImportDocuments_ListsDirectUploadsWithoutAPreview(t *testing.T) {
+	t.Chdir(t.TempDir())
+	database, serve := setupAuthTestRouter(t)
+	t.Cleanup(func() { _ = database.Close() })
+	ownerID, _, token := registerAccessUser(t, serve, "direct-file-import@example.com")
+	spaceID := "direct-file-import-space"
+	seedSpaceForWorkspaceCreateNode(t, database, ownerID, spaceID, "member")
+	spaceURL := "/api/spaces/" + spaceID
+
+	const csvContent = "name,quantity\nnotebook,2\n"
+	contents := map[string][]byte{
+		"counts.csv":  []byte(csvContent),
+		"diagram.png": buildWorkspaceImportedZIPPNG(t),
+		"broken.png":  []byte("not an image"),
+		"broken.docx": []byte("not a Word document"),
+		"manual.pdf":  []byte("%PDF-1.4\n"),
+	}
+	body, contentType := buildWorkspaceImportMultipartBody(t, "", contents)
+	request := httptest.NewRequest(http.MethodPost, spaceURL+"/imports", body)
+	request.Header.Set("Authorization", "Bearer "+token)
+	request.Header.Set("Content-Type", contentType)
+	imported := serve(request)
+	if code := decodeJSONResultCode(t, imported.Body.Bytes()); code != 0 {
+		t.Fatalf("direct import returned code %d: %s", code, imported.Body.String())
+	}
+	receipt := decodeJSONResultData[struct {
+		SuccessCount int `json:"successCount"`
+		SkippedCount int `json:"skippedCount"`
+		FailedCount  int `json:"failedCount"`
+	}](t, imported.Body.Bytes())
+	if receipt.SuccessCount != 5 || receipt.SkippedCount != 0 || receipt.FailedCount != 0 {
+		t.Fatalf("expected all five file entries to be created: %s", imported.Body.String())
+	}
+
+	treeRequest := httptest.NewRequest(http.MethodGet, spaceURL+"/tree", nil)
+	treeRequest.Header.Set("Authorization", "Bearer "+token)
+	treeResponse := serve(treeRequest)
+	tree := decodeJSONResultData[[]struct {
+		ID               string                  `json:"id"`
+		DocumentID       string                  `json:"documentId"`
+		DocumentRouteKey string                  `json:"documentRouteKey"`
+		Title            string                  `json:"title"`
+		ImportedFileKind models.ImportedFileKind `json:"importedFileKind"`
+	}](t, treeResponse.Body.Bytes())
+	kindsByTitle := map[string]models.ImportedFileKind{
+		"counts.csv":  models.ImportedFileKindText,
+		"diagram.png": models.ImportedFileKindImage,
+		"broken.png":  models.ImportedFileKindUnsupported,
+		"broken.docx": models.ImportedFileKindUnsupported,
+		"manual.pdf":  models.ImportedFileKindUnsupported,
+	}
+	if len(tree) != len(kindsByTitle) {
+		t.Fatalf("unexpected visible entries: %+v", tree)
+	}
+	for _, node := range tree {
+		kind, exists := kindsByTitle[node.Title]
+		if !exists || node.ImportedFileKind != kind {
+			t.Fatalf("unexpected visible entry: %+v", node)
+		}
+		if kind == models.ImportedFileKindUnsupported {
+			if node.DocumentID != node.ID || node.DocumentRouteKey != "" {
+				t.Fatalf("unsupported file advertised as openable: %+v", node)
+			}
+			assertWorkspaceImportedOriginal(t, database, node.DocumentID, node.Title, contents[node.Title])
+		} else if node.DocumentID == "" || node.DocumentRouteKey == "" {
+			t.Fatalf("supported file is not openable: %+v", node)
+		}
+		if node.Title == "counts.csv" {
+			if content := readWorkspaceImportedZIPDocument(t, database, node.ID); content != csvContent {
+				t.Fatalf("import altered CSV content: %q", content)
+			}
+		}
+		delete(kindsByTitle, node.Title)
+	}
+}
 
 func TestRouter_ImportDocuments_DecodesGB18030TextIntoMarkdown(t *testing.T) {
 	database, serve := setupAuthTestRouter(t)
@@ -138,7 +215,7 @@ func TestRouter_ImportDocuments_ImportsHTMLFromZIPAndLocalImages(t *testing.T) {
 
 	zipContent := buildWorkspaceImportZIP(t, map[string][]byte{
 		"guide/index.html": []byte(`<html><body><h1>指南</h1><p><img src="./cover.png" alt="封面" /></p></body></html>`),
-		"guide/cover.png":  decodeBase64WorkspaceImportAsset(t, "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+XlN8AAAAASUVORK5CYII="),
+		"guide/cover.png":  buildWorkspaceImportedZIPPNG(t),
 	})
 
 	body, contentType := buildWorkspaceImportMultipartBody(t, "", map[string][]byte{
@@ -156,18 +233,13 @@ func TestRouter_ImportDocuments_ImportsHTMLFromZIPAndLocalImages(t *testing.T) {
 	payload := decodeJSONResultData[struct {
 		SuccessCount int `json:"successCount"`
 		FailedCount  int `json:"failedCount"`
-		Items        []struct {
-			SourcePath string `json:"sourcePath"`
-			Status     string `json:"status"`
-		} `json:"items"`
 	}](t, rec.Body.Bytes())
-	if payload.SuccessCount != 2 || payload.FailedCount != 0 {
+	if payload.SuccessCount != 3 || payload.FailedCount != 0 {
 		t.Fatalf("unexpected import counts: %+v body=%s", payload, rec.Body.String())
 	}
-	for _, item := range payload.Items {
-		if strings.HasSuffix(item.SourcePath, ".png") && item.Status != "skipped" {
-			t.Fatalf("expected local html asset image to be skipped, got %+v", item)
-		}
+	cover := findWorkspaceZIPImportTreeNode(t, database, spaceID, "cover.png", models.NodeTypeDoc, archiveFolderID)
+	if cover.ImportedFileKind != models.ImportedFileKindImage {
+		t.Fatalf("expected a separate previewable image entry, got %q", cover.ImportedFileKind)
 	}
 
 	var guideFolderCount int64
@@ -203,7 +275,7 @@ func TestRouter_ImportDocuments_ImportsHTMLFromZIPAndLocalImages(t *testing.T) {
 	}
 }
 
-func TestRouter_ImportDocuments_UsesReadmeAsParentAndSkipsEmptyAssetFolders(t *testing.T) {
+func TestRouter_ImportDocuments_UsesReadmeAsParentAndListsAssets(t *testing.T) {
 	database, serve := setupAuthTestRouter(t)
 	defer func() {
 		_ = database.Close()
@@ -220,9 +292,9 @@ func TestRouter_ImportDocuments_UsesReadmeAsParentAndSkipsEmptyAssetFolders(t *t
 		"guide/gocn/README.md":              []byte("# GoCN 首页"),
 		"guide/gocn/intro.md":               []byte("# GoCN 介绍"),
 		"guide/gocn/examples/example-1.md":  []byte("# 示例一"),
-		"guide/assets/cover.png":            decodeBase64WorkspaceImportAsset(t, "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+XlN8AAAAASUVORK5CYII="),
-		"guide/community/assets/banner.png": decodeBase64WorkspaceImportAsset(t, "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+XlN8AAAAASUVORK5CYII="),
-		"guide/gocn/examples/assets/1.png":  decodeBase64WorkspaceImportAsset(t, "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+XlN8AAAAASUVORK5CYII="),
+		"guide/assets/cover.png":            buildWorkspaceImportedZIPPNG(t),
+		"guide/community/assets/banner.png": buildWorkspaceImportedZIPPNG(t),
+		"guide/gocn/examples/assets/1.png":  buildWorkspaceImportedZIPPNG(t),
 	})
 
 	body, contentType := buildWorkspaceImportMultipartBody(t, "", map[string][]byte{
@@ -373,14 +445,15 @@ func TestRouter_ImportDocuments_UsesReadmeAsParentAndSkipsEmptyAssetFolders(t *t
 		t.Fatalf("expected one named archive folder with the inner guide wrapper trimmed, got %d", guideFolderCount)
 	}
 
-	var assetsFolderCount int64
-	if err := database.ORM.Table("nodes").
-		Where("space_id = ? AND title = ? AND type = ?", spaceID, "assets", "folder").
-		Count(&assetsFolderCount).Error; err != nil {
-		t.Fatalf("count empty asset folders failed: %v", err)
-	}
-	if assetsFolderCount != 0 {
-		t.Fatalf("expected no assets folder for non-importable-only subtree, got %d", assetsFolderCount)
+	for _, title := range []string{"cover.png", "banner.png", "1.png"} {
+		var count int64
+		if err := database.ORM.Model(&models.Node{}).
+			Where(models.NodeColumns.SpaceID+" = ?", spaceID).
+			Where(models.NodeColumns.Title+" = ?", title).
+			Where(models.NodeColumns.ImportedFileKind+" = ?", models.ImportedFileKindImage).
+			Count(&count).Error; err != nil || count != 1 {
+			t.Fatalf("expected one visible image %q, got %d: %v", title, count, err)
+		}
 	}
 
 	var examplesFolderCount int64
@@ -576,16 +649,11 @@ func TestRouter_ImportDocuments_RootReadmeOwnsDescendantsUntilNestedReadmeOverri
 	assertParentNode("post", gocnReadmeNode.NodeID)
 	assertParentNode("a", gocnReadmeNode.NodeID)
 
-	for _, folderTitle := range []string{"examples", "assets"} {
-		var folderCount int64
-		if err := database.ORM.Table("nodes").
-			Where("space_id = ? AND title = ? AND type = ?", spaceID, folderTitle, "folder").
-			Count(&folderCount).Error; err != nil {
-			t.Fatalf("count folder %s failed: %v", folderTitle, err)
-		}
-		if folderCount != 0 {
-			t.Fatalf("expected no folder node for %s when readme acts as parent, got %d", folderTitle, folderCount)
-		}
+	var examplesFolderCount int64
+	if err := database.ORM.Table("nodes").
+		Where("space_id = ? AND title = ? AND type = ?", spaceID, "examples", "folder").
+		Count(&examplesFolderCount).Error; err != nil || examplesFolderCount != 0 {
+		t.Fatalf("expected examples to remain collapsed, found %d folders: %v", examplesFolderCount, err)
 	}
 }
 
@@ -755,7 +823,7 @@ func TestRouter_ImportDocuments_ReadmdAliasBehavesLikeNestedReadme(t *testing.T)
 		"gocn/2018-03/read-1.md":    []byte("# read-1"),
 		"gocn/2018-03/read-10.md":   []byte("# read-10"),
 		"gocn/2018-03/read-11.md":   []byte("# read-11"),
-		"gocn/2018-03/images/a.png": decodeBase64WorkspaceImportAsset(t, "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+XlN8AAAAASUVORK5CYII="),
+		"gocn/2018-03/images/a.png": buildWorkspaceImportedZIPPNG(t),
 	})
 
 	body, contentType := buildWorkspaceImportMultipartBody(t, "", map[string][]byte{
@@ -819,12 +887,17 @@ func TestRouter_ImportDocuments_ReadmdAliasBehavesLikeNestedReadme(t *testing.T)
 
 	var preservedFolderCount int64
 	if err := database.ORM.Table("nodes").
-		Where("space_id = ? AND title IN ? AND type = ?", spaceID, []string{"gocn", "2018-03", "images"}, "folder").
+		Where("space_id = ? AND title IN ? AND type = ?", spaceID, []string{"gocn", "2018-03"}, "folder").
 		Count(&preservedFolderCount).Error; err != nil {
 		t.Fatalf("count collapsed alias folders failed: %v", err)
 	}
 	if preservedFolderCount != 0 {
 		t.Fatalf("expected readmd alias subtree single-chain folders to collapse, got %d", preservedFolderCount)
+	}
+	imagesID := findWorkspaceImportedZIPFolder(t, database, spaceID, "images", nestedReadmeNode.NodeID)
+	node := findWorkspaceZIPImportTreeNode(t, database, spaceID, "a.png", models.NodeTypeDoc, imagesID)
+	if node.ImportedFileKind != models.ImportedFileKindImage {
+		t.Fatalf("expected the image from the nested readme folder, got %q", node.ImportedFileKind)
 	}
 }
 

@@ -500,6 +500,7 @@ func newRouter(
 		// 读取文档正文。
 		api.GET("/docs/:docId", accessHandler.GetDocument)
 		api.GET("/docs/:docId/imported-image", workspaceHandler.ServeImportedImage)
+		api.GET("/docs/:docId/imported-original", workspaceHandler.ServeImportedOriginal)
 		api.GET("/shares/:spaceId/:docKey/imported-image", documentSharePageHandler.ImportedImageHandler(workspaceHandler))
 		api.POST("/docs/:docId/copy-events", accessHandler.ReportDocumentCopy)
 		api.POST("/shares/:spaceId/:docKey/copy-events", documentSharePageHandler.ReportDocumentCopy)

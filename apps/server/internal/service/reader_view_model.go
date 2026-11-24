@@ -10,24 +10,29 @@ func BuildDocumentImportedImageURL(documentID string) string {
 	return "/api/docs/" + url.PathEscape(documentID) + "/imported-image"
 }
 
+func buildImportedOriginalDownloadURL(documentID string) string {
+	return "/api/docs/" + url.PathEscape(documentID) + "/imported-original"
+}
+
 func buildSharedImportedImageURL(spaceID, docKey string) string {
 	return "/api/shares/" + url.PathEscape(spaceID) + "/" + url.PathEscape(docKey) + "/imported-image"
 }
 
 // ReaderTreeNodeViewModel 表示阅读页目录树节点。
 type ReaderTreeNodeViewModel struct {
-	ImportedFileKind   models.ImportedFileKind   `json:"importedFileKind,omitempty"`
-	ID                 string                    `json:"id"`
-	DocumentID         *string                   `json:"documentId,omitempty"`
-	DocumentIdentifier *string                   `json:"documentIdentifier,omitempty"`
-	DocumentRouteKey   *string                   `json:"documentRouteKey,omitempty"`
-	DocumentFormat     *models.DocumentFormat    `json:"documentFormat,omitempty"`
-	ParentID           *string                   `json:"parentId,omitempty"`
-	Type               models.NodeType           `json:"type"`
-	Title              string                    `json:"title"`
-	Sort               int                       `json:"sort"`
-	Visibility         *models.Visibility        `json:"visibility,omitempty"`
-	Children           []ReaderTreeNodeViewModel `json:"children"`
+	ImportedOriginalDownloadURL string                    `json:"importedOriginalDownloadUrl,omitempty"`
+	ImportedFileKind            models.ImportedFileKind   `json:"importedFileKind,omitempty"`
+	ID                          string                    `json:"id"`
+	DocumentID                  *string                   `json:"documentId,omitempty"`
+	DocumentIdentifier          *string                   `json:"documentIdentifier,omitempty"`
+	DocumentRouteKey            *string                   `json:"documentRouteKey,omitempty"`
+	DocumentFormat              *models.DocumentFormat    `json:"documentFormat,omitempty"`
+	ParentID                    *string                   `json:"parentId,omitempty"`
+	Type                        models.NodeType           `json:"type"`
+	Title                       string                    `json:"title"`
+	Sort                        int                       `json:"sort"`
+	Visibility                  *models.Visibility        `json:"visibility,omitempty"`
+	Children                    []ReaderTreeNodeViewModel `json:"children"`
 }
 
 // ReaderDocumentViewModel 表示阅读页正文数据。

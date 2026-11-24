@@ -288,7 +288,22 @@ func (r *gormWorkspaceRepository) ListTreeNodesBySpaceID(
 	}
 
 	var rows []nodeRow
-	if err := r.db.WithContext(ctx).
+	query := r.db.WithContext(ctx)
+	conditions := query.Session(&gorm.Session{NewDB: true})
+	importedKindColumn := qualifiedColumn("n", models.NodeColumns.ImportedFileKind)
+	documentIDColumn := qualifiedColumn("d", models.DocumentColumns.DocumentID)
+	statusColumn := qualifiedColumn("d", models.DocumentColumns.Status)
+	legacyImportedFile := conditions.Where(importedKindColumn+" = ?", models.ImportedFileKindUnsupported).
+		Where(documentIDColumn + " IS NULL")
+	ordinaryDocument := conditions.Where(importedKindColumn+" <> ?", models.ImportedFileKindUnsupported).
+		Where(statusColumn+" <> ?", models.EntityStatusDeleted)
+	retainedOriginal := conditions.Where(importedKindColumn+" = ?", models.ImportedFileKindUnsupported).
+		Where(statusColumn+" = ?", models.EntityStatusActive).
+		Where(qualifiedColumn("d", models.DocumentColumns.BannedAt) + " IS NULL")
+	liveDocument := conditions.Where(documentIDColumn + " IS NOT NULL").
+		Where(qualifiedColumn("d", models.DocumentColumns.DeletedAt) + " IS NULL").
+		Where(conditions.Where(ordinaryDocument).Or(retainedOriginal))
+	if err := query.
 		Table(tableWithAlias(models.Node{}, "n")).
 		Select(selectColumns(
 			qualifiedColumn("n", models.NodeColumns.NodeID),
@@ -305,12 +320,8 @@ func (r *gormWorkspaceRepository) ListTreeNodesBySpaceID(
 		)).
 		Joins("LEFT JOIN "+tableName(models.Document{})+" AS d ON "+qualifiedColumn("d", models.DocumentColumns.NodeID)+" = "+qualifiedColumn("n", models.NodeColumns.NodeID)).
 		Where(qualifiedColumn("n", models.NodeColumns.SpaceID)+" = ?", strings.TrimSpace(spaceID)).
-		Where(
-			"("+qualifiedColumn("n", models.NodeColumns.Type)+" <> ? OR "+qualifiedColumn("n", models.NodeColumns.ImportedFileKind)+" = ? OR ("+qualifiedColumn("d", models.DocumentColumns.DocumentID)+" IS NOT NULL AND "+qualifiedColumn("d", models.DocumentColumns.DeletedAt)+" IS NULL AND "+qualifiedColumn("d", models.DocumentColumns.Status)+" <> ?))",
-			models.NodeTypeDoc,
-			models.ImportedFileKindUnsupported,
-			models.EntityStatusDeleted,
-		).
+		Where(conditions.Where(qualifiedColumn("n", models.NodeColumns.Type)+" <> ?", models.NodeTypeDoc).
+			Or(legacyImportedFile).Or(liveDocument)).
 		Order(qualifiedColumn("n", models.NodeColumns.ParentNodeID) + " ASC, " + qualifiedColumn("n", models.NodeColumns.Sort) + " ASC, " + qualifiedColumn("n", models.NodeColumns.ID) + " ASC").
 		Find(&rows).Error; err != nil {
 		return nil, err
@@ -470,8 +481,10 @@ func (r *gormWorkspaceRepository) CreateNode(
 			if err := tx.Create(params.Document).Error; err != nil {
 				return err
 			}
-			if err := r.enqueueDocumentUpsertInTx(ctx, tx, params.Document.DocumentID); err != nil {
-				return err
+			if params.Node.ImportedFileKind != models.ImportedFileKindUnsupported {
+				if err := r.enqueueDocumentUpsertInTx(ctx, tx, params.Document.DocumentID); err != nil {
+					return err
+				}
 			}
 		}
 		if params.Revision != nil {
@@ -820,6 +833,7 @@ func (r *gormWorkspaceRepository) GetDocumentByDocumentID(
 		)).
 		Joins("JOIN "+tableName(models.Node{})+" AS n ON "+qualifiedColumn("n", models.NodeColumns.NodeID)+" = "+qualifiedColumn("d", models.DocumentColumns.NodeID)).
 		Where(qualifiedColumn("d", models.DocumentColumns.DocumentID)+" = ?", strings.TrimSpace(documentID)).
+		Where(qualifiedColumn("n", models.NodeColumns.ImportedFileKind)+" <> ?", models.ImportedFileKindUnsupported).
 		Take(&row).Error; err != nil {
 		return nil, err
 	}

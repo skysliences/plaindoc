@@ -10,7 +10,9 @@ import (
 	_ "image/gif"
 	_ "image/jpeg"
 	_ "image/png"
+	"os"
 	"path"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -26,7 +28,7 @@ import (
 
 const workspaceFolderImageMaxPixels = 40_000_000
 
-type workspaceFolderImageSource struct {
+type workspaceImportedFileSource struct {
 	blob      *models.DocumentAttachmentBlob
 	localPath string
 }
@@ -63,22 +65,44 @@ func (h *workspaceHandler) stageWorkspaceFolderImage(
 	contentType string,
 	content []byte,
 	now time.Time,
-) (*workspaceFolderImageSource, error) {
+) (*workspaceImportedFileSource, error) {
+	return h.stageWorkspaceImportedFile(ctx, contentType, content, models.ImportedImageObjectPrefix, "."+strings.TrimPrefix(contentType, "image/"), now)
+}
+
+func (h *workspaceHandler) stageWorkspaceImportedFile(
+	ctx context.Context,
+	contentType string,
+	content []byte,
+	objectPrefix string,
+	extension string,
+	now time.Time,
+) (*workspaceImportedFileSource, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	const storageProvider = service.ImageHostingProviderLocal
 	blobID := strings.ToLower(ulid.Make().String())
-	// Scope the digest to this blob ID so an image gets its own private source.
-	// Pass the source and its attachment to the node transaction together.
+	// Each imported file has its own private blob, created with the node and attachment.
 	hash := sha512.New512_256()
 	_, _ = hash.Write([]byte(blobID))
 	_, _ = hash.Write(content)
-	objectKey := models.ImportedImageObjectPrefix + blobID + "." + strings.TrimPrefix(contentType, "image/")
-	_, targetPath, err := h.uploadRawContentToProvider(
-		ctx, content, contentType, objectKey, storageProvider, service.DefaultImageHostingConfig(),
-	)
+	objectKey := objectPrefix + blobID + extension
+	targetPath, err := h.resolveLocalAttachmentTargetPath(objectKey)
 	if err != nil {
 		return nil, err
 	}
-	return &workspaceFolderImageSource{
+	if err := os.MkdirAll(filepath.Dir(targetPath), 0o700); err != nil {
+		return nil, err
+	}
+	file, err := os.OpenFile(targetPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	_, writeErr := file.Write(content)
+	if err := errors.Join(writeErr, file.Close()); err != nil {
+		return nil, errors.Join(err, os.Remove(targetPath))
+	}
+	return &workspaceImportedFileSource{
 		blob: &models.DocumentAttachmentBlob{
 			BlobID:          blobID,
 			StorageProvider: string(storageProvider),
@@ -94,9 +118,10 @@ func (h *workspaceHandler) stageWorkspaceFolderImage(
 	}, nil
 }
 
-func buildWorkspaceFolderImageAttachment(
+func buildWorkspaceImportedFileAttachment(
 	documentID string,
 	fileName string,
+	previewKind string,
 	importState *workspaceImportRuntime,
 	blob *models.DocumentAttachmentBlob,
 	now time.Time,
@@ -114,7 +139,7 @@ func buildWorkspaceFolderImageAttachment(
 		SizeBytes:       blob.SizeBytes,
 		ContentHashAlgo: blob.ContentHashAlgo,
 		ContentHash:     blob.ContentHash,
-		PreviewKind:     documentAttachmentPreviewKindImage,
+		PreviewKind:     previewKind,
 		Status:          models.EntityStatusActive,
 		CreatedByUserID: &importState.actorUserID,
 		CreatedAt:       now,

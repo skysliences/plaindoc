@@ -325,15 +325,18 @@
 17. `GET /api/docs/:docId/onlyoffice/source`
 18. `POST /api/docs/:docId/onlyoffice/callback`
 19. `POST /api/spaces/:spaceId/imports`
+20. `GET /api/docs/:docId/imported-original`
 
-工作区文件夹导入：
+工作区文件与文件夹导入：
 
 1. 使用现有工作区导入权限与 `multipart/form-data` 入口。可选字段 `folderManifest` 包含 `paths`（按顺序对应 `files`）与 `directories`（浏览器可提供的目录路径）。所有路径都包含同一个上传根目录，服务端校验路径与目标目录。省略 `folderManifest` 时使用原有单文件和压缩包导入流程。
-2. 导入按相对路径创建目录树并保留文件名。Markdown 和受支持的 Office 文件复用各自的文档存储。纯文本沿用 Markdown 文档的版本和编辑接口，同时通过 `importedFileKind: "text"` 标记正文按原样显示。
-3. 无法读取或不支持的文件作为 `type: "doc"`、`importedFileKind: "unsupported"` 的目录条目保留名称，没有文档 ID。工作区和阅读页树都返回 `importedFileKind`。SQLite、MySQL 和 PostgreSQL 的迁移为现有节点保留空标记。
+2. 普通文件、文件夹和 ZIP 的导入都按文件路径创建目录条目。Markdown 和受支持的 Office 文件复用各自的文档存储。作为纯文本导入的文件沿用 Markdown 文档的版本和编辑接口，同时通过 `importedFileKind: "text"` 标记正文按原样显示。
+3. 无法预览的格式或无法解析的文件作为 `type: "doc"`、`importedFileKind: "unsupported"` 的目录条目保留名称和原始字节。原文件使用受保护的本地附件存储，条目复用文档读权限和导出权限。下载以原文件名发送，记录 `download` 事件。升级前仅保留名称的条目需要重新上传原文件才可下载。
 4. 可解码的 PNG、JPEG、GIF、WebP 和 BMP 导入为 `importedFileKind: "image"`。文档和阅读页数据通过 `importedImageUrl` 提供同源预览地址，预览路由按文档或分享链接的读权限返回图片。早期导入为不支持条目的图片需要重新上传原文件。
 5. 工作区上传单文件、文件夹或 ZIP 时，跳过路径中以点号开头的文件及目录。工作区创建和重命名禁止以点号开头的名称。普通目录树和搜索会隐藏现有点号节点及其后代，数据库保留这些节点。
 6. 单独上传、目录内上传和嵌套的 ZIP 都在原位置创建一个取自压缩包文件名的目录，目录名去掉 `.zip` 后缀。工作区保存导入结果，ZIP 本身不落为目录节点。单独导入 ZIP 时保留压缩包内部已有的 README 组织及公共外层目录折叠规则，文件夹上传保留压缩包内相对路径。
+7. ZIP 中的可读文本和图片沿用文件夹导入规则。`assets/` 中的图片和正文引用的图片均生成自己的目录条目，正文中的相关图片引用仍可预览。
+8. 工作区与阅读页目录仅为具有读权限和下载权限的用户返回 `importedOriginalDownloadUrl`。下载路由重新校验授权，原文件通过 `Content-Disposition: attachment` 和 `application/octet-stream` 返回。目录文件使用的权限记录不进入正文预览、编辑、检索或站点地图。
 
 ONLYOFFICE 一等文档规则：
 

@@ -54,6 +54,7 @@ func (r *gormSitemapRepository) ListPublicDocuments(
 				" = "+qualifiedColumn(nodeAlias, models.NodeColumns.SpaceID),
 		).
 		Where(qualifiedColumn(nodeAlias, models.NodeColumns.Type)+" = ?", models.NodeTypeDoc).
+		Where(qualifiedColumn(nodeAlias, models.NodeColumns.ImportedFileKind)+" <> ?", models.ImportedFileKindUnsupported).
 		Where(qualifiedColumn(spaceAlias, models.SpaceColumns.Visibility)+" = ?", models.VisibilityPublic).
 		Where(qualifiedColumn(spaceAlias, models.SpaceColumns.Status)+" = ?", models.EntityStatusActive).
 		Where(qualifiedColumn(spaceAlias, models.SpaceColumns.DeletedAt)+" IS NULL").

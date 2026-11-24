@@ -13,10 +13,21 @@ const (
 	ImportedFileKindUnsupported ImportedFileKind = "unsupported"
 )
 
-const ImportedImageObjectPrefix = "attachments/folder-preview/"
+const (
+	ImportedImageObjectPrefix    = "attachments/folder-preview/"
+	ImportedOriginalObjectPrefix = "attachments/imported-original/"
+)
 
 func IsImportedImageObjectKey(objectKey string) bool {
 	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(objectKey)), ImportedImageObjectPrefix)
+}
+
+func IsImportedOriginalObjectKey(objectKey string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(objectKey)), ImportedOriginalObjectPrefix)
+}
+
+func IsPrivateImportedAttachmentObjectKey(objectKey string) bool {
+	return IsImportedImageObjectKey(objectKey) || IsImportedOriginalObjectKey(objectKey)
 }
 
 // Node 对应 nodes 表。

@@ -155,7 +155,7 @@ func (h *readerPageHandler) Space(c *gin.Context) {
 			canReview, roleErr := h.readerPageService.CanReviewAllDocuments(c.Request.Context(), viewer.UserID)
 			if roleErr != nil {
 				h.logError("resolve reader review role failed", roleErr, "space_id", spaceID)
-			} else if canReview && h.renderReaderSpaceDirectory(c, spaceID, viewer) {
+			} else if h.renderReaderSpaceDirectory(c, spaceID, viewer, !canReview) {
 				return
 			}
 		}
@@ -204,10 +204,13 @@ func (h *readerPageHandler) Space(c *gin.Context) {
 	c.Redirect(http.StatusSeeOther, targetPath)
 }
 
-func (h *readerPageHandler) renderReaderSpaceDirectory(c *gin.Context, spaceID string, viewer readerPageViewerIdentity) bool {
+func (h *readerPageHandler) renderReaderSpaceDirectory(c *gin.Context, spaceID string, viewer readerPageViewerIdentity, requireImportedFiles bool) bool {
 	space, tree, err := h.readerPageService.BuildSpaceContext(c.Request.Context(), spaceID, viewer.UserID)
 	if err != nil {
 		h.logError("build reader space directory failed", err, "space_id", spaceID)
+		return false
+	}
+	if requireImportedFiles && !hasReaderUnsupportedFiles(tree) {
 		return false
 	}
 	canCreate, _ := h.readerPageService.CanCreateDocument(c.Request.Context(), spaceID, viewer.UserID)
@@ -222,6 +225,15 @@ func (h *readerPageHandler) renderReaderSpaceDirectory(c *gin.Context, spaceID s
 	}
 	h.renderReaderPayload(c, http.StatusOK, spaceID, "", payload, false)
 	return true
+}
+
+func hasReaderUnsupportedFiles(nodes []service.ReaderTreeNodeViewModel) bool {
+	for _, node := range nodes {
+		if node.ImportedFileKind == models.ImportedFileKindUnsupported || hasReaderUnsupportedFiles(node.Children) {
+			return true
+		}
+	}
+	return false
 }
 
 // Page 渲染空间阅读页。
@@ -989,7 +1001,9 @@ func buildReaderFallbackHTML(payload readerPagePayload) string {
 	}
 	if isSpaceDirectory {
 		headerContent = fmt.Sprintf(`<h1 class="reader-title">%s</h1>`, escapedSpaceName)
-		bodyContent = "<p>此空间暂无可阅读文档。</p>" + renderFallbackSpaceFolders(payload.Tree)
+		bodyContent = "<p>此空间暂无可阅读文档。</p>" + renderFallbackSpaceDirectory(payload.Tree)
+	} else if hasReaderUnsupportedFiles(payload.Tree) {
+		bodyContent += renderFallbackSpaceDirectory(payload.Tree)
 	}
 
 	homeNav := ""
@@ -1054,13 +1068,23 @@ func buildReaderFallbackHTML(payload readerPagePayload) string {
 </html>`, robotsMeta, escapedPageTitle, printPolicy, homeNav, headerContent, bodyContent, stateJSON)
 }
 
-func renderFallbackSpaceFolders(nodes []service.ReaderTreeNodeViewModel) string {
+func renderFallbackSpaceDirectory(nodes []service.ReaderTreeNodeViewModel) string {
 	var items strings.Builder
 	for _, node := range nodes {
-		if node.Type == models.NodeTypeFolder {
+		title := template.HTMLEscapeString(node.Title)
+		if node.ImportedFileKind == models.ImportedFileKindUnsupported {
+			items.WriteString(`<li><details><summary>` + title + `</summary><p>文件无法打开</p>`)
+			if node.ImportedOriginalDownloadURL != "" {
+				items.WriteString(`<a href="` + template.HTMLEscapeString(node.ImportedOriginalDownloadURL) + `" download>下载原文件</a>`)
+			}
+			items.WriteString(`</details></li>`)
+			continue
+		}
+		children := renderFallbackSpaceDirectory(node.Children)
+		if node.Type == models.NodeTypeFolder || children != "" {
 			items.WriteString("<li>")
-			items.WriteString(template.HTMLEscapeString(node.Title))
-			items.WriteString(renderFallbackSpaceFolders(node.Children))
+			items.WriteString(title)
+			items.WriteString(children)
 			items.WriteString("</li>")
 		}
 	}

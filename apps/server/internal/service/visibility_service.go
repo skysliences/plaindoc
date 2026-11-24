@@ -137,13 +137,74 @@ func (s *VisibilityService) GetDocument(
 	documentID string,
 	viewerUserID string,
 ) (*models.Document, error) {
-	return s.getDocument(ctx, documentID, viewerUserID, true)
+	document, err := s.getDocument(ctx, documentID, viewerUserID, true)
+	if err == nil && document.ImportedFileKind == models.ImportedFileKindUnsupported {
+		return nil, ErrDocumentNotFound
+	}
+	return document, err
 }
 
 // AuthorizeDocumentAttachmentDownload 保留附件下载的普通阅读权限要求。
 func (s *VisibilityService) AuthorizeDocumentAttachmentDownload(ctx context.Context, documentID, viewerUserID string) error {
 	_, err := s.getDocument(ctx, documentID, viewerUserID, false)
 	return err
+}
+
+// AuthorizeImportedOriginalDownload requires both ordinary read access and permission to export the file.
+func (s *VisibilityService) AuthorizeImportedOriginalDownload(ctx context.Context, documentID, viewerUserID string) error {
+	document, err := s.getDocument(ctx, documentID, viewerUserID, false)
+	if err != nil {
+		return err
+	}
+	if document.ImportedFileKind != models.ImportedFileKindUnsupported {
+		return ErrDocumentNotFound
+	}
+	allowed, err := s.DocumentExportAllowed(ctx, documentID, viewerUserID)
+	if err == nil && !allowed {
+		return ErrDocumentAccessDenied
+	}
+	return err
+}
+
+// ImportedOriginalDownloadURLs applies read and export policy in bulk for directory display.
+func (s *VisibilityService) ImportedOriginalDownloadURLs(
+	ctx context.Context, spaceID, ownerUserID, viewerUserID string, spaceVisibility models.Visibility,
+	documents map[string]models.Visibility,
+) (map[string]string, error) {
+	if len(documents) == 0 {
+		return nil, nil
+	}
+	urls := make(map[string]string, len(documents))
+	if viewerUserID != "" && viewerUserID == ownerUserID {
+		for documentID := range documents {
+			urls[documentID] = buildImportedOriginalDownloadURL(documentID)
+		}
+		return urls, nil
+	}
+	denials, err := s.DocumentExportDenialsByViewer(ctx, spaceID, viewerUserID)
+	if err != nil {
+		return nil, err
+	}
+	readByVisibility := make(map[models.Visibility]bool)
+	for documentID, documentVisibility := range documents {
+		if denials[documentID] {
+			continue
+		}
+		visibility := stricterVisibility(normalizeVisibility(spaceVisibility), normalizeVisibility(documentVisibility))
+		allowed, checked := readByVisibility[visibility]
+		if !checked {
+			err := s.authorizeRead(ctx, spaceID, visibility, viewerUserID)
+			if err != nil && !errors.Is(err, ErrViewerLoginRequired) && !errors.Is(err, ErrSpaceAccessDenied) {
+				return nil, err
+			}
+			allowed = err == nil
+			readByVisibility[visibility] = allowed
+		}
+		if allowed {
+			urls[documentID] = buildImportedOriginalDownloadURL(documentID)
+		}
+	}
+	return urls, nil
 }
 
 func (s *VisibilityService) getDocument(
@@ -386,6 +447,9 @@ func (s *VisibilityService) AuthorizeDocumentWrite(ctx context.Context, document
 }
 
 func (s *VisibilityService) authorizeDocumentWrite(ctx context.Context, document *repository.DocumentAccessInfo, userID string) error {
+	if document.Document.ImportedFileKind == models.ImportedFileKindUnsupported {
+		return ErrDocumentNotFound
+	}
 	if userID == document.SpaceOwnerUserID {
 		return nil
 	}

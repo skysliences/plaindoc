@@ -1991,7 +1991,10 @@ export const READER_ASYNC_ENHANCEMENT_SCRIPT = `(() => {
       if (!(folder instanceof HTMLDetailsElement)) continue;
       const nodeId = folder.getAttribute("data-reader-node-id");
       if (nodeId && openFolders.has(nodeId)) folder.open = true;
-      if (nodeId && nodeId === revealFolderId) newFolder = folder;
+      if (nodeId && nodeId === revealFolderId) {
+        if (folder.querySelector(":scope > ul")) folder.open = true;
+        newFolder = folder;
+      }
     }
     const target = newFolder?.firstElementChild ?? currentTree.querySelector(TREE_ROW_ACTIVE_SELECTOR);
     const summary = target?.closest(TREE_SUMMARY_SELECTOR);
@@ -2351,7 +2354,8 @@ export const READER_ASYNC_ENHANCEMENT_SCRIPT = `(() => {
         } else if (event.data.type === "plaindoc:reader-folder-created" && typeof event.data.nodeId === "string" && event.data.nodeId) {
           finishDirectoryAction(creation, { nodeId: event.data.nodeId });
         } else if (event.data.type === "plaindoc:reader-folder-imported") {
-          finishDirectoryAction(creation, { imported: true });
+          const nodeId = typeof event.data.nodeId === "string" ? event.data.nodeId : undefined;
+          finishDirectoryAction(creation, { imported: true, nodeId });
         }
       }
       return;
@@ -2410,6 +2414,13 @@ export const READER_ASYNC_ENHANCEMENT_SCRIPT = `(() => {
           const fileNameNode = dialog?.querySelector("[data-reader-unsupported-filename]");
           if (dialog instanceof HTMLDialogElement && fileNameNode instanceof HTMLElement) {
             fileNameNode.textContent = fileName;
+            const downloadAction = dialog.querySelector("[data-reader-original-download-action]");
+            if (downloadAction instanceof HTMLAnchorElement) {
+              const url = unsupportedFileButton.getAttribute("data-reader-original-download");
+              downloadAction.hidden = !url;
+              if (url) downloadAction.setAttribute("href", url);
+              else downloadAction.removeAttribute("href");
+            }
             dialog.showModal();
           }
           return;

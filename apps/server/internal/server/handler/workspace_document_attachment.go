@@ -119,7 +119,7 @@ func (h *workspaceHandler) ListDocumentAttachments(c *gin.Context) {
 
 	items := make([]workspaceDocumentAttachmentResponse, 0, len(attachments))
 	for _, attachment := range attachments {
-		if models.IsImportedImageObjectKey(attachment.ObjectKey) {
+		if models.IsPrivateImportedAttachmentObjectKey(attachment.ObjectKey) {
 			continue
 		}
 		publicDownloadURL := ""
@@ -459,7 +459,7 @@ func (h *workspaceHandler) DeleteDocumentAttachment(c *gin.Context) {
 		response.InternalError(c)
 		return
 	}
-	if strings.TrimSpace(attachment.DocumentID) != documentID || models.IsImportedImageObjectKey(attachment.ObjectKey) {
+	if strings.TrimSpace(attachment.DocumentID) != documentID || models.IsPrivateImportedAttachmentObjectKey(attachment.ObjectKey) {
 		response.DocumentAttachmentErrAttachmentNotFound.Write(c)
 		return
 	}
@@ -585,7 +585,7 @@ func (h *workspaceHandler) RedirectDocumentAttachmentDownload(c *gin.Context) {
 		return
 	}
 	if strings.TrimSpace(attachment.DocumentID) != documentID || attachment.Status == models.EntityStatusDeleted ||
-		models.IsImportedImageObjectKey(attachment.ObjectKey) {
+		models.IsPrivateImportedAttachmentObjectKey(attachment.ObjectKey) {
 		response.DocumentAttachmentErrAttachmentNotFound.Write(c)
 		return
 	}
@@ -689,7 +689,7 @@ func (h *workspaceHandler) CreateDocumentAttachmentAccessLink(c *gin.Context) {
 		return
 	}
 	if strings.TrimSpace(attachment.DocumentID) != documentID || attachment.Status == models.EntityStatusDeleted ||
-		models.IsImportedImageObjectKey(attachment.ObjectKey) {
+		models.IsPrivateImportedAttachmentObjectKey(attachment.ObjectKey) {
 		response.DocumentAttachmentErrAttachmentNotFound.Write(c)
 		return
 	}
@@ -801,7 +801,7 @@ func (h *workspaceHandler) ServeDocumentAttachmentByToken(c *gin.Context) {
 		return
 	}
 	if strings.TrimSpace(attachment.DocumentID) != strings.TrimSpace(claims.DocumentID) ||
-		attachment.Status == models.EntityStatusDeleted || models.IsImportedImageObjectKey(attachment.ObjectKey) {
+		attachment.Status == models.EntityStatusDeleted || models.IsPrivateImportedAttachmentObjectKey(attachment.ObjectKey) {
 		response.DocumentAttachmentErrAttachmentNotFound.Write(c)
 		return
 	}
@@ -1194,8 +1194,8 @@ func buildDocumentAttachmentObjectKey(
 	if !strings.HasPrefix(cleanObjectKey, "attachments/") {
 		return "", errors.New("attachment object key must start with attachments/")
 	}
-	if models.IsImportedImageObjectKey(cleanObjectKey) {
-		return "", errors.New("attachment object key uses the reserved folder image path")
+	if models.IsPrivateImportedAttachmentObjectKey(cleanObjectKey) {
+		return "", errors.New("attachment object key uses a reserved import path")
 	}
 	if len(cleanObjectKey) > 512 {
 		return "", errors.New("attachment object key is too long")

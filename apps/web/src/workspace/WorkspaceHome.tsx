@@ -13,6 +13,7 @@ import type {
 import { Button } from "../components/ui/button";
 import { Checkbox } from "../components/ui/checkbox";
 import { Input } from "../components/ui/input";
+import { UnsupportedFileDialog } from "../components/UnsupportedFileDialog";
 import { formatError } from "../editor/status-utils";
 
 export const spaceManagementFrameName = "plaindoc-space-management";
@@ -36,17 +37,22 @@ const settingsLabel = "grid min-w-0 flex-1 gap-1.5 text-sm font-medium text-slat
 const buttonClass = "rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50";
 const linkClass = "text-sm font-medium text-blue-700 hover:underline";
 
-function flattenDocuments(nodes: TreeNode[], parentPath = ""): { id: string; title: string }[] {
+function flattenDocuments(nodes: TreeNode[], parentPath = ""): { id: string; title: string; originalFile: boolean }[] {
   return nodes.flatMap((node) => {
     const title = parentPath ? `${parentPath} / ${node.title}` : node.title;
     return [
-      ...(node.documentId ? [{ id: node.documentId, title }] : []),
+      ...(node.documentId ? [{ id: node.documentId, title, originalFile: node.importedFileKind === "unsupported" }] : []),
       ...flattenDocuments(node.children, title)
     ];
   });
 }
 
-function WorkspaceSettingsDirectoryRow({ node, editorPath }: { node: TreeNode; editorPath: string }) {
+interface WorkspaceSettingsTreeProps {
+  editorPath: string;
+  onOpenUnsupportedFile: (node: TreeNode) => void;
+}
+
+function WorkspaceSettingsDirectoryRow({ node, editorPath, onOpenUnsupportedFile }: WorkspaceSettingsTreeProps & { node: TreeNode }) {
   const [expanded, setExpanded] = useState(false);
   const childrenId = useId();
   const Icon = node.type === "folder" ? Folder : FileText;
@@ -75,7 +81,8 @@ function WorkspaceSettingsDirectoryRow({ node, editorPath }: { node: TreeNode; e
       </div>
       <div id={childrenId} hidden={!expanded}>
         {expanded && (node.children.length > 0 ? (
-          <WorkspaceSettingsDocumentTree nodes={node.children} editorPath={editorPath} nested />
+          <WorkspaceSettingsDocumentTree nodes={node.children} editorPath={editorPath}
+            onOpenUnsupportedFile={onOpenUnsupportedFile} nested />
         ) : (
           <p className="m-0 px-8 py-2 text-xs text-slate-500">文件夹为空</p>
         ))}
@@ -84,9 +91,8 @@ function WorkspaceSettingsDirectoryRow({ node, editorPath }: { node: TreeNode; e
   );
 }
 
-function WorkspaceSettingsDocumentTree({ nodes, editorPath, nested = false }: {
+function WorkspaceSettingsDocumentTree({ nodes, editorPath, onOpenUnsupportedFile, nested = false }: WorkspaceSettingsTreeProps & {
   nodes: TreeNode[];
-  editorPath: string;
   nested?: boolean;
 }) {
   return (
@@ -94,7 +100,7 @@ function WorkspaceSettingsDocumentTree({ nodes, editorPath, nested = false }: {
       {nodes.map((node) => (
         <li key={node.id}>
           {node.type === "folder" || node.children.length > 0 ? (
-            <WorkspaceSettingsDirectoryRow node={node} editorPath={editorPath} />
+            <WorkspaceSettingsDirectoryRow node={node} editorPath={editorPath} onOpenUnsupportedFile={onOpenUnsupportedFile} />
           ) : node.documentId && node.importedFileKind !== "unsupported" ? (
             <Button asChild variant="ghost" className="h-auto min-h-9 w-full justify-between gap-3 px-2 py-2 text-left no-underline">
               <a href={`${editorPath}/${encodeURIComponent(node.documentId)}`}>
@@ -104,6 +110,12 @@ function WorkspaceSettingsDocumentTree({ nodes, editorPath, nested = false }: {
                 </span>
                 <span className="flex shrink-0 items-center gap-1 text-xs text-slate-600">编辑 <ChevronRight size={14} aria-hidden="true" /></span>
               </a>
+            </Button>
+          ) : node.importedFileKind === "unsupported" ? (
+            <Button type="button" variant="ghost" className="h-auto min-h-9 w-full justify-start gap-2 px-2 py-2 text-left text-slate-600"
+              aria-haspopup="dialog" onClick={() => onOpenUnsupportedFile(node)}>
+              <FileQuestionMark size={16} className="shrink-0" aria-hidden="true" />
+              <span className="min-w-0 whitespace-normal break-words">{node.title}</span>
             </Button>
           ) : (
             <div className="flex min-h-9 items-center gap-2 px-2 py-2 text-sm text-slate-600">
@@ -128,6 +140,7 @@ function WorkspaceSpaceSettings({ space, gateway, onRename }: {
   const [role, setRole] = useState<WorkspaceMemberRole>("reader");
   const [tree, setTree] = useState<TreeNode[]>([]);
   const [documentId, setDocumentId] = useState("");
+  const [unsupportedFile, setUnsupportedFile] = useState<TreeNode | null>(null);
   const [members, setMembers] = useState<WorkspaceMember[] | null>(null);
   const [pending, setPending] = useState(false);
   const [memberError, setMemberError] = useState("");
@@ -136,6 +149,7 @@ function WorkspaceSpaceSettings({ space, gateway, onRename }: {
   const [error, setError] = useState("");
   const [memberRevision, setMemberRevision] = useState(0);
   const permissionDocuments = useMemo(() => flattenDocuments(tree), [tree]);
+  const isOriginalFileSelected = permissionDocuments.find((document) => document.id === documentId)?.originalFile ?? false;
 
   useEffect(() => {
     let active = true;
@@ -207,11 +221,13 @@ function WorkspaceSpaceSettings({ space, gateway, onRename }: {
     void mutate(async () => {
       await gateway.updateDocumentMemberPermission(documentId, userId, changes);
       setMembers((items) => items?.map((item) => item.userId === userId ? { ...item, ...changes } : item) ?? null);
-    }, "文档权限已保存");
+    }, isOriginalFileSelected ? "文件权限已保存" : "文档权限已保存");
   }
 
   return (
     <section className="h-full overflow-y-auto bg-slate-50 p-4 text-slate-900 sm:p-5" aria-label={`管理空间 ${space.name}`}>
+      {unsupportedFile && <UnsupportedFileDialog file={unsupportedFile} downloadImportedOriginal={gateway.downloadImportedOriginal}
+        onClose={() => setUnsupportedFile(null)} />}
       {error && <p role="alert" className="mt-3 text-sm text-red-700">{error}</p>}
       {notice && <p role="status" className="mt-3 text-sm text-emerald-700">{notice}</p>}
       <fieldset disabled={pending} className="m-0 grid min-w-0 gap-3 border-0 p-0">
@@ -232,7 +248,8 @@ function WorkspaceSpaceSettings({ space, gateway, onRename }: {
             <Button variant="secondary" type="button" onClick={createDocument}><Plus size={16} aria-hidden="true" />新建文档</Button>
           </div>
           {tree.length > 0 && (
-            <WorkspaceSettingsDocumentTree nodes={tree} editorPath={`/editor/${encodeURIComponent(space.id)}`} />
+            <WorkspaceSettingsDocumentTree nodes={tree} editorPath={`/editor/${encodeURIComponent(space.id)}`}
+              onOpenUnsupportedFile={setUnsupportedFile} />
           )}
         </div>
 
@@ -281,31 +298,34 @@ function WorkspaceSpaceSettings({ space, gateway, onRename }: {
                   {documentId ? (
                     <div className="flex min-w-0 flex-wrap items-center gap-3">
                       <select
-                        aria-label={`${member.email} 的文档权限`}
+                        aria-label={`${member.email} 的${isOriginalFileSelected ? "文件" : "文档"}权限`}
                         className={inputClass}
-                        value={member.access ?? "inherit"}
+                        value={isOriginalFileSelected && member.access && !["inherit", "denied"].includes(member.access)
+                          ? "read" : member.access ?? "inherit"}
                         onChange={(event) => {
                           const access = event.target.value as WorkspaceDocumentAccess;
                           updateDocumentMemberPermission(member.userId, { access });
                         }}
                       >
                         <option value="inherit">继承空间角色</option>
-                        <option value="read">可读、可复制</option>
-                        <option value="read_no_copy">可读、禁止复制</option>
-                        <option value="edit">可编辑、可复制</option>
-                        <option value="edit_no_copy">可编辑、禁止复制</option>
+                        <option value="read">{isOriginalFileSelected ? "可访问" : "可读、可复制"}</option>
+                        {!isOriginalFileSelected && <>
+                          <option value="read_no_copy">可读、禁止复制</option>
+                          <option value="edit">可编辑、可复制</option>
+                          <option value="edit_no_copy">可编辑、禁止复制</option>
+                        </>}
                         <option value="denied">禁止访问</option>
                       </select>
                       <label className="inline-flex cursor-pointer items-center gap-2 whitespace-nowrap text-sm">
                         <Checkbox
-                          aria-label={`${member.email} 可导出文档`}
+                          aria-label={`${member.email} ${isOriginalFileSelected ? "可下载原文件" : "可导出文档"}`}
                           checked={!member.exportDenied}
                           disabled={pending}
                           onCheckedChange={(checked) => {
                             updateDocumentMemberPermission(member.userId, { exportDenied: checked !== true });
                           }}
                         />
-                        可导出
+                        {isOriginalFileSelected ? "可下载" : "可导出"}
                       </label>
                     </div>
                   ) : (

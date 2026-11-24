@@ -58,6 +58,7 @@ func (r *gormHomeSearchRepository) ListActiveDocumentMetadataByDocumentIDs(
 				" = "+qualifiedColumn(nodeAlias, models.NodeColumns.SpaceID),
 		).
 		Where(qualifiedColumn(documentAlias, models.DocumentColumns.DocumentID)+" IN ?", normalizedDocumentIDs).
+		Where(qualifiedColumn(nodeAlias, models.NodeColumns.ImportedFileKind)+" <> ?", models.ImportedFileKindUnsupported).
 		Where(qualifiedColumn(documentAlias, models.DocumentColumns.Status)+" = ?", models.EntityStatusActive).
 		Where(qualifiedColumn(documentAlias, models.DocumentColumns.BannedAt)+" IS NULL").
 		Where(qualifiedColumn(documentAlias, models.DocumentColumns.DeletedAt)+" IS NULL").

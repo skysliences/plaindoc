@@ -76,19 +76,20 @@ type workspaceSpaceResponse struct {
 }
 
 type workspaceTreeNodeResponse struct {
-	ImportedFileKind   models.ImportedFileKind     `json:"importedFileKind,omitempty"`
-	ID                 string                      `json:"id"`
-	DocumentID         *string                     `json:"documentId,omitempty"`
-	DocumentIdentifier *string                     `json:"documentIdentifier,omitempty"`
-	DocumentRouteKey   *string                     `json:"documentRouteKey,omitempty"`
-	DocumentFormat     *models.DocumentFormat      `json:"documentFormat,omitempty"`
-	SpaceID            string                      `json:"spaceId"`
-	ParentID           *string                     `json:"parentId"`
-	Type               models.NodeType             `json:"type"`
-	Title              string                      `json:"title"`
-	Sort               int                         `json:"sort"`
-	Visibility         *models.Visibility          `json:"visibility,omitempty"`
-	Children           []workspaceTreeNodeResponse `json:"children"`
+	ImportedOriginalDownloadURL string                      `json:"importedOriginalDownloadUrl,omitempty"`
+	ImportedFileKind            models.ImportedFileKind     `json:"importedFileKind,omitempty"`
+	ID                          string                      `json:"id"`
+	DocumentID                  *string                     `json:"documentId,omitempty"`
+	DocumentIdentifier          *string                     `json:"documentIdentifier,omitempty"`
+	DocumentRouteKey            *string                     `json:"documentRouteKey,omitempty"`
+	DocumentFormat              *models.DocumentFormat      `json:"documentFormat,omitempty"`
+	SpaceID                     string                      `json:"spaceId"`
+	ParentID                    *string                     `json:"parentId"`
+	Type                        models.NodeType             `json:"type"`
+	Title                       string                      `json:"title"`
+	Sort                        int                         `json:"sort"`
+	Visibility                  *models.Visibility          `json:"visibility,omitempty"`
+	Children                    []workspaceTreeNodeResponse `json:"children"`
 }
 
 type workspaceDocumentResponse struct {
@@ -220,19 +221,20 @@ type localizeDocumentRemoteImagesResponse struct {
 }
 
 type workspaceTreeNode struct {
-	ImportedFileKind   models.ImportedFileKind
-	ID                 string
-	DocumentID         *string
-	DocumentIdentifier *string
-	DocumentRouteKey   *string
-	DocumentFormat     *models.DocumentFormat
-	SpaceID            string
-	ParentID           *string
-	Type               models.NodeType
-	Title              string
-	Sort               int
-	Visibility         *models.Visibility
-	Children           []*workspaceTreeNode
+	ImportedOriginalDownloadURL string
+	ImportedFileKind            models.ImportedFileKind
+	ID                          string
+	DocumentID                  *string
+	DocumentIdentifier          *string
+	DocumentRouteKey            *string
+	DocumentFormat              *models.DocumentFormat
+	SpaceID                     string
+	ParentID                    *string
+	Type                        models.NodeType
+	Title                       string
+	Sort                        int
+	Visibility                  *models.Visibility
+	Children                    []*workspaceTreeNode
 }
 
 // NewWorkspaceHandler 创建编辑器工作区处理器。
@@ -403,6 +405,7 @@ func (h *workspaceHandler) GetTree(c *gin.Context) {
 
 	hasEditableDocument := false
 	treeNodes := make(map[string]*workspaceTreeNode, len(rows))
+	originalFiles := make(map[string]models.Visibility)
 	for _, row := range rows {
 		nodeID := strings.TrimSpace(row.NodeID)
 		if nodeID == "" {
@@ -411,10 +414,16 @@ func (h *workspaceHandler) GetTree(c *gin.Context) {
 		documentID := normalizeOptionalString(row.DocumentID)
 		if documentID != nil {
 			permission, overridden := permissions[*documentID]
-			if !canEditWorkspaceDocument(permission, overridden, spaceWritable) {
-				continue
+			if row.ImportedFileKind == models.ImportedFileKindUnsupported {
+				if permission.AccessDenied {
+					continue
+				}
+			} else {
+				if !canEditWorkspaceDocument(permission, overridden, spaceWritable) {
+					continue
+				}
+				hasEditableDocument = true
 			}
-			hasEditableDocument = true
 		}
 		if _, hidden := hiddenNodes[nodeID]; hidden {
 			continue
@@ -424,7 +433,10 @@ func (h *workspaceHandler) GetTree(c *gin.Context) {
 		documentVisibility := normalizeWorkspaceDocumentVisibility(row.Type, row.DocumentVisibility)
 		documentFormat := normalizeWorkspaceTreeDocumentFormat(row.Type, row.DocumentFormat)
 		if row.ImportedFileKind == models.ImportedFileKindUnsupported {
-			documentFormat, documentVisibility = nil, nil
+			if documentID != nil && documentVisibility != nil {
+				originalFiles[*documentID] = *documentVisibility
+			}
+			documentFormat, documentVisibility, documentIdentifier, documentRouteKey = nil, nil, nil, nil
 		}
 		treeNodes[nodeID] = &workspaceTreeNode{
 			ID:                 nodeID,
@@ -448,12 +460,20 @@ func (h *workspaceHandler) GetTree(c *gin.Context) {
 		return
 	}
 
+	urls, err := h.visibilityService.ImportedOriginalDownloadURLs(c.Request.Context(), spaceID, space.OwnerUserID, actorUserID, space.Visibility, originalFiles)
+	if err != nil {
+		response.InternalError(c)
+		return
+	}
 	roots := make([]*workspaceTreeNode, 0)
 	for _, row := range rows {
 		nodeID := strings.TrimSpace(row.NodeID)
 		node, ok := treeNodes[nodeID]
 		if !ok {
 			continue
+		}
+		if node.ImportedFileKind == models.ImportedFileKindUnsupported && node.DocumentID != nil {
+			node.ImportedOriginalDownloadURL = urls[*node.DocumentID]
 		}
 		parentID := normalizeOptionalString(row.ParentNodeID)
 		if parentID == nil {
@@ -2061,19 +2081,20 @@ func mapWorkspaceTreeResponses(nodes []*workspaceTreeNode) []workspaceTreeNodeRe
 			continue
 		}
 		items = append(items, workspaceTreeNodeResponse{
-			ID:                 node.ID,
-			DocumentID:         node.DocumentID,
-			DocumentIdentifier: node.DocumentIdentifier,
-			DocumentRouteKey:   node.DocumentRouteKey,
-			DocumentFormat:     node.DocumentFormat,
-			ImportedFileKind:   node.ImportedFileKind,
-			SpaceID:            node.SpaceID,
-			ParentID:           node.ParentID,
-			Type:               normalizeWorkspaceNodeType(node.Type),
-			Title:              node.Title,
-			Sort:               node.Sort,
-			Visibility:         node.Visibility,
-			Children:           mapWorkspaceTreeResponses(node.Children),
+			ImportedOriginalDownloadURL: node.ImportedOriginalDownloadURL,
+			ID:                          node.ID,
+			DocumentID:                  node.DocumentID,
+			DocumentIdentifier:          node.DocumentIdentifier,
+			DocumentRouteKey:            node.DocumentRouteKey,
+			DocumentFormat:              node.DocumentFormat,
+			ImportedFileKind:            node.ImportedFileKind,
+			SpaceID:                     node.SpaceID,
+			ParentID:                    node.ParentID,
+			Type:                        normalizeWorkspaceNodeType(node.Type),
+			Title:                       node.Title,
+			Sort:                        node.Sort,
+			Visibility:                  node.Visibility,
+			Children:                    mapWorkspaceTreeResponses(node.Children),
 		})
 	}
 	return items

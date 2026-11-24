@@ -474,7 +474,7 @@ func (h *imageHostingHandler) ServeLocalImage(c *gin.Context) {
 		response.ImageHostingFileNotFound(c)
 		return
 	}
-	if models.IsImportedImageObjectKey(strings.TrimPrefix(strings.ToLower(cleanPath), "local/")) {
+	if models.IsPrivateImportedAttachmentObjectKey(strings.TrimPrefix(strings.ToLower(cleanPath), "local/")) {
 		response.ImageHostingFileNotFound(c)
 		return
 	}

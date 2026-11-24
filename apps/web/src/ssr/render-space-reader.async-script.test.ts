@@ -10,7 +10,10 @@ describe("READER_ASYNC_ENHANCEMENT_SCRIPT", () => {
     vi.unstubAllGlobals();
   });
 
-  it("updates only the directory after creating a nested folder and retries a failed refresh", async () => {
+  it.each([
+    { action: "created", status: "文件夹已创建", children: "" },
+    { action: "imported", status: "文件夹已导入", children: "<ul><li>记录.csv</li></ul>" }
+  ])("updates only the directory after a nested folder is $action and retries a failed refresh", async ({ action, status, children }) => {
     document.body.innerHTML = `
       <button type="button" data-reader-create-document="/editor/space-test?from=reader">添加到目录</button>
       <div class="reader-sidebar__tree-scroll">
@@ -28,7 +31,7 @@ describe("READER_ASYNC_ENHANCEMENT_SCRIPT", () => {
           <div class="reader-sidebar__tree-scroll">
             <details data-reader-hook="tree-details" data-reader-node-id="parent">
               <summary data-reader-hook="tree-summary">父目录</summary>
-              <details data-reader-hook="tree-details" data-reader-node-id="new-folder"><summary data-reader-hook="tree-summary">新目录</summary></details>
+              <details data-reader-hook="tree-details" data-reader-node-id="new-folder"><summary data-reader-hook="tree-summary">新目录</summary>${children}</details>
             </details>
             <details data-reader-hook="tree-details" data-reader-node-id="open"><summary>已展开</summary></details>
           </div>
@@ -53,12 +56,12 @@ describe("READER_ASYNC_ENHANCEMENT_SCRIPT", () => {
       const dialog = document.querySelector<HTMLDialogElement>(".reader-create-dialog")!;
       const frame = dialog.querySelector("iframe")!;
       expect(dialog).toHaveAccessibleName("添加到目录");
-      const created = { type: "plaindoc:reader-folder-created", spaceId: "space-test", nodeId: "new-folder" };
+      const result = { type: `plaindoc:reader-folder-${action}`, spaceId: "space-test", nodeId: "new-folder" };
       const send = (data: object, origin = window.location.origin) => {
         window.dispatchEvent(new MessageEvent("message", { source: frame.contentWindow, origin, data }));
       };
-      send(created, "https://other-origin.test");
-      send({ ...created, spaceId: "other-space" });
+      send(result, "https://other-origin.test");
+      send({ ...result, spaceId: "other-space" });
       expect(fetchReader).not.toHaveBeenCalled();
       send({ type: "plaindoc:reader-create-resize", height: 284 });
       expect(dialog.style.getPropertyValue("--reader-create-form-height")).toBe("284px");
@@ -66,8 +69,8 @@ describe("READER_ASYNC_ENHANCEMENT_SCRIPT", () => {
       document.querySelector("[data-reader-node-id='open']")?.setAttribute("open", "");
       const originalURL = window.location.href;
       const article = document.querySelector("[data-reader-hook='article-shell']");
-      send(created);
-      await waitFor(() => expect(dialog).toHaveTextContent("文件夹已创建，暂时无法更新目录。"));
+      send(result);
+      await waitFor(() => expect(dialog).toHaveTextContent(`${status}，暂时无法更新目录。`));
       dialog.querySelector<HTMLButtonElement>(".reader-article-action")?.click();
 
       await waitFor(() => expect(dialog).not.toBeInTheDocument());
@@ -76,7 +79,9 @@ describe("READER_ASYNC_ENHANCEMENT_SCRIPT", () => {
       expect(document.querySelector("[data-reader-hook='article-shell']")).toBe(article);
       expect(document.querySelector("[data-reader-node-id='parent']")).toHaveAttribute("open");
       expect(document.querySelector("[data-reader-node-id='open']")).toHaveAttribute("open");
-      expect(document.querySelector("[data-reader-node-id='new-folder']")).toHaveTextContent("新目录");
+      const folder = document.querySelector<HTMLDetailsElement>("[data-reader-node-id='new-folder']");
+      expect(folder).toHaveTextContent("新目录");
+      expect(folder?.open).toBe(Boolean(children));
     } finally {
       restoreShowModal();
       restoreClose();
