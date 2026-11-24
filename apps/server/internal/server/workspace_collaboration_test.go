@@ -131,6 +131,12 @@ func TestRouter_WorkspaceCollaboration(t *testing.T) {
 	request(http.MethodPut, permissionPath, ownerToken, `{"access":"denied"}`, http.StatusOK)
 	request(http.MethodPut, docPath+"/theme", memberToken, `{"themeId":"default"}`, http.StatusForbidden)
 	request(http.MethodDelete, "/api/nodes/"+protectedDoc, memberToken, "", http.StatusForbidden)
+	request(http.MethodDelete, "/api/nodes/"+protectedDoc+"?leafOnly=true", memberToken, "", http.StatusForbidden)
+	disposable := createDocument("临时删除验证")
+	request(http.MethodDelete, "/api/nodes/"+disposable+"?leafOnly=true", ownerToken, "", http.StatusOK)
+	if deleted := request(http.MethodGet, "/api/docs/"+disposable, ownerToken, "", http.StatusOK); decodeJSONResultCode(t, deleted.Body.Bytes()) == 0 {
+		t.Fatal("deleted document is still readable")
+	}
 	search = request(http.MethodGet, searchPath, memberToken, "", http.StatusOK).Body.String()
 	if strings.Contains(search, readerPath) {
 		t.Fatalf("denied document is visible in search results: %s", search)

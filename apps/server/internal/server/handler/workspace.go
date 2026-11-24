@@ -1047,7 +1047,11 @@ func (h *workspaceHandler) DeleteNode(c *gin.Context) {
 	}
 
 	now := time.Now().UTC()
-	deleted, err := h.workspaceRepo.DeleteNode(c.Request.Context(), nodeID, spaceID, now)
+	deleted, err := h.workspaceRepo.DeleteNode(c.Request.Context(), nodeID, spaceID, now, c.Query("leafOnly") == "true")
+	if errors.Is(err, repository.ErrExpectedLeafFile) {
+		response.Error(c, http.StatusConflict, response.CodeInvalidRequest, "只能删除单个文件，请先移走子项，再刷新目录。")
+		return
+	}
 	if err != nil {
 		response.InternalError(c)
 		return

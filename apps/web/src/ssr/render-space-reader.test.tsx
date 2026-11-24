@@ -65,6 +65,16 @@ function createPayload(
 }
 
 describe("renderSpaceReader", () => {
+  it("offers file deletion to writable readers for leaf files, including legacy imports", () => {
+    const payload = createPayload("markdown");
+    const imported = { id: "legacy", title: "old.docx", type: "doc" as const, importedFileKind: "unsupported" as const, sort: 0, children: [] };
+    payload.tree = [{ id: "folder", title: "目录", type: "folder", sort: 0, children: [imported, { ...imported, id: "restricted", deleteRestricted: true }] }];
+    const buttons = () => new DOMParser().parseFromString(renderSpaceReader(payload).html, "text/html").querySelectorAll("button[data-reader-delete-file]");
+    expect(buttons()).toHaveLength(0);
+    // The server retains capabilities when it strips viewer identity for the render cache.
+    payload.createDocumentUrl = "/editor/space-reader-test?create=document";
+    expect(Array.from(buttons(), button => button.getAttribute("data-reader-delete-file"))).toEqual(["legacy"]);
+  });
   it("renders folders without document actions when a space has no readable document", () => {
     const payload = createPayload("markdown");
     payload.document = {

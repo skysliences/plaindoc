@@ -769,7 +769,7 @@ type WorkspaceRepository interface {
 	CreateNode(ctx context.Context, params WorkspaceCreateNodeParams) error
 	UpdateNode(ctx context.Context, params WorkspaceUpdateNodeParams) error
 	MoveNode(ctx context.Context, params WorkspaceMoveNodeParams) error
-	DeleteNode(ctx context.Context, nodeID string, touchSpace string, touchedAt time.Time) (bool, error)
+	DeleteNode(ctx context.Context, nodeID string, touchSpace string, touchedAt time.Time, leafOnly bool) (bool, error)
 	GetDocumentByDocumentID(ctx context.Context, documentID string) (*WorkspaceDocumentRecord, error)
 	UpdateDocumentIdentifier(ctx context.Context, params WorkspaceUpdateDocumentIdentifierParams) (bool, error)
 	SaveDocument(ctx context.Context, params WorkspaceSaveDocumentParams) (bool, error)

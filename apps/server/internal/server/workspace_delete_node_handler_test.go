@@ -68,7 +68,7 @@ func TestRouter_DeleteNode_RemovesSubtreeDocumentsAndDocumentResources(t *testin
 		{
 			"node_id":        grandDocNodeID,
 			"space_id":       spaceID,
-			"parent_node_id": childFolderNodeID,
+			"parent_node_id": childDocNodeID,
 			"type":           "doc",
 			"title":          "Grand Doc",
 			"sort":           1,
@@ -182,6 +182,13 @@ func TestRouter_DeleteNode_RemovesSubtreeDocumentsAndDocumentResources(t *testin
 		t.Fatalf("insert image asset failed: %v", err)
 	}
 
+	for _, id := range []string{rootFolderNodeID, childDocNodeID} {
+		check := httptest.NewRequest(http.MethodDelete, "/api/nodes/"+id+"?leafOnly=true", nil)
+		check.Header.Set("Authorization", "Bearer "+ownerToken)
+		if result := serve(check); decodeJSONResultCode(t, result.Body.Bytes()) == 0 {
+			t.Fatalf("expected leaf-only delete to preserve subtree, got %d: %s", result.Code, result.Body.String())
+		}
+	}
 	req := httptest.NewRequest(http.MethodDelete, "/api/nodes/"+rootFolderNodeID, nil)
 	req.Header.Set("Authorization", "Bearer "+ownerToken)
 	rec := serve(req)

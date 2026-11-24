@@ -1012,8 +1012,9 @@ export function createHttpAdapter(options: HttpAdapterOptions): DataGateway {
         body: JSON.stringify(input)
       });
     },
-    async deleteNode(nodeId: string) {
-      await request<void>(`/nodes/${nodeId}`, {
+    async deleteNode(nodeId: string, options?: { leafOnly: boolean }) {
+      const query = options?.leafOnly ? "?leafOnly=true" : "";
+      await request<void>(`/nodes/${encodeURIComponent(nodeId)}${query}`, {
         method: "DELETE"
       });
     },

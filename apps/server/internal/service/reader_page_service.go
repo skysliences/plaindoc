@@ -19,6 +19,7 @@ type ReaderPageService struct {
 }
 
 type readerTreeNode struct {
+	DeleteRestricted            bool
 	ImportedOriginalDownloadURL string
 	ImportedFileKind            models.ImportedFileKind
 	ID                          string
@@ -401,7 +402,13 @@ func (s *ReaderPageService) loadTree(
 			}
 			documentVisibility, documentFormat, readerSlug, documentPath = nil, nil, nil, nil
 		}
+		deleteRestricted := false
+		if documentID != nil {
+			permission := permissions[*documentID]
+			deleteRestricted = permission.AccessDenied || permission.Role == models.RoleReader
+		}
 		treeNodes[nodeID] = &readerTreeNode{
+			DeleteRestricted: deleteRestricted,
 			ID:               nodeID,
 			DocumentID:       documentID,
 			ReaderSlug:       readerSlug,
@@ -476,6 +483,7 @@ func mapReaderTreeNodes(nodes []*readerTreeNode) []ReaderTreeNodeViewModel {
 			continue
 		}
 		items = append(items, ReaderTreeNodeViewModel{
+			DeleteRestricted:            node.DeleteRestricted,
 			ImportedOriginalDownloadURL: node.ImportedOriginalDownloadURL,
 			ID:                          node.ID,
 			DocumentID:                  node.DocumentID,

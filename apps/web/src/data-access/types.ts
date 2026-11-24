@@ -430,7 +430,7 @@ export interface WorkspaceGateway {
   createNode(input: CreateNodeInput): Promise<CreateNodeResult>;
   importDocuments(input: ImportWorkspaceDocumentsInput): Promise<ImportWorkspaceDocumentsResult>;
   updateNode(input: UpdateNodeInput): Promise<void>;
-  deleteNode(nodeId: string): Promise<void>;
+  deleteNode(nodeId: string, options?: { leafOnly: boolean }): Promise<void>;
   // 目录移动：用于目录树拖拽排序（同级重排 + 跨父级移动）。
   moveNode(input: MoveNodeInput): Promise<void>;
   // 空间删除（扩展点）：本期可不实现，后续用于空间管理。

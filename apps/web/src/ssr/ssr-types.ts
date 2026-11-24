@@ -1,4 +1,5 @@
 export interface ReaderTreeNode {
+  deleteRestricted?: boolean;
   id: string;
   documentId?: string;
   documentIdentifier?: string;

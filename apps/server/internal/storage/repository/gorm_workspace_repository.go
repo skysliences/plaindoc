@@ -12,6 +12,8 @@ import (
 	"gorm.io/gorm"
 )
 
+var ErrExpectedLeafFile = errors.New("expected a file without child nodes")
+
 type gormWorkspaceRepository struct {
 	db                 *gorm.DB
 	searchIndexJobRepo SearchIndexJobRepository
@@ -713,6 +715,7 @@ func (r *gormWorkspaceRepository) DeleteNode(
 	nodeID string,
 	touchSpace string,
 	touchedAt time.Time,
+	leafOnly bool,
 ) (bool, error) {
 	if r == nil || r.db == nil {
 		return false, fmt.Errorf("workspace repository db is nil")
@@ -731,6 +734,9 @@ func (r *gormWorkspaceRepository) DeleteNode(
 		scope, err := collectWorkspaceNodeDeleteScopeInTx(ctx, tx, normalizedNodeID)
 		if err != nil {
 			return err
+		}
+		if leafOnly && (scope.Root.Type != models.NodeTypeDoc || len(scope.NodeIDs) != 1) {
+			return ErrExpectedLeafFile
 		}
 		if _, err := DeleteDocumentsCascadeInTx(tx, scope.DocumentIDs); err != nil {
 			return err

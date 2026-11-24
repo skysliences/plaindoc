@@ -435,7 +435,7 @@ func (s *AdminDocumentService) deleteManagedDocument(
 	documentID := strings.TrimSpace(accessInfo.Document.DocumentID)
 
 	if s.workspaceRepo != nil && nodeID != "" {
-		deleted, err := s.workspaceRepo.DeleteNode(ctx, nodeID, spaceID, now)
+		deleted, err := s.workspaceRepo.DeleteNode(ctx, nodeID, spaceID, now, false)
 		if err != nil {
 			return "", false, err
 		}
