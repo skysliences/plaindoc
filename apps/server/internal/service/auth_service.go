@@ -95,13 +95,37 @@ func NewAuthService(
 	}
 }
 
+// LocalLoginIdentifier maps an unambiguous nickname to its account email.
+// Unmatched or ambiguous names stay unchanged for the standard invalid-credentials response.
+func (s *AuthService) LocalLoginIdentifier(ctx context.Context, identifier string) (string, error) {
+	identifier = strings.TrimSpace(identifier)
+	if identifier == "" || strings.Contains(identifier, "@") {
+		return normalizeEmail(identifier), nil
+	}
+	emails, err := s.userRepo.FindLoginEmailsByName(ctx, identifier)
+	if err != nil {
+		return "", err
+	}
+	if len(emails) == 1 {
+		return emails[0], nil
+	}
+	return identifier, nil
+}
+
 // Login checks the local password and returns the identity for second-factor verification.
-func (s *AuthService) Login(ctx context.Context, email string, password string) (AuthPrimaryIdentity, error) {
+func (s *AuthService) Login(ctx context.Context, identifier string, password string) (AuthPrimaryIdentity, error) {
 	if s == nil || s.userRepo == nil {
 		return AuthPrimaryIdentity{}, errors.New("auth service dependencies are nil")
 	}
 
-	user, err := s.userRepo.GetByEmail(ctx, normalizeEmail(email))
+	email, err := s.LocalLoginIdentifier(ctx, identifier)
+	if err != nil {
+		return AuthPrimaryIdentity{}, err
+	}
+	if !strings.Contains(email, "@") {
+		return AuthPrimaryIdentity{}, ErrInvalidCredentials
+	}
+	user, err := s.userRepo.GetByEmail(ctx, email)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return AuthPrimaryIdentity{}, ErrInvalidCredentials

@@ -651,7 +651,7 @@ func TestRouter_AuthLoginWithIdentifier(t *testing.T) {
 		t.Fatalf("register failed, status=%d body=%s", registerRec.Code, registerRec.Body.String())
 	}
 
-	loginBody := []byte(`{"identifier":"identifier@example.com","password":"123456"}`)
+	loginBody := []byte(`{"identifier":" identifier USER ","password":"123456"}`)
 	loginReq := httptest.NewRequest(http.MethodPost, "/api/auth/login", bytes.NewReader(loginBody))
 	loginReq.Header.Set("Content-Type", "application/json")
 	challenge := readTestMFAChallenge(t, serve(loginReq), "verify")
@@ -668,6 +668,23 @@ func TestRouter_AuthLoginWithIdentifier(t *testing.T) {
 	if loginPayload.User.Email != "identifier@example.com" {
 		t.Fatalf("expected login user identifier@example.com, got %s", loginPayload.User.Email)
 	}
+}
+
+func TestRouter_DuplicateNicknamesRequireEmail(t *testing.T) {
+	database, serve := setupAuthTestRouter(t)
+	defer database.Close()
+	registerAccessUser(t, serve, "firstname@example.com")
+	registerAccessUser(t, serve, "secondname@example.com")
+	login := func(identifier string) *httptest.ResponseRecorder {
+		body, _ := json.Marshal(map[string]string{"identifier": identifier, "password": "123456"})
+		req := httptest.NewRequest(http.MethodPost, "/api/auth/login", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		return serve(req)
+	}
+	if r := login("Test User"); r.Code == http.StatusOK {
+		t.Fatal("ambiguous name accepted")
+	}
+	readTestMFAChallenge(t, login("firstname@example.com"), "verify")
 }
 
 func TestRouter_AuthOptions(t *testing.T) {
@@ -790,7 +807,7 @@ func TestRouter_AuthLoginRiskCaptchaAndLock(t *testing.T) {
 	}
 
 	for index := 0; index < 3; index += 1 {
-		loginBody := []byte(`{"email":"risk-login@example.com","password":"wrong-password"}`)
+		loginBody := []byte(`{"identifier":"Risk Login","password":"wrong-password"}`)
 		loginReq := httptest.NewRequest(http.MethodPost, "/api/auth/login", bytes.NewReader(loginBody))
 		loginReq.Header.Set("Content-Type", "application/json")
 		loginRec := serve(loginReq)

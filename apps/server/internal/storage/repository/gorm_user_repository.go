@@ -100,6 +100,17 @@ func (r *gormUserRepository) GetByEmail(ctx context.Context, email string) (*mod
 	return &user, nil
 }
 
+// Two matches are sufficient to distinguish a unique login name from an ambiguous one.
+func (r *gormUserRepository) FindLoginEmailsByName(ctx context.Context, name string) ([]string, error) {
+	var emails []string
+	err := r.db.WithContext(ctx).Model(&models.User{}).
+		Where("LOWER(TRIM("+models.UserColumns.Name+")) = LOWER(?)", name).
+		Where(models.UserColumns.Status+" <> ?", models.EntityStatusDeleted).
+		Where(models.UserColumns.DeletedAt+" IS NULL").
+		Limit(2).Pluck(models.UserColumns.Email, &emails).Error
+	return emails, err
+}
+
 func (r *gormUserRepository) List(
 	ctx context.Context,
 	params ListUsersParams,

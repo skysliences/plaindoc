@@ -401,12 +401,17 @@ func (h *authHandler) Login(c *gin.Context) {
 		response.AuthErrEmailPasswordRequired.Write(c)
 		return
 	}
+	riskIdentifier, err := h.authService.LocalLoginIdentifier(c.Request.Context(), identifier)
+	if err != nil {
+		response.InternalError(c)
+		return
+	}
 	if err := h.checkAuthRisk(
 		c,
 		service.AuthRiskCheckInput{
 			Scene:         "login",
 			ClientIP:      strings.TrimSpace(c.ClientIP()),
-			Identifier:    identifier,
+			Identifier:    riskIdentifier,
 			CaptchaID:     strings.TrimSpace(req.CaptchaID),
 			CaptchaAnswer: strings.TrimSpace(req.CaptchaAnswer),
 		},
@@ -421,14 +426,14 @@ func (h *authHandler) Login(c *gin.Context) {
 	})
 	var challenge service.AuthMFAChallenge
 	if err == nil {
-		challenge, err = h.authService.BeginLoginMFA(c.Request.Context(), identity, identifier)
+		challenge, err = h.authService.BeginLoginMFA(c.Request.Context(), identity, riskIdentifier)
 	}
 	if err != nil {
 		setRequestErrmsg(c, err, "用户登录失败")
 		h.recordAuthRisk(c, service.AuthRiskRecordInput{
 			Scene:      "login",
 			ClientIP:   strings.TrimSpace(c.ClientIP()),
-			Identifier: identifier,
+			Identifier: riskIdentifier,
 			Success:    false,
 		})
 		if !response.WriteMappedError(c, err, authLoginErrorMappings...) {
@@ -519,6 +524,14 @@ func (h *authHandler) RefreshCaptcha(c *gin.Context) {
 		return
 	}
 
+	if scene == "login" {
+		var err error
+		identifier, err = h.authService.LocalLoginIdentifier(c.Request.Context(), identifier)
+		if err != nil {
+			response.InternalError(c)
+			return
+		}
+	}
 	challenge, err := h.authRiskControlService.RefreshChallenge(c.Request.Context(), service.AuthRiskRefreshInput{
 		Scene:      scene,
 		ClientIP:   strings.TrimSpace(c.ClientIP()),

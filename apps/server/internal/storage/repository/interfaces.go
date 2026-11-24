@@ -25,6 +25,7 @@ type UserRepository interface {
 	Create(ctx context.Context, user *models.User) error
 	GetByUserID(ctx context.Context, userID string) (*models.User, error)
 	GetByEmail(ctx context.Context, email string) (*models.User, error)
+	FindLoginEmailsByName(ctx context.Context, name string) ([]string, error)
 	List(ctx context.Context, params ListUsersParams) ([]models.User, int64, error)
 	UpdateProfile(ctx context.Context, params UpdateUserProfileParams) (bool, error)
 	UpdatePassword(ctx context.Context, userID string, passwordHash string, updatedAt time.Time) (bool, error)
