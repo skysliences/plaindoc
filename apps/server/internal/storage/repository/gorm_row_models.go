@@ -555,16 +555,17 @@ type documentTemplateSceneDetailRowDB struct {
 }
 
 type userListRowDB struct {
-	ID           int64               `gorm:"column:id"`
-	UserID       string              `gorm:"column:user_id"`
-	Email        string              `gorm:"column:email"`
-	PasswordHash string              `gorm:"column:password_hash"`
-	Name         string              `gorm:"column:name"`
-	AvatarURL    string              `gorm:"column:avatar_url"`
-	Status       models.EntityStatus `gorm:"column:status"`
-	BannedReason string              `gorm:"column:banned_reason"`
-	BannedAt     *time.Time          `gorm:"column:banned_at"`
-	DeletedAt    *time.Time          `gorm:"column:deleted_at"`
-	CreatedAtRaw string              `gorm:"column:created_at_raw"`
-	UpdatedAtRaw string              `gorm:"column:updated_at_raw"`
+	ID                   int64               `gorm:"column:id"`
+	UserID               string              `gorm:"column:user_id"`
+	Email                string              `gorm:"column:email"`
+	PasswordHash         string              `gorm:"column:password_hash"`
+	Name                 string              `gorm:"column:name"`
+	AvatarURL            string              `gorm:"column:avatar_url"`
+	Status               models.EntityStatus `gorm:"column:status"`
+	BannedReason         string              `gorm:"column:banned_reason"`
+	BannedAt             *time.Time          `gorm:"column:banned_at"`
+	DeletedAt            *time.Time          `gorm:"column:deleted_at"`
+	LoginIPAddressesJSON string              `gorm:"column:login_ip_addresses_json"`
+	CreatedAtRaw         string              `gorm:"column:created_at_raw"`
+	UpdatedAtRaw         string              `gorm:"column:updated_at_raw"`
 }

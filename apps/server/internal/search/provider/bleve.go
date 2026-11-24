@@ -239,10 +239,10 @@ func (p *BleveProvider) Search(ctx context.Context, request SearchRequest) (Sear
 	}
 
 	total := int64(len(filteredHits))
-	start := (normalizedPage - 1) * normalizedPageSize
-	if start >= len(filteredHits) {
+	if normalizedPage-1 > (len(filteredHits)-1)/normalizedPageSize {
 		return SearchResponse{Total: total, Hits: []SearchHit{}}, nil
 	}
+	start := (normalizedPage - 1) * normalizedPageSize
 	end := start + normalizedPageSize
 	if end > len(filteredHits) {
 		end = len(filteredHits)
@@ -263,145 +263,59 @@ func (p *BleveProvider) filterCandidatesByVisibility(
 		return []SearchHit{}, nil
 	}
 
-	hasActorIdentity := strings.TrimSpace(request.ActorUserID) != ""
-	isAuthenticated := hasActorIdentity || request.IsAuthenticated
-	canViewAllDocuments := request.CanViewAllDocuments && hasActorIdentity
-	isSingleSpaceSearch := strings.TrimSpace(request.SpaceID) != ""
-	scopeSpaceIDSet := buildBleveScopeSpaceIDSet(request.SpaceID, request.ScopeSpaceIDs)
-	directVisibleDocIDs := make(map[string]struct{}, len(candidates))
-	needDBCheckDocIDs := make([]string, 0, len(candidates))
-	memberCandidateByDocID := make(map[string]bleveSearchCandidate, len(candidates))
-	for _, item := range candidates {
-		docID := strings.TrimSpace(item.DocID)
-		if docID == "" {
-			continue
-		}
-		if _, excluded := request.ExcludedDocumentIDs[docID]; excluded {
-			continue
-		}
-		if len(scopeSpaceIDSet) > 0 {
-			spaceID := strings.TrimSpace(item.SpaceID)
-			if spaceID == "" {
-				continue
-			}
-			if _, exists := scopeSpaceIDSet[spaceID]; !exists {
-				continue
-			}
-		}
-
-		if canViewAllDocuments {
-			// 使用数据库确认文档仍处于可检索状态，避免返回已封禁或已删除的陈旧索引。
-			needDBCheckDocIDs = append(needDBCheckDocIDs, docID)
-			continue
-		}
-		switch strings.ToLower(strings.TrimSpace(item.VisibilityScope)) {
-		case string(models.VisibilityPublic):
-			directVisibleDocIDs[docID] = struct{}{}
-		case string(models.VisibilityAuthenticated):
-			if isAuthenticated {
-				directVisibleDocIDs[docID] = struct{}{}
-			}
-		case string(models.VisibilityMember):
-			// 单空间检索时，min_role 不满足必须直接拒绝，禁止回落 DB 造成绕过。
-			if isSingleSpaceSearch && hasActorIdentity {
-				if request.UserRoleLevel >= item.MinRole {
-					directVisibleDocIDs[docID] = struct{}{}
-				}
-				continue
-			}
-			if isAuthenticated {
-				needDBCheckDocIDs = append(needDBCheckDocIDs, docID)
-				memberCandidateByDocID[docID] = item
-			}
-		default:
-			// 索引字段缺失或未知时退回 DB 权限校验，保证不越权。
-			needDBCheckDocIDs = append(needDBCheckDocIDs, docID)
-		}
+	// 索引只负责召回，权限和状态以当前数据库记录为准。
+	candidateIDs := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		candidateIDs = append(candidateIDs, candidate.DocID)
 	}
-
-	visibleByDBDocIDs := make(map[string]struct{}, 0)
-	if len(needDBCheckDocIDs) > 0 {
-		visibleByDBDocIDs = make(map[string]struct{}, len(needDBCheckDocIDs))
-	}
-	visibleCandidateDocIDs, err := p.filterVisibleDocIDs(ctx, request, needDBCheckDocIDs)
+	visibleIDs, err := p.filterVisibleDocIDs(ctx, request, candidateIDs)
 	if err != nil {
 		return nil, err
 	}
-	for docID := range visibleCandidateDocIDs {
-		visibleByDBDocIDs[docID] = struct{}{}
-	}
 
+	isSingleSpaceSearch := strings.TrimSpace(request.SpaceID) != ""
+	needsHigherRole := func(candidate bleveSearchCandidate) bool {
+		return !request.CanViewAllDocuments && candidate.MinRole > 1 &&
+			strings.EqualFold(strings.TrimSpace(candidate.VisibilityScope), string(models.VisibilityMember))
+	}
 	roleLevelBySpaceID := map[string]int{}
-	if !isSingleSpaceSearch && hasActorIdentity && len(memberCandidateByDocID) > 0 && len(visibleByDBDocIDs) > 0 {
-		memberSpaceIDs := make([]string, 0, len(memberCandidateByDocID))
-		for docID, item := range memberCandidateByDocID {
-			if _, exists := visibleByDBDocIDs[docID]; !exists {
-				continue
+	if !isSingleSpaceSearch && strings.TrimSpace(request.ActorUserID) != "" {
+		var spaceIDs []string
+		for _, candidate := range candidates {
+			if _, visible := visibleIDs[candidate.DocID]; visible && needsHigherRole(candidate) {
+				spaceIDs = append(spaceIDs, candidate.SpaceID)
 			}
-			spaceID := strings.TrimSpace(item.SpaceID)
-			if spaceID == "" {
-				continue
-			}
-			memberSpaceIDs = append(memberSpaceIDs, spaceID)
 		}
-		if len(memberSpaceIDs) > 0 {
-			resolvedRoleLevels, resolveErr := p.visibilityRepo.ResolveUserRoleLevelsBySpaces(
-				ctx,
-				strings.TrimSpace(request.ActorUserID),
-				memberSpaceIDs,
-			)
-			if resolveErr != nil {
-				return nil, resolveErr
+		if len(spaceIDs) > 0 {
+			roleLevelBySpaceID, err = p.visibilityRepo.ResolveUserRoleLevelsBySpaces(ctx, request.ActorUserID, spaceIDs)
+			if err != nil {
+				return nil, err
 			}
-			roleLevelBySpaceID = resolvedRoleLevels
 		}
 	}
 
-	filtered := make([]SearchHit, 0, len(candidates))
-	for _, item := range candidates {
-		docID := strings.TrimSpace(item.DocID)
-		if docID == "" {
+	filtered := make([]SearchHit, 0, len(visibleIDs))
+	for _, candidate := range candidates {
+		if _, visible := visibleIDs[candidate.DocID]; !visible {
 			continue
 		}
-		if _, exists := directVisibleDocIDs[docID]; !exists {
-			if _, exists := visibleByDBDocIDs[docID]; !exists {
-				continue
+		if needsHigherRole(candidate) {
+			roleLevel := request.UserRoleLevel
+			if !isSingleSpaceSearch {
+				roleLevel = roleLevelBySpaceID[candidate.SpaceID]
 			}
-			if !canViewAllDocuments && !isSingleSpaceSearch &&
-				strings.EqualFold(strings.TrimSpace(item.VisibilityScope), string(models.VisibilityMember)) {
-				spaceID := strings.TrimSpace(item.SpaceID)
-				if spaceID == "" {
-					continue
-				}
-				if roleLevelBySpaceID[spaceID] < item.MinRole {
-					continue
-				}
+			if roleLevel < candidate.MinRole {
+				continue
 			}
 		}
 		filtered = append(filtered, SearchHit{
-			DocID:     docID,
-			Score:     item.Score,
-			Snippet:   item.Snippet,
-			UpdatedAt: item.UpdatedAt,
+			DocID:     candidate.DocID,
+			Score:     candidate.Score,
+			Snippet:   candidate.Snippet,
+			UpdatedAt: candidate.UpdatedAt,
 		})
 	}
 	return filtered, nil
-}
-
-func toSearchHits(candidates []bleveSearchCandidate) []SearchHit {
-	if len(candidates) == 0 {
-		return []SearchHit{}
-	}
-	result := make([]SearchHit, 0, len(candidates))
-	for _, item := range candidates {
-		result = append(result, SearchHit{
-			DocID:     item.DocID,
-			Score:     item.Score,
-			Snippet:   item.Snippet,
-			UpdatedAt: item.UpdatedAt,
-		})
-	}
-	return result
 }
 
 func (p *BleveProvider) Capabilities() Capabilities {
@@ -659,11 +573,12 @@ func (p *BleveProvider) filterVisibleDocIDs(
 	visibleDocumentIDs, err := p.visibilityRepo.FilterVisibleDocumentIDsByCandidates(
 		ctx,
 		repository.SearchVisibleDocumentIDsByCandidatesParams{
-			ActorUserID:          strings.TrimSpace(request.ActorUserID),
-			SpaceID:              strings.TrimSpace(request.SpaceID),
-			ScopeSpaceIDs:        request.ScopeSpaceIDs,
-			CanViewAllDocuments:  request.CanViewAllDocuments,
-			CandidateDocumentIDs: documentIDs,
+			ActorUserID:           strings.TrimSpace(request.ActorUserID),
+			SpaceID:               strings.TrimSpace(request.SpaceID),
+			ScopeSpaceIDs:         request.ScopeSpaceIDs,
+			CanViewAllDocuments:   request.CanViewAllDocuments,
+			IncludeRenderedOffice: true,
+			CandidateDocumentIDs:  documentIDs,
 		},
 	)
 	if err != nil {
@@ -822,24 +737,6 @@ func splitTerms(value string) []string {
 		}
 		seen[term] = struct{}{}
 		result = append(result, term)
-	}
-	return result
-}
-
-func buildBleveScopeSpaceIDSet(spaceID string, scopeSpaceIDs []string) map[string]struct{} {
-	normalizedSpaceID := strings.TrimSpace(spaceID)
-	if normalizedSpaceID != "" {
-		return map[string]struct{}{
-			normalizedSpaceID: struct{}{},
-		}
-	}
-	normalizedScopeSpaceIDs := normalizeBleveScopeSpaceIDs(scopeSpaceIDs)
-	if len(normalizedScopeSpaceIDs) == 0 {
-		return map[string]struct{}{}
-	}
-	result := make(map[string]struct{}, len(normalizedScopeSpaceIDs))
-	for _, item := range normalizedScopeSpaceIDs {
-		result[item] = struct{}{}
 	}
 	return result
 }

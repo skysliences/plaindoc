@@ -28,7 +28,7 @@ function normalizeHtml(rawHtml) {
     .trim();
 }
 
-try {
+async function main() {
   const rawInput = (await readStdin()).trim();
   if (!rawInput) {
     writeError("html to markdown input is empty");
@@ -79,6 +79,6 @@ try {
       markdown: service.turndown(html).trim()
     })
   );
-} catch (error) {
-  writeError(error instanceof Error ? error.message : String(error));
 }
+
+main().catch((error) => writeError(error instanceof Error ? error.message : String(error)));

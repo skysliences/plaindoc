@@ -126,21 +126,29 @@ func (r *gormSearchIndexSourceRepository) ListActiveDocumentsBySpaceID(
 }
 
 func (r *gormSearchIndexSourceRepository) baseActiveDocumentsQuery(ctx context.Context) *gorm.DB {
-	return r.db.WithContext(ctx).
+	query := r.db.WithContext(ctx).
 		Table(tableWithAlias(models.Document{}, "d")).
 		Joins("JOIN "+tableName(models.Node{})+" AS n ON "+qualifiedColumn("n", models.NodeColumns.NodeID)+" = "+qualifiedColumn("d", models.DocumentColumns.NodeID)).
 		Joins("JOIN "+tableName(models.Space{})+" AS s ON "+qualifiedColumn("s", models.SpaceColumns.SpaceID)+" = "+qualifiedColumn("n", models.NodeColumns.SpaceID)).
 		Where(qualifiedColumn("s", models.SpaceColumns.Status)+" = ?", models.EntityStatusActive).
 		Where(qualifiedColumn("s", models.SpaceColumns.DeletedAt)+" IS NULL").
 		Where(qualifiedColumn("d", models.DocumentColumns.Status)+" = ?", models.EntityStatusActive).
-		Where(qualifiedColumn("d", models.DocumentColumns.DeletedAt)+" IS NULL").
-		Where(
-			"("+qualifiedColumn("d", models.DocumentColumns.Format)+" = ?) OR ("+qualifiedColumn("d", models.DocumentColumns.Format)+" IN (?, ?) AND "+qualifiedColumn("d", models.DocumentColumns.RenderStatus)+" = ? AND TRIM("+qualifiedColumn("d", models.DocumentColumns.ContentMD)+") <> '')",
-			models.DocumentFormatMarkdown,
-			models.DocumentFormatDOCX,
-			models.DocumentFormatXLSX,
-			models.DocumentRenderStatusSuccess,
-		)
+		Where(qualifiedColumn("d", models.DocumentColumns.DeletedAt) + " IS NULL")
+	return filterSearchDocumentFormats(query, "d", true)
+}
+
+func filterSearchDocumentFormats(query *gorm.DB, alias string, includeRenderedOffice bool) *gorm.DB {
+	format := qualifiedColumn(alias, models.DocumentColumns.Format)
+	markdown := format + " = ?"
+	if !includeRenderedOffice {
+		return query.Where(markdown, models.DocumentFormatMarkdown)
+	}
+	conditions := query.Session(&gorm.Session{NewDB: true})
+	renderedOffice := conditions.
+		Where(format+" IN ?", []models.DocumentFormat{models.DocumentFormatDOCX, models.DocumentFormatXLSX}).
+		Where(qualifiedColumn(alias, models.DocumentColumns.RenderStatus)+" = ?", models.DocumentRenderStatusSuccess).
+		Where("TRIM(" + qualifiedColumn(alias, models.DocumentColumns.ContentMD) + ") <> ''")
+	return query.Where(conditions.Where(markdown, models.DocumentFormatMarkdown).Or(renderedOffice))
 }
 
 func (r *gormSearchIndexSourceRepository) selectSearchIndexSourceColumns(query *gorm.DB) *gorm.DB {

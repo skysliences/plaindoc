@@ -7,8 +7,11 @@ import type {
   AuthLoginInput,
   AuthLoginMode,
   AuthLoginProviderOption,
+  AuthMfaChallenge,
+  AuthMfaVerifyInput,
   AuthRegisterInput
 } from "../data-access";
+import { AuthMfaPanel } from "./AuthMfaPanel";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card";
@@ -31,8 +34,9 @@ interface AuthPanelProps {
   allowPasswordReset: boolean;
   providerOptions: AuthLoginProviderOption[];
   authChallenge: AuthCaptchaChallenge | null;
-  onLogin: (input: AuthLoginInput) => Promise<void>;
-  onRegister: (input: AuthRegisterInput) => Promise<void>;
+  onLogin: (input: AuthLoginInput) => Promise<AuthMfaChallenge | null>;
+  onRegister: (input: AuthRegisterInput) => Promise<AuthMfaChallenge | null>;
+  onVerifyMfa: (input: AuthMfaVerifyInput) => Promise<void>;
   onRefreshCaptcha: (input: AuthCaptchaRefreshInput) => Promise<void>;
 }
 
@@ -52,6 +56,7 @@ export function AuthPanel({
   authChallenge,
   onLogin,
   onRegister,
+  onVerifyMfa,
   onRefreshCaptcha
 }: AuthPanelProps) {
   const [name, setName] = useState("");
@@ -62,10 +67,12 @@ export function AuthPanel({
   const [provider, setProvider] = useState("__auto__");
   const [captchaAnswer, setCaptchaAnswer] = useState("");
   const [refreshingCaptcha, setRefreshingCaptcha] = useState(false);
+  const [mfaChallenge, setMfaChallenge] = useState<AuthMfaChallenge | null>(null);
   const refreshDelayTimerRef = useRef<number | null>(null);
   const refreshCancelledRef = useRef(false);
 
   useEffect(() => {
+    refreshCancelledRef.current = false;
     return () => {
       refreshCancelledRef.current = true;
       if (refreshDelayTimerRef.current !== null) {
@@ -147,7 +154,7 @@ export function AuthPanel({
   const switchActionText = mode === "login" ? "注册新账号" : "去登录";
   const switchPromptText = mode === "login" ? "还没有账号？" : "已有账号？";
   const headingText = mode === "login" ? "bugodoc 登录" : "bugodoc 注册";
-  const introText = mode === "login" ? "登录后开始编辑文档" : "注册后创建你的文档空间";
+  const introText = mode === "login" ? "登录后开始编辑文档" : "注册时需绑定 Google Authenticator";
   const badgeText = mode === "login" ? "账号登录" : "账号注册";
   const showProviderSelector =
     mode === "login" && loginMode !== "local_only" && providerOptions.length > 0;
@@ -172,7 +179,7 @@ export function AuthPanel({
     }
     if (mode === "login") {
       const selectedProvider = provider !== "__auto__" ? provider : undefined;
-      await onLogin({
+      const challenge = await onLogin({
         identifier: identifier.trim(),
         password,
         provider: selectedProvider,
@@ -180,9 +187,10 @@ export function AuthPanel({
         captchaAnswer: captchaAnswer.trim()
       });
       setPassword("");
+      setMfaChallenge(challenge);
       return;
     }
-    await onRegister({
+    const challenge = await onRegister({
       name: name.trim(),
       email: email.trim(),
       password,
@@ -191,6 +199,7 @@ export function AuthPanel({
     });
     setPassword("");
     setConfirmPassword("");
+    setMfaChallenge(challenge);
   }, [authChallenge?.captchaId, canSubmit, captchaAnswer, email, identifier, mode, name, onLogin, onRegister, password, provider]);
 
   const handleRefreshCaptcha = useCallback(async () => {
@@ -220,6 +229,17 @@ export function AuthPanel({
       }
     }
   }, [authChallenge, canRefreshCaptcha, captchaIdentifier, mode, onRefreshCaptcha]);
+
+  if (mfaChallenge) {
+    return (
+      <AuthMfaPanel
+        challenge={mfaChallenge}
+        registration={mode === "register"}
+        onVerify={onVerifyMfa}
+        onBack={() => setMfaChallenge(null)}
+      />
+    );
+  }
 
   return (
     <div className="admin-auth-page">

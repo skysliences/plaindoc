@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/lifei6671/plaindoc/apps/server/internal/storage/repository"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
@@ -65,7 +66,6 @@ func TestSearchProviders_PlatformAdminSeesAllActiveMarkdown(t *testing.T) {
 	seedVisibilityMatrixTestData(t, db)
 	// The Bleve snapshot below is intentionally out of date for these three documents.
 	statements := []string{
-		`ALTER TABLE documents ADD COLUMN format TEXT NOT NULL DEFAULT 'markdown'`,
 		`UPDATE documents SET status = 'banned' WHERE document_id = 'doc-member-authenticated'`,
 		`UPDATE documents SET deleted_at = CURRENT_TIMESTAMP WHERE document_id = 'doc-authenticated-member'`,
 		`UPDATE documents SET format = 'docx' WHERE document_id = 'doc-public-member'`,
@@ -109,6 +109,93 @@ func TestSearchProviders_PlatformAdminSeesAllActiveMarkdown(t *testing.T) {
 			}
 			assertSearchDocSet(t, result, []string{})
 		})
+	}
+}
+
+func TestSearchProviders_RecheckCurrentReadAccess(t *testing.T) {
+	db := openVisibilityMatrixTestDB(t, "file:test-current-search-read-access?mode=memory&cache=shared")
+	seedVisibilityMatrixTestData(t, db)
+
+	ctx := context.Background()
+	bleve := NewBleveProvider(BleveProviderOptions{DB: db, IndexPath: filepath.Join(t.TempDir(), "bleve-index")})
+	if err := bleve.Upsert(ctx, buildVisibilityMatrixIndexRecords(time.Now().UTC().Unix())); err != nil {
+		t.Fatalf("bleve upsert failed: %v", err)
+	}
+
+	// Leave the index unchanged while changing visibility, status and the document ACL.
+	for _, statement := range []string{
+		`INSERT INTO space_admin_scopes(space_id, user_id) VALUES ('space-member', 'scoped-admin')`,
+		`INSERT INTO document_permissions(document_id, user_id, access_denied) VALUES
+		 ('doc-member-member', 'scoped-admin', TRUE),
+		 ('doc-member-member', 'owner-member', TRUE),
+		 ('doc-authenticated-public', 'outsider', TRUE)`,
+		`UPDATE documents SET visibility = 'member' WHERE document_id = 'doc-public-public'`,
+		`UPDATE documents SET banned_at = CURRENT_TIMESTAMP WHERE document_id = 'doc-public-authenticated'`,
+		`UPDATE documents SET visibility = 'public' WHERE document_id = 'doc-public-member'`,
+	} {
+		if err := db.Exec(statement).Error; err != nil {
+			t.Fatalf("prepare current access policy: %v", err)
+		}
+	}
+
+	visibility := repository.NewGormSearchVisibilityRepository(db)
+	for _, provider := range []Provider{NewDatabaseProvider(db), bleve} {
+		t.Run(provider.Name(), func(t *testing.T) {
+			cases := []visibilityMatrixCase{
+				{name: "anonymous", expectedDoc: []string{"doc-public-member"}},
+				{name: "outsider", actorUserID: "outsider", expectedDoc: []string{
+					"doc-authenticated-authenticated", "doc-public-member",
+				}},
+				{name: "scoped admin", actorUserID: "scoped-admin", expectedDoc: []string{
+					"doc-authenticated-public", "doc-authenticated-authenticated", "doc-public-member",
+					"doc-member-public", "doc-member-authenticated",
+				}},
+				{name: "owner", actorUserID: "owner-member", expectedDoc: []string{
+					"doc-authenticated-public", "doc-authenticated-authenticated", "doc-public-member",
+					"doc-member-public", "doc-member-authenticated", "doc-member-member",
+				}},
+			}
+			for _, item := range cases {
+				t.Run(item.name, func(t *testing.T) {
+					scopeSpaceIDs, err := visibility.ResolveSearchScopeSpaceIDs(ctx, item.actorUserID)
+					if err != nil {
+						t.Fatal(err)
+					}
+					result, err := provider.Search(ctx, SearchRequest{
+						Query: "matrix hit", ActorUserID: item.actorUserID, ScopeSpaceIDs: scopeSpaceIDs,
+					})
+					if err != nil {
+						t.Fatal(err)
+					}
+					assertSearchDocSet(t, result, item.expectedDoc)
+				})
+			}
+		})
+	}
+}
+
+func TestDatabaseProvider_SearchMatchesChineseSubstringAndLiteralPercent(t *testing.T) {
+	db := openVisibilityMatrixTestDB(t, "file:test-database-search-literal?mode=memory&cache=shared")
+	seedVisibilityMatrixTestData(t, db)
+	for _, statement := range []string{
+		`UPDATE documents SET content_md = '团队部署手册　已完成 100%' WHERE document_id = 'doc-public-public'`,
+		`UPDATE documents SET content_md = '部件放置后再署名' WHERE document_id = 'doc-public-authenticated'`,
+	} {
+		if err := db.Exec(statement).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	provider := NewDatabaseProvider(db)
+	for _, request := range []SearchRequest{
+		{Query: "部 署", RawQuery: "部署", ActorUserID: "outsider"},
+		{Query: "%", RawQuery: "%", ActorUserID: "outsider"},
+	} {
+		result, err := provider.Search(context.Background(), request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertSearchDocSet(t, result, []string{"doc-public-public"})
 	}
 }
 
@@ -326,6 +413,7 @@ CREATE TABLE spaces (
   owner_user_id TEXT,
   visibility TEXT,
   status TEXT,
+  banned_at TEXT NULL,
   deleted_at TEXT NULL,
   name TEXT
 )`).Error; err != nil {
@@ -343,10 +431,13 @@ CREATE TABLE documents (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   document_id TEXT,
   node_id TEXT,
+  format TEXT NOT NULL DEFAULT 'markdown',
+  render_status TEXT,
   title TEXT,
   content_md TEXT,
   visibility TEXT,
   status TEXT,
+  banned_at TEXT NULL,
   deleted_at TEXT NULL,
   updated_at TEXT
 )`).Error; err != nil {
@@ -361,6 +452,24 @@ CREATE TABLE space_members (
 )`).Error; err != nil {
 		return err
 	}
+	if err := db.Exec(`
+CREATE TABLE space_admin_scopes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  space_id TEXT,
+  user_id TEXT
+)`).Error; err != nil {
+		return err
+	}
+	if err := db.Exec(`
+CREATE TABLE document_permissions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  document_id TEXT,
+  user_id TEXT,
+  access_denied BOOLEAN NOT NULL DEFAULT FALSE
+)`).Error; err != nil {
+		return err
+	}
+
 	return nil
 }
 

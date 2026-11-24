@@ -97,10 +97,13 @@ func newRouter(
 	if len(proxies) == 1 && proxies[0] == "" {
 		proxies = nil
 	}
-	_ = router.SetTrustedProxies(proxies)
-
-	// 2) Cloudflare 场景：让 Gin 直接信任 CF-Connecting-IP（推荐）
-	router.TrustedPlatform = gin.PlatformCloudflare
+	if err := router.SetTrustedProxies(proxies); err != nil {
+		// 无效配置回退为直连地址，避免信任未经验证的转发头。
+		_ = router.SetTrustedProxies(nil)
+		if logger != nil {
+			logger.Error("trusted proxy configuration rejected", "error", err)
+		}
+	}
 
 	// 开启 405（Method Not Allowed）处理，让同一路径错误方法命中 NoMethod。
 	router.HandleMethodNotAllowed = true
@@ -116,6 +119,7 @@ func newRouter(
 	router.Use(middleware.Timeout(cfg.RequestTimeout))
 	// 6) CORS：统一跨域来源控制，配合前端域名配置使用。
 	router.Use(middleware.CORS(cfg.WebOrigin))
+	router.Use(middleware.AuthClientIP())
 
 	// ---- Repository 装配层 ----
 	// 所有仓储统一由 GORM 实现并在此注入，便于后续替换实现时维持依赖清晰。
@@ -148,7 +152,7 @@ func newRouter(
 
 	// ---- 基础服务与页面 Handler 装配 ----
 	// authService 是鉴权基石，后续 API/后台中间件都会复用。
-	authService := service.NewAuthService(userRepo, userSessionRepo, cfg.JWT)
+	authService := service.NewAuthService(userRepo, userSessionRepo, cfg.JWT, repository.NewAuthMFARepository(db))
 	emailConfigService := service.NewEmailConfigService(systemConfigRepo)
 	passwordResetService := service.NewPasswordResetService(
 		userRepo,
@@ -185,7 +189,6 @@ func newRouter(
 	searchQueryService.SetSearchVisibilityRepository(searchVisibilityRepo)
 	searchQueryService.SetAdminAccessService(adminAccessService)
 	documentPermissionRepo := repository.NewGormDocumentPermissionRepository(db)
-	searchQueryService.SetDocumentPermissionRepository(documentPermissionRepo)
 	searchIndexService := service.NewSearchIndexService(
 		db,
 		searchConfigService,
@@ -227,18 +230,6 @@ func newRouter(
 	onlyOfficeConfigService := service.NewOnlyOfficeConfigService(systemConfigRepo)
 	officeRenderingConfigService := service.NewOfficeRenderingConfigService(systemConfigRepo)
 	onlyOfficeDocumentTokenService := service.NewOnlyOfficeDocumentTokenService(cfg.JWT.Secret, 0)
-	// 阅读页 Handler：承接 /r/:spaceId/:docId 渲染链路（可降级）。
-	readerPageHandler := handler.NewReaderPageHandler(
-		authService,
-		readerPageService,
-		readerSSRDispatcher,
-		readerRenderCache,
-		logger,
-		cfg.WebOrigin,
-		onlyOfficeConfigService,
-		officeRenderingConfigService,
-		onlyOfficeDocumentTokenService,
-	)
 	documentShareService := service.NewDocumentShareService(
 		db,
 		documentShareRepo,
@@ -266,6 +257,22 @@ func newRouter(
 		documentAttachmentRepo,
 		documentImageAssetService,
 		searchIndexService,
+		cfg.WebDistDir,
+		cfg.SSRWorker.Entry,
+	)
+	// 阅读页 Handler：承接 /r/:spaceId/:docId 渲染链路（可降级）。
+	readerPageHandler := handler.NewReaderPageHandler(
+		authService,
+		readerPageService,
+		readerSSRDispatcher,
+		readerRenderCache,
+		logger,
+		cfg.WebOrigin,
+		onlyOfficeConfigService,
+		officeRenderingConfigService,
+		service.NewOfficeReaderPreviewService(officeHTMLRenderService),
+		onlyOfficeDocumentTokenService,
+		searchConfigService,
 	)
 	documentTemplateService := service.NewDocumentTemplateService(documentTemplateRepo)
 	imageHostingHandler := handler.NewImageHostingHandler(
@@ -291,6 +298,7 @@ func newRouter(
 		imageHostingService,
 		onlyOfficeConfigService,
 		officeHTMLRenderService,
+		service.NewWorkspaceImportMarkdownConverter(cfg.WebDistDir, cfg.SSRWorker.Entry),
 		onlyOfficeDocumentTokenService,
 		documentAttachmentTokenService,
 		auditLogRepo,
@@ -428,10 +436,10 @@ func newRouter(
 
 		// 登录策略选项（登录页模式、provider 列表与注册开关）。
 		api.GET("/auth/options", authHandler.Options)
-		// 用户注册。
+		// 注册和密码登录先签发短期二次验证挑战。
 		api.POST("/auth/register", authHandler.Register)
-		// 用户登录，签发 access/refresh token。
 		api.POST("/auth/login", authHandler.Login)
+		api.POST("/auth/mfa/verify", authHandler.VerifyMFA)
 		// 刷新验证码图片（登录/注册风控验证）。
 		api.POST("/auth/captcha/refresh", authHandler.RefreshCaptcha)
 		// refresh token 续签并执行轮换策略。
@@ -768,6 +776,32 @@ func newRouter(
 					},
 				),
 				adminUserHandler.UpdateStatus,
+			)
+			adminAPI.PUT(
+				"/users/:userId/login-ips",
+				middleware.RequirePlatformAdmin(adminAccessService),
+				middleware.RequireAdminOperationToken(
+					adminOperationTokenService,
+					middleware.AdminOperationTokenBinding{
+						Operation:     "user.update_login_ips",
+						TargetType:    "user",
+						TargetIDParam: "userId",
+					},
+				),
+				adminUserHandler.UpdateLoginIPAddresses,
+			)
+			adminAPI.POST(
+				"/users/:userId/reset-mfa",
+				middleware.RequirePlatformAdmin(adminAccessService),
+				middleware.RequireAdminOperationToken(
+					adminOperationTokenService,
+					middleware.AdminOperationTokenBinding{
+						Operation:     "user.reset_mfa",
+						TargetType:    "user",
+						TargetIDParam: "userId",
+					},
+				),
+				adminUserHandler.ResetMFA,
 			)
 			adminAPI.DELETE(
 				"/users/:userId",

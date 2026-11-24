@@ -42,6 +42,7 @@ import {
   useCallback,
   useDeferredValue,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   startTransition,
@@ -90,6 +91,8 @@ import {
   type AuthCaptchaRefreshInput,
   type AuthLoginInput,
   type AuthLoginOptions,
+  type AuthMfaChallenge,
+  type AuthMfaVerifyInput,
   type AuthRegisterInput,
   type AuthSession,
   type AuthUnauthorizedEventDetail,
@@ -1143,12 +1146,13 @@ export default function App() {
   const workspaceSidebarResizeStateRef = useRef<{ startX: number; startWidth: number } | null>(null);
   // 记录“由本地动作触发的目标文档路由”，避免路由 effect 在状态尚未同步时重复请求。
   const pendingRouteDocumentIDRef = useRef<{ docId: string; startedAt: number } | null>(null);
-  // 自动保存并发保护：避免低延迟模式下出现并发 PUT 造成版本竞争。
-  const autoSaveInFlightRef = useRef(false);
+  // 共享正在执行的保存和服务端确认的基线，供手动保存紧接自动保存时使用。
+  const markdownSaveRef = useRef<Promise<boolean> | null>(null);
+  const markdownBaselineRef = useRef({ docId: activeDocId, version: baseVersion, content: lastSavedContent });
   const allowReaderEditorUnloadRef = useRef(false);
   const readerEditorClosingRef = useRef(false);
-  // 自动保存计划序号：仅允许最新一轮计划执行，旧计划直接丢弃。
-  const autoSaveScheduleIDRef = useRef(0);
+  const readerEditorHasSavedRef = useRef(false);
+  const [readerEditorExit, setReaderEditorExit] = useState<"save" | "close" | null>(null);
   // ONLYOFFICE 回写后延迟刷新文档元信息，避免与服务端 callback 写回竞争。
   const onlyOfficeMetadataRefreshTimerRef = useRef<number | null>(null);
   // 追踪最新编辑内容：供异步保存回调判断“请求期间是否发生继续编辑”。
@@ -1620,9 +1624,13 @@ export default function App() {
     activeDocIDRef.current = activeDocId;
   }, [activeDocId]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     latestContentRef.current = content;
   }, [content]);
+
+  useLayoutEffect(() => {
+    markdownBaselineRef.current = { docId: activeDocId, version: baseVersion, content: lastSavedContent };
+  }, [activeDocId, baseVersion, lastSavedContent]);
 
   // 统一图片上传流程：粘贴上传与“插入图片”按钮共用，避免权限与状态处理分叉。
   const uploadImageFilesToEditor = useCallback(
@@ -2523,10 +2531,12 @@ export default function App() {
   }, [content, lastSavedContent, readerEditorParentOrigin]);
 
   const handleCloseReaderEditor = useCallback(async () => {
-    if (!readerEditorParentOrigin || autoSaveInFlightRef.current || readerEditorClosingRef.current) return;
+    if (!readerEditorParentOrigin || readerEditorClosingRef.current) return;
     readerEditorClosingRef.current = true;
+    setReaderEditorExit("close");
     try {
-      if (latestContentRef.current !== lastSavedContent) {
+      await markdownSaveRef.current;
+      if (latestContentRef.current !== markdownBaselineRef.current.content) {
         window.focus();
         const confirmed = await confirmByModal({
           title: "返回阅读模式？",
@@ -2537,11 +2547,16 @@ export default function App() {
         if (!confirmed) return;
       }
       allowReaderEditorUnloadRef.current = true;
-      window.parent.postMessage({ type: "plaindoc:reader-editor-closed" }, readerEditorParentOrigin);
+      window.parent.postMessage({
+        type: readerEditorHasSavedRef.current ? "plaindoc:reader-editor-saved" : "plaindoc:reader-editor-closed"
+      }, readerEditorParentOrigin);
     } finally {
-      readerEditorClosingRef.current = false;
+      if (!allowReaderEditorUnloadRef.current) {
+        readerEditorClosingRef.current = false;
+        setReaderEditorExit(null);
+      }
     }
-  }, [confirmByModal, lastSavedContent, readerEditorParentOrigin]);
+  }, [confirmByModal, readerEditorParentOrigin]);
 
   useEffect(() => {
     if (!readerEditorParentOrigin) return;
@@ -3100,74 +3115,99 @@ export default function App() {
   );
 
   const saveMarkdownDocument = useCallback(async () => {
-    if (!activeDocId || !isTextEditor || autoSaveInFlightRef.current) return false;
-    autoSaveInFlightRef.current = true;
+    const baseline = markdownBaselineRef.current;
+    if (!activeDocId || !isTextEditor || baseline.docId !== activeDocId) return false;
+    if (markdownSaveRef.current) return markdownSaveRef.current;
     const contentAtSaveStart = latestContentRef.current;
-    setSaveStatus("saving");
-    setStatusMessage("保存中...");
-    try {
-      const result = await dataGateway.document.saveDocument({
-        docId: activeDocId,
-        contentMd: contentAtSaveStart,
-        baseVersion
-      });
-      const savedContent = result.document.contentMd;
-      // 仅在保存期间用户未继续编辑时，回写服务端版本，避免覆盖后续输入。
-      if (latestContentRef.current === contentAtSaveStart && savedContent !== contentAtSaveStart) {
-        setContent(savedContent);
-      }
-      setBaseVersion(result.document.version);
-      setActiveDocumentFormat(result.document.format ?? "markdown");
-      setActiveDocumentTitle(result.document.title || "未命名文档");
-      setActiveDocumentThemeId(result.document.themeId || DEFAULT_PREVIEW_THEME_ID);
-      setActiveDocumentSourceFileName(result.document.sourceFileName ?? null);
-      setActiveDocumentSourceMimeType(result.document.sourceMimeType ?? null);
-      setActiveDocumentContentVersion(result.document.contentVersion ?? result.document.version);
-      setLastSavedAt(result.document.updatedAt);
-      setLastSavedContent(savedContent);
-      setSaveStatus("saved");
-      setStatusMessage(`已保存 v${result.document.version}`);
-      return latestContentRef.current === contentAtSaveStart;
-    } catch (error) {
-      if (error instanceof ConflictError) {
-        setSaveStatus("conflict");
-        setStatusMessage(
-          `检测到冲突：当前基线 v${baseVersion}，最新版本 v${error.latestDocument.version}`
-        );
+    if (contentAtSaveStart === baseline.content) return true;
+
+    const save = async () => {
+      setSaveStatus("saving");
+      setStatusMessage("保存中...");
+      try {
+        const { document } = await dataGateway.document.saveDocument({
+          docId: activeDocId,
+          contentMd: contentAtSaveStart,
+          baseVersion: baseline.version
+        });
+        if (markdownBaselineRef.current.docId !== activeDocId) return false;
+        const savedContent = document.contentMd;
+        markdownBaselineRef.current = { docId: activeDocId, version: document.version, content: savedContent };
+        // 用户在请求期间输入的新内容交给下一次保存。
+        if (latestContentRef.current === contentAtSaveStart && savedContent !== contentAtSaveStart) {
+          latestContentRef.current = savedContent;
+          setContent(savedContent);
+        }
+        setBaseVersion(document.version);
+        setActiveDocumentFormat(document.format ?? "markdown");
+        setActiveDocumentTitle(document.title || "未命名文档");
+        setActiveDocumentThemeId(document.themeId || DEFAULT_PREVIEW_THEME_ID);
+        setActiveDocumentSourceFileName(document.sourceFileName ?? null);
+        setActiveDocumentSourceMimeType(document.sourceMimeType ?? null);
+        setActiveDocumentContentVersion(document.contentVersion ?? document.version);
+        setLastSavedAt(document.updatedAt);
+        setLastSavedContent(savedContent);
+        if (readerEditorParentOrigin) readerEditorHasSavedRef.current = true;
+        const isSaved = latestContentRef.current === savedContent;
+        setSaveStatus(isSaved ? "saved" : "ready");
+        setStatusMessage(isSaved ? `已保存 v${document.version}` : "有未保存的修改");
+        return true;
+      } catch (error) {
+        if (markdownBaselineRef.current.docId !== activeDocId) return false;
+        if (error instanceof ConflictError) {
+          setSaveStatus("conflict");
+          setStatusMessage(
+            `检测到冲突：当前基线 v${baseline.version}，最新版本 v${error.latestDocument.version}`
+          );
+        } else {
+          setSaveStatus("error");
+          setStatusMessage(`保存失败：${formatError(error)}`);
+        }
         return false;
       }
-      setSaveStatus("error");
-      setStatusMessage(`保存失败：${formatError(error)}`);
-      return false;
-    } finally {
-      autoSaveInFlightRef.current = false;
-    }
+    };
+    markdownSaveRef.current = save().finally(() => {
+      markdownSaveRef.current = null;
+    });
+    return markdownSaveRef.current;
   }, [
-    activeDocId, baseVersion, dataGateway.document, isTextEditor, setActiveDocumentContentVersion, setActiveDocumentFormat,
+    activeDocId, dataGateway.document, isTextEditor, readerEditorParentOrigin, setActiveDocumentContentVersion, setActiveDocumentFormat,
     setActiveDocumentSourceFileName, setActiveDocumentSourceMimeType, setActiveDocumentThemeId,
     setActiveDocumentTitle, setBaseVersion, setContent, setLastSavedAt, setLastSavedContent
   ]);
 
-  // 阅读页内嵌时只在明确点击保存后提交，避免与自动保存竞争版本。
+  // 阅读页内嵌与独立工作台共用自动保存，返回预览期间由退出流程处理保存。
   useEffect(() => {
     if (
-      readerEditorParentOrigin || !activeDocId || !isTextEditor || activeDocumentFormat !== "markdown" ||
+      readerEditorExit || !activeDocId || !isTextEditor || activeDocumentFormat !== "markdown" ||
       content === lastSavedContent || saveStatus === "loading" ||
-      saveStatus === "saving" || saveStatus === "conflict"
+      saveStatus === "saving" || saveStatus === "conflict" || (readerEditorParentOrigin && saveStatus === "error")
     ) return;
 
-    const scheduleID = ++autoSaveScheduleIDRef.current;
     const timer = window.setTimeout(() => {
-      if (scheduleID === autoSaveScheduleIDRef.current) void saveMarkdownDocument();
+      if (!readerEditorClosingRef.current) void saveMarkdownDocument();
     }, AUTO_SAVE_DEBOUNCE_MS);
     return () => window.clearTimeout(timer);
-  }, [activeDocId, activeDocumentFormat, content, isTextEditor, lastSavedContent, readerEditorParentOrigin, saveMarkdownDocument, saveStatus]);
+  }, [activeDocId, activeDocumentFormat, content, isTextEditor, lastSavedContent, readerEditorExit, readerEditorParentOrigin, saveMarkdownDocument, saveStatus]);
 
   async function handleSaveReaderDocument() {
-    if (!readerEditorParentOrigin || autoSaveInFlightRef.current || readerEditorClosingRef.current || saveStatus === "conflict") return;
-    if (latestContentRef.current !== lastSavedContent && !(await saveMarkdownDocument())) return;
-    allowReaderEditorUnloadRef.current = true;
-    window.parent.postMessage({ type: "plaindoc:reader-editor-saved" }, readerEditorParentOrigin);
+    if (!readerEditorParentOrigin || readerEditorClosingRef.current || saveStatus === "loading" || saveStatus === "conflict") return;
+    readerEditorClosingRef.current = true;
+    setReaderEditorExit("save");
+    try {
+      const pendingSave = markdownSaveRef.current;
+      if (pendingSave && !(await pendingSave)) return;
+      while (latestContentRef.current !== markdownBaselineRef.current.content) {
+        if (!(await saveMarkdownDocument())) return;
+      }
+      allowReaderEditorUnloadRef.current = true;
+      window.parent.postMessage({ type: "plaindoc:reader-editor-saved" }, readerEditorParentOrigin);
+    } finally {
+      if (!allowReaderEditorUnloadRef.current) {
+        readerEditorClosingRef.current = false;
+        setReaderEditorExit(null);
+      }
+    }
   }
 
   // 应用选中的主题：更新文档主题绑定并同步预览区渲染。
@@ -3261,6 +3301,7 @@ export default function App() {
     setContent(restoredContent);
     setLastSavedContent(restoredContent);
     setLastSavedAt(restoredDocument.updatedAt);
+    if (readerEditorParentOrigin) readerEditorHasSavedRef.current = true;
     setActiveDocumentFormat(restoredDocument.format ?? "markdown");
     setActiveDocumentTitle(restoredDocument.title || "未命名文档");
     setActiveDocumentThemeId(restoredThemeID);
@@ -3279,6 +3320,7 @@ export default function App() {
       `已恢复到历史版本 v${result.restoredFromRevision.version}，当前文档 v${restoredDocument.version}`
     );
   }, [
+    readerEditorParentOrigin,
     setActiveDocumentContentVersion,
     setActiveDocumentFormat,
     setActiveDocumentSourceFileName,
@@ -3350,6 +3392,7 @@ export default function App() {
     }
     try {
       const latestDocument = await openDocument(activeDocId);
+      if (readerEditorParentOrigin) readerEditorHasSavedRef.current = true;
       setSaveStatus("ready");
       setStatusMessage(`已同步到最新版本 v${latestDocument.version}`);
     } catch (error) {
@@ -3358,24 +3401,14 @@ export default function App() {
     }
   };
 
-  // 登录动作：认证成功后切换到工作区，并触发工作区启动流程。
-  const handleAuthLogin = useCallback(
-    async (input: AuthLoginInput) => {
+  const beginAuthMfa = useCallback(
+    async (action: "登录" | "注册", start: () => Promise<AuthMfaChallenge>) => {
       setIsAuthSubmitting(true);
       setAuthErrorMessage(null);
       try {
-        const session = await dataGateway.auth.login(input);
-        if (!session.user) {
-          setAuthErrorMessage("登录失败：服务端未返回用户信息");
-          return;
-        }
-        setAuthSession(session);
+        const challenge = await start();
         setAuthChallenge(null);
-        setSaveStatus("loading");
-        setStatusMessage(`欢迎回来，${session.user.name}`);
-        if (authRedirectTarget) {
-          window.location.assign(authRedirectTarget);
-        }
+        return challenge;
       } catch (error) {
         const errorCode = extractAuthRiskErrorCode(error);
         if (errorCode === AUTH_CAPTCHA_REQUIRED_CODE || errorCode === AUTH_CAPTCHA_INVALID_CODE) {
@@ -3387,63 +3420,43 @@ export default function App() {
         if (errorCode === AUTH_TEMPORARILY_LOCKED_CODE) {
           setAuthChallenge(null);
           const lockedUntil = parseAuthLockedUntil(error);
-          if (lockedUntil) {
-            setAuthErrorMessage(`登录失败：触发安全锁定，请在 ${lockedUntil} 后重试`);
-          } else {
-            setAuthErrorMessage("登录失败：触发安全锁定，请稍后再试");
-          }
-          return;
+          setAuthErrorMessage(
+            lockedUntil ? `${action}失败：触发安全锁定，请在 ${lockedUntil} 后重试` : `${action}失败：触发安全锁定，请稍后再试`
+          );
+        } else {
+          setAuthErrorMessage(`${action}失败：${formatError(error)}`);
         }
-        setAuthErrorMessage(`登录失败：${formatError(error)}`);
+        return null;
       } finally {
         setIsAuthSubmitting(false);
       }
     },
-    [authRedirectTarget, dataGateway]
+    []
   );
 
-  // 注册动作：注册成功后直接进入登录态。
+  const handleAuthLogin = useCallback(
+    (input: AuthLoginInput) => beginAuthMfa("登录", () => dataGateway.auth.login(input)),
+    [beginAuthMfa, dataGateway.auth]
+  );
+
   const handleAuthRegister = useCallback(
-    async (input: AuthRegisterInput) => {
-      setIsAuthSubmitting(true);
-      setAuthErrorMessage(null);
-      try {
-        const session = await dataGateway.auth.register(input);
-        if (!session.user) {
-          setAuthErrorMessage("注册失败：服务端未返回用户信息");
-          return;
-        }
-        setAuthSession(session);
-        setAuthChallenge(null);
-        setSaveStatus("loading");
-        setStatusMessage(`欢迎使用，${session.user.name}`);
-        if (authRedirectTarget) {
-          window.location.assign(authRedirectTarget);
-        }
-      } catch (error) {
-        const errorCode = extractAuthRiskErrorCode(error);
-        if (errorCode === AUTH_CAPTCHA_REQUIRED_CODE || errorCode === AUTH_CAPTCHA_INVALID_CODE) {
-          const challenge = parseAuthCaptchaChallenge(error);
-          if (challenge) {
-            setAuthChallenge(challenge);
-          }
-        }
-        if (errorCode === AUTH_TEMPORARILY_LOCKED_CODE) {
-          setAuthChallenge(null);
-          const lockedUntil = parseAuthLockedUntil(error);
-          if (lockedUntil) {
-            setAuthErrorMessage(`注册失败：触发安全锁定，请在 ${lockedUntil} 后重试`);
-          } else {
-            setAuthErrorMessage("注册失败：触发安全锁定，请稍后再试");
-          }
-          return;
-        }
-        setAuthErrorMessage(`注册失败：${formatError(error)}`);
-      } finally {
-        setIsAuthSubmitting(false);
+    (input: AuthRegisterInput) => beginAuthMfa("注册", () => dataGateway.auth.register(input)),
+    [beginAuthMfa, dataGateway.auth]
+  );
+
+  // 只有动态验证码验证成功才开启已登录的工作区。
+  const handleAuthMfaVerify = useCallback(
+    async (input: AuthMfaVerifyInput) => {
+      const session = await dataGateway.auth.verifyMfa(input);
+      if (!session.user) {
+        throw new Error("服务端未返回用户信息");
       }
+      setAuthSession(session);
+      setAuthChallenge(null);
+      setSaveStatus("loading");
+      setStatusMessage(`${route.kind === "register" ? "欢迎使用" : "欢迎回来"}，${session.user.name}`);
     },
-    [authRedirectTarget, dataGateway]
+    [dataGateway.auth, route.kind, setSaveStatus]
   );
 
   const handleAuthCaptchaRefresh = useCallback(
@@ -3549,6 +3562,7 @@ export default function App() {
           authChallenge={authChallenge}
           dataGateway={dataGateway}
           onLogin={handleAuthLogin}
+          onVerifyMfa={handleAuthMfaVerify}
           onRefreshCaptcha={handleAuthCaptchaRefresh}
           onLogout={handleAuthLogout}
         />
@@ -3606,6 +3620,7 @@ export default function App() {
       <>
         <Toaster />
         <AuthPanel
+          key={location.key}
           mode={route.kind === "register" ? "register" : "login"}
           switchPath={route.kind === "register" ? LOGIN_ROUTE_PATH : REGISTER_ROUTE_PATH}
           forgotPasswordPath={FORGOT_PASSWORD_ROUTE_PATH}
@@ -3620,6 +3635,7 @@ export default function App() {
           authChallenge={authChallenge}
           onLogin={handleAuthLogin}
           onRegister={handleAuthRegister}
+          onVerifyMfa={handleAuthMfaVerify}
           onRefreshCaptcha={handleAuthCaptchaRefresh}
         />
       </>
@@ -3651,12 +3667,19 @@ export default function App() {
       <ReaderCreateDocumentForm
         spaceId={route.spaceId}
         gateway={dataGateway.workspace}
+        parentOrigin={readerCreateParentOrigin}
         onCancel={() => window.parent.postMessage({ type: "plaindoc:reader-create-canceled" }, readerCreateParentOrigin)}
         onCreated={(documentId, identifier) => window.parent.postMessage({
           type: "plaindoc:reader-document-created", documentId, identifier
         }, readerCreateParentOrigin)}
+        onDocumentImported={(documentId) => window.parent.postMessage({
+          type: "plaindoc:reader-document-imported", documentId, spaceId: route.spaceId
+        }, readerCreateParentOrigin)}
         onFolderImported={() => window.parent.postMessage({
           type: "plaindoc:reader-folder-imported", spaceId: route.spaceId
+        }, readerCreateParentOrigin)}
+        onFolderCreated={(nodeId) => window.parent.postMessage({
+          type: "plaindoc:reader-folder-created", spaceId: route.spaceId, nodeId
         }, readerCreateParentOrigin)}
       />
     );
@@ -3703,8 +3726,8 @@ export default function App() {
           <div className="editor-toolbar__group editor-toolbar__group--plain">
             {readerEditorParentOrigin ? (
               !isActiveImage && (
-                <Button size="sm" disabled={saveStatus === "saving" || saveStatus === "conflict"} onClick={() => void handleSaveReaderDocument()}>
-                  {saveStatus === "saving" ? "保存中…" : "保存"}
+                <Button size="sm" disabled={Boolean(readerEditorExit) || saveStatus === "loading" || saveStatus === "conflict"} onClick={() => void handleSaveReaderDocument()}>
+                  {readerEditorExit === "save" ? "保存中…" : "保存"}
                 </Button>
               )
             ) : (
@@ -4058,12 +4081,11 @@ export default function App() {
                   height="100%"
                   onCreateEditor={handleEditorCreate}
                   onChange={(value) => {
-                    // 录入编辑内容，并将状态切回可保存。
                     latestContentRef.current = value;
-                    allowReaderEditorUnloadRef.current = false;
                     setContent(value);
-                    if ((!readerEditorParentOrigin || !autoSaveInFlightRef.current) && (saveStatus !== "loading" || Boolean(activeDocId))) {
+                    if (!markdownSaveRef.current && saveStatus !== "conflict" && (saveStatus !== "loading" || Boolean(activeDocId))) {
                       setSaveStatus("ready");
+                      if (value !== markdownBaselineRef.current.content) setStatusMessage("有未保存的修改");
                     }
                   }}
                   basicSetup={{

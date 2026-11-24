@@ -29,6 +29,32 @@ func NewGormReaderPageRepository(db *gorm.DB) ReaderPageRepository {
 	return &gormReaderPageRepository{db: db}
 }
 
+func (r *gormReaderPageRepository) SaveOfficePreview(
+	ctx context.Context,
+	documentID string,
+	contentVersion int,
+	sourceBlobID string,
+	renderedHTML string,
+	renderedAt time.Time,
+) (bool, error) {
+	if r == nil || r.db == nil {
+		return false, errors.New("reader page repository db is nil")
+	}
+	columns := models.DocumentColumns
+	result := r.db.WithContext(ctx).Model(&models.Document{}).
+		Where(columns.DocumentID+" = ?", documentID).
+		Where(columns.ContentVersion+" = ?", contentVersion).
+		Where(columns.SourceBlobID+" = ?", sourceBlobID).
+		Where(columns.Status+" = ?", models.EntityStatusActive).
+		UpdateColumns(map[string]any{
+			columns.ContentMD:    renderedHTML,
+			columns.RenderStatus: models.DocumentRenderStatusSuccess,
+			columns.RenderError:  "",
+			columns.RenderedAt:   renderedAt,
+		})
+	return result.RowsAffected > 0, result.Error
+}
+
 func (r *gormReaderPageRepository) ResolveDocumentID(
 	ctx context.Context,
 	spaceID string,

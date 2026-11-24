@@ -1,121 +1,115 @@
-import { render, screen, waitFor } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { DataGateway } from "../../data-access";
+import type { AdminUser, DataGateway } from "../../data-access";
 import { AdminUsersPage } from "./AdminUsersPage";
 
-const { confirmMock, promptMock, showToastMock } = vi.hoisted(() => ({
-  confirmMock: vi.fn(),
-  promptMock: vi.fn(),
-  showToastMock: vi.fn()
-}));
+const { showToast } = vi.hoisted(() => ({ showToast: vi.fn() }));
+vi.mock("../../components/ui/toast", () => ({ showToast }));
 
-vi.mock("../components/AdminDialogs", () => {
-  return {
-    useAdminDialogs: () => ({
-      confirm: confirmMock,
-      prompt: promptMock,
-      dialogs: null
-    })
-  };
-});
-
-vi.mock("../../components/ui/toast", () => {
-  return {
-    showToast: showToastMock
-  };
-});
+const listedUser: AdminUser = {
+  userId: "target-user",
+  email: "reader@example.com",
+  name: "阅读者",
+  role: "user",
+  canEditRole: true,
+  loginIpAddresses: ["192.0.2.1"],
+  status: "active",
+  bannedReason: "",
+  bannedAt: null,
+  deletedAt: null,
+  createdAt: "",
+  updatedAt: ""
+};
 
 describe("AdminUsersPage", () => {
   beforeEach(() => {
-    confirmMock.mockReset();
-    promptMock.mockReset();
-    showToastMock.mockReset();
-    promptMock.mockResolvedValue(null);
+    showToast.mockReset();
   });
 
-  it("sends password reset email after confirm", async () => {
+  it("retains failed IP edits, saves multiple addresses and can clear the list", async () => {
     const listUsers = vi.fn().mockResolvedValue({
-      items: [
-        {
-          userId: "user-target",
-          email: "target@example.com",
-          name: "Target User",
-          role: "user",
-          canEditRole: true,
-          status: "active",
-          bannedReason: "",
-          bannedAt: null,
-          deletedAt: null,
-          createdAt: "2026-03-01T00:00:00Z",
-          updatedAt: "2026-03-01T00:00:00Z"
-        }
-      ],
-      pagination: {
-        page: 1,
-        pageSize: 20,
-        total: 1
-      }
+      items: [listedUser],
+      pagination: { page: 1, pageSize: 20, total: 1 }
     });
-    const sendUserPasswordResetEmail = vi.fn().mockResolvedValue(undefined);
-    confirmMock.mockResolvedValue(true);
+    const updateUserLoginIPs = vi.fn()
+      .mockRejectedValueOnce(new Error("IP 地址格式无效"))
+      .mockResolvedValueOnce({ loginIpAddresses: ["192.0.2.2", "2001:db8::2"] })
+      .mockResolvedValueOnce({ loginIpAddresses: [] });
+    const dataGateway = { admin: { listUsers, updateUserLoginIPs } } as unknown as DataGateway;
 
-    const dataGateway = {
-      admin: {
-        listUsers,
-        sendUserPasswordResetEmail
-      }
-    } as unknown as DataGateway;
+    render(<AdminUsersPage currentUserID="admin-user" dataGateway={dataGateway} onLogout={vi.fn()} />);
+    fireEvent.click(await screen.findByRole("button", { name: "登录 IP" }));
+    let dialog = within(screen.getByRole("dialog", { name: "登录 IP 白名单" }));
+    expect(dialog.getByRole("textbox", { name: "允许的 IP 地址" })).toHaveValue("192.0.2.1");
 
-    const user = userEvent.setup();
-    render(<AdminUsersPage currentUserID="admin-self" dataGateway={dataGateway} />);
+    fireEvent.change(dialog.getByRole("textbox", { name: "允许的 IP 地址" }), { target: { value: "无效地址" } });
+    fireEvent.click(dialog.getByRole("button", { name: "保存白名单" }));
+    expect(await dialog.findByRole("alert")).toHaveTextContent("IP 地址格式无效");
+    expect(dialog.getByRole("textbox", { name: "允许的 IP 地址" })).toHaveValue("无效地址");
 
-    await screen.findByText("target@example.com");
-    await user.click(screen.getByRole("button", { name: "重置邮件" }));
-
-    await waitFor(() => {
-      expect(confirmMock).toHaveBeenCalledTimes(1);
-      expect(sendUserPasswordResetEmail).toHaveBeenCalledTimes(1);
-      expect(sendUserPasswordResetEmail).toHaveBeenCalledWith({ userId: "user-target" });
+    fireEvent.change(dialog.getByRole("textbox", { name: "允许的 IP 地址" }), {
+      target: { value: "192.0.2.2\n2001:db8::2，192.0.2.2" }
     });
-    expect(showToastMock).toHaveBeenCalledWith("重置密码邮件已发送：target@example.com", "success");
-    expect(listUsers.mock.calls.length).toBeGreaterThanOrEqual(2);
+    fireEvent.click(dialog.getByRole("button", { name: "保存白名单" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(updateUserLoginIPs).toHaveBeenLastCalledWith({
+      userId: listedUser.userId,
+      ipAddresses: ["192.0.2.2", "2001:db8::2"]
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "登录 IP" }));
+    dialog = within(screen.getByRole("dialog", { name: "登录 IP 白名单" }));
+    expect(dialog.getByRole("textbox", { name: "允许的 IP 地址" })).toHaveValue("192.0.2.2\n2001:db8::2");
+    fireEvent.change(dialog.getByRole("textbox", { name: "允许的 IP 地址" }), { target: { value: "" } });
+    fireEvent.click(dialog.getByRole("button", { name: "保存白名单" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(updateUserLoginIPs).toHaveBeenLastCalledWith({ userId: listedUser.userId, ipAddresses: [] });
   });
 
-  it("disables reset email button for current user", async () => {
+  it("confirms an authenticator reset for the selected user and lets the administrator retry a failed reset", async () => {
     const listUsers = vi.fn().mockResolvedValue({
-      items: [
-        {
-          userId: "admin-self",
-          email: "admin@example.com",
-          name: "Admin",
-          role: "platform_admin",
-          canEditRole: true,
-          status: "active",
-          bannedReason: "",
-          bannedAt: null,
-          deletedAt: null,
-          createdAt: "2026-03-01T00:00:00Z",
-          updatedAt: "2026-03-01T00:00:00Z"
-        }
-      ],
-      pagination: {
-        page: 1,
-        pageSize: 20,
-        total: 1
-      }
+      items: [listedUser],
+      pagination: { page: 1, pageSize: 20, total: 1 }
     });
+    const resetUserMfa = vi.fn().mockRejectedValueOnce(new Error("服务器暂不可用")).mockResolvedValueOnce(undefined);
+    const onLogout = vi.fn();
+    const dataGateway = { admin: { listUsers, resetUserMfa } } as unknown as DataGateway;
 
-    const dataGateway = {
-      admin: {
-        listUsers
-      }
-    } as unknown as DataGateway;
+    render(<AdminUsersPage currentUserID="admin-user" dataGateway={dataGateway} onLogout={onLogout} />);
+    const resetButton = await screen.findByRole("button", { name: "重置二次验证" });
+    fireEvent.click(resetButton);
+    const dialog = within(screen.getByRole("dialog", { name: `重置二次验证（${listedUser.email}）` }));
+    expect(dialog.getByText("该用户将退出所有设备。下次登录时需要重新绑定 Google Authenticator。")).toBeInTheDocument();
+    fireEvent.click(dialog.getByRole("button", { name: "取消" }));
+    expect(resetUserMfa).not.toHaveBeenCalled();
 
-    render(<AdminUsersPage currentUserID="admin-self" dataGateway={dataGateway} />);
-    await screen.findByText("admin@example.com");
+    fireEvent.click(resetButton);
+    fireEvent.click(screen.getByRole("button", { name: "确认重置" }));
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith("执行操作失败：服务器暂不可用", "error"));
 
-    expect(screen.getByRole("button", { name: "重置邮件" })).toBeDisabled();
-    expect(confirmMock).not.toHaveBeenCalled();
+    fireEvent.click(resetButton);
+    fireEvent.click(screen.getByRole("button", { name: "确认重置" }));
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith("二次验证已重置", "success"));
+    expect(resetUserMfa).toHaveBeenCalledTimes(2);
+    expect(resetUserMfa).toHaveBeenLastCalledWith({ userId: listedUser.userId });
+    expect(onLogout).not.toHaveBeenCalled();
+  });
+
+  it("returns the current administrator to sign-in after resetting their authenticator", async () => {
+    const listUsers = vi.fn().mockResolvedValue({
+      items: [{ ...listedUser, role: "platform_admin" }],
+      pagination: { page: 1, pageSize: 20, total: 1 }
+    });
+    const resetUserMfa = vi.fn().mockResolvedValue(undefined);
+    const onLogout = vi.fn().mockResolvedValue(undefined);
+    const dataGateway = { admin: { listUsers, resetUserMfa } } as unknown as DataGateway;
+
+    render(<AdminUsersPage currentUserID={listedUser.userId} dataGateway={dataGateway} onLogout={onLogout} />);
+    fireEvent.click(await screen.findByRole("button", { name: "重置二次验证" }));
+    expect(screen.getByText("你将退出所有设备。下次登录时需要重新绑定 Google Authenticator。")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "确认重置" }));
+    await waitFor(() => expect(onLogout).toHaveBeenCalledOnce());
+    expect(resetUserMfa).toHaveBeenCalledWith({ userId: listedUser.userId });
+    expect(listUsers).toHaveBeenCalledOnce();
   });
 });

@@ -122,7 +122,6 @@ func (h *documentSharePageHandler) Page(c *gin.Context) {
 		ActiveDocID:           pageResult.Page.ActiveDocID,
 		RequestOrigin:         resolveRequestOrigin(c),
 		Viewer:                viewer,
-		OfficeRendering:       h.readerRenderer.resolveOfficeRenderingState(c.Request.Context()),
 		Share: &readerPageShareState{
 			Enabled:            true,
 			ShareID:            strings.TrimSpace(pageResult.Share.ShareID),

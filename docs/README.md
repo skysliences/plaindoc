@@ -28,7 +28,7 @@
 1. `READER_DOCUMENT_IDENTIFIER_SEO_TECHNICAL_PLAN.md`  
    阅读页文档自定义标识（slug）方案：兼容旧 URL、canonical 统一、编辑器文档树入口、sitemap/搜索联动与迁移测试清单。
 2. `ONLYOFFICE_INTEGRATION_TECHNICAL_PLAN.md`  
-   ONLYOFFICE 一等文档方案：Word/Excel 作为文档节点接入，支持工作区编辑、前端阅读、分享阅读，并明确不参与搜索与 sitemap。
+   ONLYOFFICE 一等文档方案：Word/Excel 作为文档节点接入，支持工作区编辑、前端阅读和分享阅读。页面不进入 sitemap，配置 Bleve 时站内可检索已成功本地渲染的正文。
 3. `ONLYOFFICE_READER_HTML_RENDERING_TECHNICAL_PLAN.md`  
    ONLYOFFICE 阅读页本地 HTML 渲染方案：编辑继续走 iframe，阅读/分享按配置切换 ONLYOFFICE 或本地 HTML，并复用 `documents`、`document_image_assets`、`file_blobs` 实现轻量落地。
 4. `READER_IMAGE_VIEWER_TECHNICAL_PLAN.md`

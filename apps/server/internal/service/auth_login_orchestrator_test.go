@@ -8,7 +8,7 @@ import (
 
 type stubAuthLoginProvider struct {
 	id         string
-	session    AuthSession
+	session    AuthPrimaryIdentity
 	err        error
 	callCount  int
 	identifier string
@@ -23,12 +23,12 @@ func (p *stubAuthLoginProvider) Login(
 	_ context.Context,
 	identifier string,
 	password string,
-) (AuthSession, error) {
+) (AuthPrimaryIdentity, error) {
 	p.callCount += 1
 	p.identifier = identifier
 	p.password = password
 	if p.err != nil {
-		return AuthSession{}, p.err
+		return AuthPrimaryIdentity{}, p.err
 	}
 	return p.session, nil
 }
@@ -36,14 +36,12 @@ func (p *stubAuthLoginProvider) Login(
 func TestAuthLoginOrchestrator_LoginUsesDefaultProvider(t *testing.T) {
 	localProvider := &stubAuthLoginProvider{
 		id: AuthProviderLocalID,
-		session: AuthSession{
+		session: AuthPrimaryIdentity{
 			User: AuthUser{
 				ID:    "user-1",
 				Email: "demo@example.com",
 				Name:  "Demo",
 			},
-			Token:        "access-token",
-			RefreshToken: "refresh-token",
 		},
 	}
 
@@ -55,7 +53,7 @@ func TestAuthLoginOrchestrator_LoginUsesDefaultProvider(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected login success, got err=%v", err)
 	}
-	if session.User.ID != "user-1" || session.Token != "access-token" {
+	if session.User.ID != "user-1" {
 		t.Fatalf("unexpected session payload: %+v", session)
 	}
 	if localProvider.callCount != 1 {

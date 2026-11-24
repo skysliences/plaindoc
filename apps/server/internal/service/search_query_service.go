@@ -43,7 +43,6 @@ type SearchQueryResult struct {
 type SearchQueryService struct {
 	searchConfigService  *SearchConfigService
 	searchVisibilityRepo repository.SearchVisibilityRepository
-	documentPermissions  repository.DocumentPermissionRepository
 	adminAccessService   *AdminAccessService
 	providers            map[searchcfg.ProviderName]searchprovider.Provider
 }
@@ -78,10 +77,6 @@ func (s *SearchQueryService) SetSearchVisibilityRepository(
 		return
 	}
 	s.searchVisibilityRepo = searchVisibilityRepo
-}
-
-func (s *SearchQueryService) SetDocumentPermissionRepository(permissions repository.DocumentPermissionRepository) {
-	s.documentPermissions = permissions
 }
 
 // SetAdminAccessService 注入平台管理员检索权限判定。
@@ -189,19 +184,6 @@ func (s *SearchQueryService) Search(
 		NeedHighlight:       input.NeedHighlight,
 		DictVersion:         strings.TrimSpace(analyzeOutput.DictVersion),
 		NormalizerVersion:   searchNormalizerVersion,
-	}
-
-	if !canViewAllDocuments && normalizedViewerUserID != "" && s.documentPermissions != nil {
-		permissions, err := s.documentPermissions.List(ctx, normalizedSpaceID, "", normalizedViewerUserID)
-		if err != nil {
-			return SearchQueryResult{}, err
-		}
-		request.ExcludedDocumentIDs = make(map[string]struct{})
-		for _, permission := range permissions {
-			if permission.AccessDenied {
-				request.ExcludedDocumentIDs[permission.DocumentID] = struct{}{}
-			}
-		}
 	}
 
 	providerName, response, err := s.searchWithRuntimeFallback(

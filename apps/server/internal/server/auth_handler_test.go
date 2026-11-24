@@ -55,9 +55,29 @@ func TestRouter_AuthRegisterAndMe(t *testing.T) {
 	registerBody := []byte(`{"email":"demo@example.com","password":"123456","name":"Demo User"}`)
 	registerReq := httptest.NewRequest(http.MethodPost, "/api/auth/register", bytes.NewReader(registerBody))
 	registerReq.Header.Set("Content-Type", "application/json")
-	registerRec := serve(registerReq)
-	if registerRec.Code != http.StatusOK {
-		t.Fatalf("expected status 201, got %d, body=%s", registerRec.Code, registerRec.Body.String())
+	setup := readTestMFAChallenge(t, serve(registerReq), "setup")
+	var accounts int64
+	if err := database.ORM.Model(&models.User{}).Where(models.UserColumns.Email+" = ?", "demo@example.com").Count(&accounts).Error; err != nil || accounts != 0 {
+		t.Fatalf("registration created an account before MFA verification, count=%d err=%v", accounts, err)
+	}
+	invalidCode := "000000"
+	for _, candidate := range []string{"000000", "123456", "654321", "999999"} {
+		if candidate != testMFACode(t, setup.Secret, -1) &&
+			candidate != testMFACode(t, setup.Secret, 0) &&
+			candidate != testMFACode(t, setup.Secret, 1) {
+			invalidCode = candidate
+			break
+		}
+	}
+	invalid := serveTestMFAVerification(t, serve, registerReq, setup.ChallengeToken, invalidCode)
+	if decodeJSONResultCode(t, invalid.Body.Bytes()) == 0 {
+		t.Fatal("registration accepted an incorrect authenticator code")
+	}
+
+	registerRec, _ := verifyTestMFASetup(t, serve, registerReq, setup)
+	replay := serveTestMFAVerification(t, serve, registerReq, setup.ChallengeToken, testMFACode(t, setup.Secret, 0))
+	if decodeJSONResultCode(t, replay.Body.Bytes()) == 0 {
+		t.Fatal("registration accepted a previously consumed challenge")
 	}
 
 	registerPayload := decodeJSONResultData[struct {
@@ -118,7 +138,7 @@ func TestRouter_AuthLoginInvalidCredentials(t *testing.T) {
 	registerBody := []byte(`{"email":"user@example.com","password":"123456","name":"User"}`)
 	registerReq := httptest.NewRequest(http.MethodPost, "/api/auth/register", bytes.NewReader(registerBody))
 	registerReq.Header.Set("Content-Type", "application/json")
-	registerRec := serve(registerReq)
+	registerRec, _ := completeTestMFASetup(t, serve, registerReq)
 	if registerRec.Code != http.StatusOK {
 		t.Fatalf("register failed, status=%d body=%s", registerRec.Code, registerRec.Body.String())
 	}
@@ -141,7 +161,7 @@ func TestRouter_AuthRefresh(t *testing.T) {
 	registerBody := []byte(`{"email":"refresh@example.com","password":"123456","name":"Refresh User"}`)
 	registerReq := httptest.NewRequest(http.MethodPost, "/api/auth/register", bytes.NewReader(registerBody))
 	registerReq.Header.Set("Content-Type", "application/json")
-	registerRec := serve(registerReq)
+	registerRec, _ := completeTestMFASetup(t, serve, registerReq)
 	if registerRec.Code != http.StatusOK {
 		t.Fatalf("register failed, status=%d body=%s", registerRec.Code, registerRec.Body.String())
 	}
@@ -218,7 +238,7 @@ func TestRouter_AuthLogoutRevokesSession(t *testing.T) {
 	registerBody := []byte(`{"email":"logout@example.com","password":"123456","name":"Logout User"}`)
 	registerReq := httptest.NewRequest(http.MethodPost, "/api/auth/register", bytes.NewReader(registerBody))
 	registerReq.Header.Set("Content-Type", "application/json")
-	registerRec := serve(registerReq)
+	registerRec, _ := completeTestMFASetup(t, serve, registerReq)
 	if registerRec.Code != http.StatusOK {
 		t.Fatalf("register failed, status=%d body=%s", registerRec.Code, registerRec.Body.String())
 	}
@@ -351,7 +371,7 @@ func TestRouter_AuthPasswordReset_ConfirmSuccessAndConsumed(t *testing.T) {
 		bytes.NewReader([]byte(`{"email":"password-reset-confirm@example.com","password":"123456","name":"Reset Confirm User"}`)),
 	)
 	registerReq.Header.Set("Content-Type", "application/json")
-	registerRec := serve(registerReq)
+	registerRec, _ := completeTestMFASetup(t, serve, registerReq)
 	if registerRec.Code != http.StatusOK {
 		t.Fatalf("register failed, status=%d body=%s", registerRec.Code, registerRec.Body.String())
 	}
@@ -626,7 +646,7 @@ func TestRouter_AuthLoginWithIdentifier(t *testing.T) {
 	registerBody := []byte(`{"email":"identifier@example.com","password":"123456","name":"Identifier User"}`)
 	registerReq := httptest.NewRequest(http.MethodPost, "/api/auth/register", bytes.NewReader(registerBody))
 	registerReq.Header.Set("Content-Type", "application/json")
-	registerRec := serve(registerReq)
+	registerRec, secret := completeTestMFASetup(t, serve, registerReq)
 	if registerRec.Code != http.StatusOK {
 		t.Fatalf("register failed, status=%d body=%s", registerRec.Code, registerRec.Body.String())
 	}
@@ -634,7 +654,8 @@ func TestRouter_AuthLoginWithIdentifier(t *testing.T) {
 	loginBody := []byte(`{"identifier":"identifier@example.com","password":"123456"}`)
 	loginReq := httptest.NewRequest(http.MethodPost, "/api/auth/login", bytes.NewReader(loginBody))
 	loginReq.Header.Set("Content-Type", "application/json")
-	loginRec := serve(loginReq)
+	challenge := readTestMFAChallenge(t, serve(loginReq), "verify")
+	loginRec := serveTestMFAVerification(t, serve, loginReq, challenge.ChallengeToken, testMFACode(t, secret, 1))
 	if loginRec.Code != http.StatusOK {
 		t.Fatalf("expected status 200, got %d, body=%s", loginRec.Code, loginRec.Body.String())
 	}
@@ -763,7 +784,7 @@ func TestRouter_AuthLoginRiskCaptchaAndLock(t *testing.T) {
 	registerBody := []byte(`{"email":"risk-login@example.com","password":"123456","name":"Risk Login"}`)
 	registerReq := httptest.NewRequest(http.MethodPost, "/api/auth/register", bytes.NewReader(registerBody))
 	registerReq.Header.Set("Content-Type", "application/json")
-	registerRec := serve(registerReq)
+	registerRec, _ := completeTestMFASetup(t, serve, registerReq)
 	if registerRec.Code != http.StatusOK {
 		t.Fatalf("register failed, status=%d body=%s", registerRec.Code, registerRec.Body.String())
 	}
@@ -832,7 +853,7 @@ func TestRouter_AuthRegisterRiskCaptchaRequired(t *testing.T) {
 		bytes.NewReader([]byte(`{"email":"risk-register@example.com","password":"123456","name":"Risk Register"}`)),
 	)
 	firstRegisterReq.Header.Set("Content-Type", "application/json")
-	firstRegisterRec := serve(firstRegisterReq)
+	firstRegisterRec, _ := completeTestMFASetup(t, serve, firstRegisterReq)
 	if firstRegisterRec.Code != http.StatusOK {
 		t.Fatalf("expected first register status 200, got %d body=%s", firstRegisterRec.Code, firstRegisterRec.Body.String())
 	}
@@ -878,7 +899,7 @@ func TestRouter_AuthCaptchaRefresh(t *testing.T) {
 	registerBody := []byte(`{"email":"refresh-captcha@example.com","password":"123456","name":"Refresh Captcha"}`)
 	registerReq := httptest.NewRequest(http.MethodPost, "/api/auth/register", bytes.NewReader(registerBody))
 	registerReq.Header.Set("Content-Type", "application/json")
-	registerRec := serve(registerReq)
+	registerRec, _ := completeTestMFASetup(t, serve, registerReq)
 	if registerRec.Code != http.StatusOK {
 		t.Fatalf("register failed, status=%d body=%s", registerRec.Code, registerRec.Body.String())
 	}
@@ -948,7 +969,7 @@ func TestRouter_AuthCaptchaStoreLifecycle(t *testing.T) {
 	registerBody := []byte(`{"email":"captcha-store@example.com","password":"123456","name":"Captcha Store"}`)
 	registerReq := httptest.NewRequest(http.MethodPost, "/api/auth/register", bytes.NewReader(registerBody))
 	registerReq.Header.Set("Content-Type", "application/json")
-	registerRec := serve(registerReq)
+	registerRec, _ := completeTestMFASetup(t, serve, registerReq)
 	if registerRec.Code != http.StatusOK {
 		t.Fatalf("register failed, status=%d body=%s", registerRec.Code, registerRec.Body.String())
 	}

@@ -731,6 +731,30 @@ pre {
   gap: 14px;
 }
 
+.yt-search-pagination {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: 12px;
+  margin-top: 18px;
+  color: #616161;
+  font-size: 14px;
+}
+
+.yt-search-pagination a {
+  padding: 8px 14px;
+  border: 1px solid #d6d6d6;
+  border-radius: 10px;
+  color: #0f172a;
+  background: #ffffff;
+  text-decoration: none;
+}
+
+.yt-search-pagination a:hover {
+  background: #f5f5f5;
+}
+
 .yt-footer {
   margin-top: auto;
   border-top: 1px solid #e6e6e6;

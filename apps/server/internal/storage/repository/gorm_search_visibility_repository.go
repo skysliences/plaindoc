@@ -13,6 +13,8 @@ type gormSearchVisibilityRepository struct {
 	db *gorm.DB
 }
 
+var searchLikeEscaper = strings.NewReplacer("!", "!!", "%", "!%", "_", "!_")
+
 // NewGormSearchVisibilityRepository 创建检索可见性仓储。
 func NewGormSearchVisibilityRepository(db *gorm.DB) SearchVisibilityRepository {
 	return &gormSearchVisibilityRepository{db: db}
@@ -26,7 +28,11 @@ func (r *gormSearchVisibilityRepository) SearchVisibleDocuments(
 		return nil, 0, fmt.Errorf("search visibility repository db is nil")
 	}
 
-	query := r.baseVisibleDocumentsQuery(ctx, params.ActorUserID, params.SpaceID, params.ScopeSpaceIDs, params.CanViewAllDocuments)
+	query := filterSearchDocumentFormats(
+		r.baseVisibleDocumentsQuery(ctx, params.ActorUserID, params.SpaceID, params.ScopeSpaceIDs, params.CanViewAllDocuments),
+		"d",
+		false,
+	)
 	normalizedTerms := make([]string, 0, len(params.Terms))
 	for _, item := range params.Terms {
 		normalizedTerm := strings.ToLower(strings.TrimSpace(item))
@@ -39,8 +45,8 @@ func (r *gormSearchVisibilityRepository) SearchVisibleDocuments(
 		clauses := make([]string, 0, len(normalizedTerms))
 		args := make([]any, 0, len(normalizedTerms)*2)
 		for _, item := range normalizedTerms {
-			clauses = append(clauses, "(LOWER("+qualifiedColumn("d", models.DocumentColumns.Title)+") LIKE ? OR LOWER("+qualifiedColumn("d", models.DocumentColumns.ContentMD)+") LIKE ?)")
-			likePattern := "%" + item + "%"
+			clauses = append(clauses, "(LOWER("+qualifiedColumn("d", models.DocumentColumns.Title)+") LIKE ? ESCAPE '!' OR LOWER("+qualifiedColumn("d", models.DocumentColumns.ContentMD)+") LIKE ? ESCAPE '!')")
+			likePattern := "%" + searchLikeEscaper.Replace(item) + "%"
 			args = append(args, likePattern, likePattern)
 		}
 		query = query.Where("("+strings.Join(clauses, " OR ")+")", args...)
@@ -92,7 +98,11 @@ func (r *gormSearchVisibilityRepository) FilterVisibleDocumentIDsByCandidates(
 		return []string{}, nil
 	}
 
-	query := r.baseVisibleDocumentsQuery(ctx, params.ActorUserID, params.SpaceID, params.ScopeSpaceIDs, params.CanViewAllDocuments).
+	query := filterSearchDocumentFormats(
+		r.baseVisibleDocumentsQuery(ctx, params.ActorUserID, params.SpaceID, params.ScopeSpaceIDs, params.CanViewAllDocuments),
+		"d",
+		params.IncludeRenderedOffice,
+	).
 		Where(qualifiedColumn("d", models.DocumentColumns.DocumentID)+" IN ?", params.CandidateDocumentIDs)
 
 	type row struct {
@@ -126,23 +136,19 @@ func (r *gormSearchVisibilityRepository) ResolveSearchScopeSpaceIDs(
 	query := r.db.WithContext(ctx).
 		Table(tableWithAlias(models.Space{}, "s")).
 		Where(qualifiedColumn("s", models.SpaceColumns.Status)+" = ?", models.EntityStatusActive).
+		Where(qualifiedColumn("s", models.SpaceColumns.BannedAt) + " IS NULL").
 		Where(qualifiedColumn("s", models.SpaceColumns.DeletedAt) + " IS NULL")
 
 	if normalizedActorUserID == "" {
 		query = query.Where(qualifiedColumn("s", models.SpaceColumns.Visibility)+" = ?", models.VisibilityPublic)
 	} else {
-		query = query.
-			Joins("LEFT JOIN "+tableName(models.SpaceMember{})+" AS sm ON sm."+models.SpaceMemberColumns.SpaceID+" = "+qualifiedColumn("s", models.SpaceColumns.SpaceID)+" AND sm."+models.SpaceMemberColumns.UserID+" = ?", normalizedActorUserID).
-			Where(
-				"("+
-					qualifiedColumn("s", models.SpaceColumns.OwnerUserID)+" = ? OR "+
-					qualifiedColumn("s", models.SpaceColumns.Visibility)+" IN (?,?) OR "+
-					qualifiedColumn("sm", models.SpaceMemberColumns.ID)+" IS NOT NULL"+
-					")",
-				normalizedActorUserID,
-				models.VisibilityPublic,
-				models.VisibilityAuthenticated,
-			)
+		membership, adminScope := searchSpaceReadAccessQueries(query, normalizedActorUserID)
+		query = query.Where(
+			qualifiedColumn("s", models.SpaceColumns.OwnerUserID)+" = ? OR "+
+				qualifiedColumn("s", models.SpaceColumns.Visibility)+" IN ? OR EXISTS (?) OR EXISTS (?)",
+			normalizedActorUserID, []models.Visibility{models.VisibilityPublic, models.VisibilityAuthenticated},
+			membership, adminScope,
+		)
 	}
 
 	type row struct {
@@ -247,6 +253,18 @@ func (r *gormSearchVisibilityRepository) ResolveUserRoleLevelsBySpaces(
 		}
 	}
 
+	var scopedSpaces []string
+	if err := r.db.WithContext(ctx).
+		Model(&models.SpaceAdminScope{}).
+		Where(models.SpaceAdminScopeColumns.SpaceID+" IN ?", normalizedSpaceIDs).
+		Where(models.SpaceAdminScopeColumns.UserID+" = ?", normalizedActorUserID).
+		Pluck(models.SpaceAdminScopeColumns.SpaceID, &scopedSpaces).Error; err != nil {
+		return nil, err
+	}
+	for _, spaceID := range scopedSpaces {
+		roleLevels[spaceID] = max(roleLevels[spaceID], 1)
+	}
+
 	return roleLevels, nil
 }
 
@@ -295,13 +313,11 @@ func (r *gormSearchVisibilityRepository) baseVisibleDocumentsQuery(
 		Joins("JOIN "+tableName(models.Node{})+" AS n ON "+qualifiedColumn("n", models.NodeColumns.NodeID)+" = "+qualifiedColumn("d", models.DocumentColumns.NodeID)).
 		Joins("JOIN "+tableName(models.Space{})+" AS s ON "+qualifiedColumn("s", models.SpaceColumns.SpaceID)+" = "+qualifiedColumn("n", models.NodeColumns.SpaceID)).
 		Where(qualifiedColumn("s", models.SpaceColumns.Status)+" = ?", models.EntityStatusActive).
+		Where(qualifiedColumn("s", models.SpaceColumns.BannedAt)+" IS NULL").
 		Where(qualifiedColumn("s", models.SpaceColumns.DeletedAt)+" IS NULL").
 		Where(qualifiedColumn("d", models.DocumentColumns.Status)+" = ?", models.EntityStatusActive).
+		Where(qualifiedColumn("d", models.DocumentColumns.BannedAt) + " IS NULL").
 		Where(qualifiedColumn("d", models.DocumentColumns.DeletedAt) + " IS NULL")
-	if r.hasDocumentFormatColumn() {
-		query = query.Where(qualifiedColumn("d", models.DocumentColumns.Format)+" = ?", models.DocumentFormatMarkdown)
-	}
-
 	normalizedSpaceID := strings.TrimSpace(spaceID)
 	if normalizedSpaceID != "" {
 		query = query.Where(qualifiedColumn("s", models.SpaceColumns.SpaceID)+" = ?", normalizedSpaceID)
@@ -317,22 +333,12 @@ func (r *gormSearchVisibilityRepository) baseVisibleDocumentsQuery(
 	return applySearchVisibilityMatrixFilter(query, actorUserID)
 }
 
-func (r *gormSearchVisibilityRepository) hasDocumentFormatColumn() bool {
-	if r == nil || r.db == nil {
-		return false
-	}
-	// 兼容旧测试库或迁移前数据：没有 format 列的 documents 只包含 Markdown 文档。
-	return r.db.Migrator().HasColumn(&models.Document{}, models.DocumentColumns.Format)
-}
-
 // applySearchVisibilityMatrixFilter 按检索权限矩阵追加过滤条件。
 //
 // 规则：
-// 1) 未登录：仅允许 space=public 且 doc=public；
-// 2) 已登录：允许
-//   - owner 空间内全部文档；
-//   - 非成员场景下的 (space in [public,authenticated] AND doc in [public,authenticated])；
-//   - 该空间成员（owner/collaborator/reader）看到该空间全部文档。
+//  1. 未登录：仅允许 space=public 且 doc=public；
+//  2. 已登录：owner 可读空间内全部文档。其他用户需要满足可见性要求，
+//     并且没有被该文档显式拒绝访问。
 func applySearchVisibilityMatrixFilter(query *gorm.DB, actorUserID string) *gorm.DB {
 	if query == nil {
 		return query
@@ -340,25 +346,35 @@ func applySearchVisibilityMatrixFilter(query *gorm.DB, actorUserID string) *gorm
 
 	normalizedActorUserID := strings.TrimSpace(actorUserID)
 	if normalizedActorUserID == "" {
-		return query.Where(
-			qualifiedColumn("s", models.SpaceColumns.Visibility)+" = ? AND "+qualifiedColumn("d", models.DocumentColumns.Visibility)+" = ?",
-			models.VisibilityPublic,
-			models.VisibilityPublic,
-		)
+		return query.Where(qualifiedColumn("s", models.SpaceColumns.Visibility)+" = ?", models.VisibilityPublic).
+			Where(qualifiedColumn("d", models.DocumentColumns.Visibility)+" = ?", models.VisibilityPublic)
 	}
 
-	return query.
-		Joins("LEFT JOIN "+tableName(models.SpaceMember{})+" AS sm ON sm."+models.SpaceMemberColumns.SpaceID+" = "+qualifiedColumn("s", models.SpaceColumns.SpaceID)+" AND sm."+models.SpaceMemberColumns.UserID+" = ?", normalizedActorUserID).
-		Where(
-			"("+
-				qualifiedColumn("s", models.SpaceColumns.OwnerUserID)+" = ? OR "+
-				"(("+qualifiedColumn("s", models.SpaceColumns.Visibility)+" IN (?,?)) AND ("+qualifiedColumn("d", models.DocumentColumns.Visibility)+" IN (?,?))) OR "+
-				qualifiedColumn("sm", models.SpaceMemberColumns.ID)+" IS NOT NULL"+
-				")",
-			normalizedActorUserID,
-			models.VisibilityPublic,
-			models.VisibilityAuthenticated,
-			models.VisibilityPublic,
-			models.VisibilityAuthenticated,
-		)
+	conditions := query.Session(&gorm.Session{NewDB: true})
+	owner := qualifiedColumn("s", models.SpaceColumns.OwnerUserID) + " = ?"
+	nonMemberVisibility := []models.Visibility{models.VisibilityPublic, models.VisibilityAuthenticated}
+	openToSignedIn := conditions.Where(qualifiedColumn("s", models.SpaceColumns.Visibility)+" IN ?", nonMemberVisibility).
+		Where(qualifiedColumn("d", models.DocumentColumns.Visibility)+" IN ?", nonMemberVisibility)
+	membership, adminScope := searchSpaceReadAccessQueries(query, normalizedActorUserID)
+	canRead := conditions.Where(openToSignedIn).Or("EXISTS (?)", membership).Or("EXISTS (?)", adminScope)
+	denied := conditions.Model(&models.DocumentPermission{}).
+		Select("1").
+		Where(models.DocumentPermissionColumns.DocumentID+" = "+qualifiedColumn("d", models.DocumentColumns.DocumentID)).
+		Where(models.DocumentPermissionColumns.UserID+" = ?", normalizedActorUserID).
+		Where(models.DocumentPermissionColumns.AccessDenied+" = ?", true)
+	return query.Where(conditions.Where(owner, normalizedActorUserID).Or(canRead)).
+		Where(owner+" OR NOT EXISTS (?)", normalizedActorUserID, denied)
+}
+
+func searchSpaceReadAccessQueries(query *gorm.DB, userID string) (membership, adminScope *gorm.DB) {
+	db := query.Session(&gorm.Session{NewDB: true})
+	spaceID := qualifiedColumn("s", models.SpaceColumns.SpaceID)
+	membership = db.Model(&models.SpaceMember{}).Select("1").
+		Where(models.SpaceMemberColumns.SpaceID+" = "+spaceID).
+		Where(models.SpaceMemberColumns.UserID+" = ?", userID).
+		Where(models.SpaceMemberColumns.Role+" IN ?", []models.Role{models.RoleOwner, models.RoleCollaborator, models.RoleReader})
+	adminScope = db.Model(&models.SpaceAdminScope{}).Select("1").
+		Where(models.SpaceAdminScopeColumns.SpaceID+" = "+spaceID).
+		Where(models.SpaceAdminScopeColumns.UserID+" = ?", userID)
+	return membership, adminScope
 }

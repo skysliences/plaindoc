@@ -35,7 +35,7 @@ type AuthProviderLoginInput struct {
 // AuthLoginProvider 约束单个认证 provider 的最小能力。
 type AuthLoginProvider interface {
 	ProviderID() string
-	Login(ctx context.Context, identifier string, password string) (AuthSession, error)
+	Login(ctx context.Context, identifier string, password string) (AuthPrimaryIdentity, error)
 }
 
 // AuthLoginProviderHealthChecker 约束 provider 健康探测能力（供后台“测试连接”等场景复用）。

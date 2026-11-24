@@ -26,6 +26,41 @@ interface CreateSharedRemarkPluginsOptions {
   includeBlockAnchors?: boolean;
 }
 
+interface MarkdownNode {
+  type: string;
+  value?: string;
+  children?: MarkdownNode[];
+}
+
+// 正文中的单次回车也渲染为换行，保留 Markdown 已解析的段落和代码结构。
+function remarkParagraphLineBreaks() {
+  function preserveLineBreaks(node: MarkdownNode, inParagraph = false): void {
+    if (!node.children) return;
+    if (node.type !== "paragraph" && !inParagraph) {
+      node.children.forEach((child) => preserveLineBreaks(child));
+      return;
+    }
+
+    node.children = node.children.flatMap((child): MarkdownNode[] => {
+      if (child.type !== "text" || child.value === undefined) {
+        preserveLineBreaks(child, true);
+        return [child];
+      }
+      const lines = child.value.split(/\r\n?|\n/);
+      if (lines.length === 1) return [child];
+
+      const parts: MarkdownNode[] = [];
+      for (const [index, value] of lines.entries()) {
+        if (index > 0) parts.push({ type: "break" });
+        if (value) parts.push({ type: "text", value });
+      }
+      return parts;
+    });
+  }
+
+  return (tree: MarkdownNode) => preserveLineBreaks(tree);
+}
+
 // createSharedRemarkPlugins 统一产出 markdown -> mdast 阶段插件链路。
 export function createSharedRemarkPlugins(
   linkRenderMode: PreviewLinkRenderMode,
@@ -37,15 +72,14 @@ export function createSharedRemarkPlugins(
   ] = [remarkReferenceFootnotePlugin, { mode: linkRenderMode }];
   const includeBlockAnchors = options.includeBlockAnchors ?? true;
 
-  return includeBlockAnchors
-    ? [
-        remarkGfm,
-        remarkMath,
-        remarkStyledSpanContainerPlugin,
-        referenceFootnotePlugin,
-        remarkBlockAnchorPlugin
-      ]
-    : [remarkGfm, remarkMath, remarkStyledSpanContainerPlugin, referenceFootnotePlugin];
+  const plugins = [
+    remarkGfm,
+    remarkMath,
+    remarkStyledSpanContainerPlugin,
+    referenceFootnotePlugin,
+    remarkParagraphLineBreaks
+  ];
+  return includeBlockAnchors ? [...plugins, remarkBlockAnchorPlugin] : plugins;
 }
 
 // createSharedRehypePlugins 统一产出 hast -> react 阶段插件链路。

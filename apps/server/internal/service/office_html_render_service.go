@@ -20,7 +20,6 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -42,6 +41,7 @@ const (
 	defaultOfficeHTMLRenderQueueSize = 64
 	defaultOfficeRenderTimeout       = 45 * time.Second
 	mammothImagePlaceholderPrefix    = "mammoth-image:"
+	mammothRenderBundleName          = "render-docx.cjs"
 )
 
 type mammothRenderRequest struct {
@@ -146,6 +146,7 @@ type OfficeHTMLRenderService struct {
 	documentImageAssetService *DocumentImageAssetService
 	searchIndexService        *SearchIndexService
 	localRootDir              string
+	scripts                   converterScriptPaths
 
 	workerOnce sync.Once
 	tasks      chan OfficeHTMLRenderTask
@@ -159,6 +160,8 @@ func NewOfficeHTMLRenderService(
 	documentAttachmentRepo repository.DocumentAttachmentRepository,
 	documentImageAssetService *DocumentImageAssetService,
 	searchIndexService *SearchIndexService,
+	webDistDir string,
+	ssrWorkerEntry string,
 ) *OfficeHTMLRenderService {
 	return &OfficeHTMLRenderService{
 		db:                        db,
@@ -168,6 +171,7 @@ func NewOfficeHTMLRenderService(
 		documentImageAssetService: documentImageAssetService,
 		searchIndexService:        searchIndexService,
 		localRootDir:              "uploads",
+		scripts:                   converterScriptPaths{webDistDir, ssrWorkerEntry},
 		tasks:                     make(chan OfficeHTMLRenderTask, defaultOfficeHTMLRenderQueueSize),
 	}
 }
@@ -407,9 +411,6 @@ func (s *OfficeHTMLRenderService) renderDOCXHTML(
 	}
 
 	renderedHTML := strings.TrimSpace(result.HTML)
-	if renderedHTML == "" {
-		return "", errors.New("mammoth rendered html is empty")
-	}
 	if len(result.Assets) > 0 {
 		renderedHTML, err = s.materializeMammothImageAssets(ctx, task, renderedHTML, result.Assets)
 		if err != nil {
@@ -431,7 +432,7 @@ func (s *OfficeHTMLRenderService) runMammothRender(
 		return nil, errors.New("docx source content is empty")
 	}
 
-	scriptPath, err := resolveMammothRenderScriptPath()
+	scriptPath, err := s.scripts.resolve(mammothRenderBundleName, "render_docx_with_mammoth.mjs")
 	if err != nil {
 		return nil, err
 	}
@@ -748,18 +749,6 @@ func resolveDOCXRelationshipTargetPath(sourcePartPath string, targetPath string)
 		return ""
 	}
 	return cleanTarget
-}
-
-func resolveMammothRenderScriptPath() (string, error) {
-	_, currentFile, _, ok := runtime.Caller(0)
-	if !ok {
-		return "", errors.New("resolve mammoth render script path failed")
-	}
-	scriptPath := filepath.Join(filepath.Dir(currentFile), "scripts", "render_docx_with_mammoth.mjs")
-	if _, err := os.Stat(scriptPath); err != nil {
-		return "", err
-	}
-	return scriptPath, nil
 }
 
 func renderXLSXHTML(sourceContent []byte) (string, error) {

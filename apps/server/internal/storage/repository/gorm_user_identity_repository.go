@@ -51,8 +51,10 @@ func (r *gormUserIdentityRepository) Upsert(
 		models.UserIdentityColumns.UserID:       userID,
 		models.UserIdentityColumns.ProviderType: providerType,
 		models.UserIdentityColumns.LoginName:    loginName,
-		models.UserIdentityColumns.LastLoginAt:  lastLoginAt,
 		models.UserIdentityColumns.UpdatedAt:    now,
+	}
+	if lastLoginAt != nil {
+		updateValues[models.UserIdentityColumns.LastLoginAt] = lastLoginAt
 	}
 	insertRecord := &models.UserIdentity{
 		UserID:       userID,

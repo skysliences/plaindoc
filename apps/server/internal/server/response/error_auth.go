@@ -5,6 +5,18 @@ import "net/http"
 // 当前文件收敛 `auth.go` 的错误响应模板。
 // 统一在 response 层维护 status/code/message，避免在 handler 中散落字面量。
 var (
+	AuthErrMFAChallengeExpired = ErrorTemplate{
+		Status: http.StatusBadRequest, Code: CodeAuthMFAChallengeExpired,
+		Message: "验证已过期或尝试次数已用完，请重新提交账号信息",
+	}
+	AuthErrMFACodeInvalid = ErrorTemplate{
+		Status: http.StatusBadRequest, Code: CodeAuthMFACodeInvalid,
+		Message: "验证码无效或已使用，请输入验证器当前显示的验证码",
+	}
+	AuthErrLoginIPDenied = ErrorTemplate{
+		Status: http.StatusForbidden, Code: CodeLoginIPDenied,
+		Message: "当前 IP 地址未获该账号的登录授权",
+	}
 	// AuthErrRegistrationDisabled 对应场景：registration is disabled
 	AuthErrRegistrationDisabled = ErrorTemplate{
 		Status:  http.StatusForbidden,

@@ -225,15 +225,22 @@
 
 1. `POST /api/auth/register`
 2. `POST /api/auth/login`
-3. `POST /api/auth/refresh`
-4. `GET /api/auth/me`
-5. `POST /api/auth/logout`
-6. `GET /api/auth/options`
+3. `POST /api/auth/mfa/verify`
+4. `POST /api/auth/refresh`
+5. `GET /api/auth/me`
+6. `POST /api/auth/logout`
+7. `GET /api/auth/options`
 
 说明：
 
 1. 登录支持 `identifier + provider`，兼容旧 `email`。
 2. refresh token 使用服务端会话状态，支持旋转后旧 token 失效。
+3. 注册和登录的第一步返回 `mfa` 挑战。通过 `/api/auth/mfa/verify` 提交 `challengeToken` 和六位动态码后才签发会话。注册在完成绑定时创建账号。已有账号、后台创建的账号和 LDAP 账号在首次通过密码认证且未绑定时进入设置流程。
+4. TOTP 密钥和待验证挑战加密保存在数据库中，迁移 0039 和 0040 覆盖 SQLite、MySQL 和 PostgreSQL。部署实例使用同一 `JWT_SECRET` 解密已绑定的密钥。同一个账号在挑战有效期内共享动态码失败次数，已使用的时间步不能重放。会话携带二次验证标记，升级后已有会话需重新登录。
+5. 平台管理员用 `PUT /api/admin/users/:userId/login-ips` 保存账号的 `ipAddresses`，请求需要绑定到该用户的 `user.update_login_ips` 一次性 operation token，更新会写入审计。白名单支持多个独立 IPv4 或 IPv6 地址，空数组表示不限制。
+6. 登录、二次验证、刷新会话和识别已登录身份时按请求来源 IP 校验白名单。经过反向代理的部署通过 `GIN_TRUSTED_PROXIES` 配置受信代理范围，由代理通过 `X-Forwarded-For` 或 `X-Real-IP` 转发真实客户端地址。
+7. 平台管理员用 `POST /api/admin/users/:userId/reset-mfa` 重置指定账号的 Google Authenticator 绑定。请求需要绑定到该用户的 `user.reset_mfa` 一次性 operation token，重置会写入审计。重置后原有会话和待验证挑战失效。账号下次通过密码认证后需要完成新的绑定，登录 IP 白名单继续生效。
+8. 迁移 0041 为用户增加二次验证版本。重置绑定时递增版本，使该账号此前签发的登录令牌在重新绑定后仍然失效。SQLite、MySQL 和 PostgreSQL 的迁移脚本都提供该字段。
 
 ### 6.1.1 认证风控（验证码 + 临时封禁）
 
@@ -332,6 +339,8 @@ ONLYOFFICE 一等文档规则：
 2. `SaveDocument` 仅适用于 Markdown；Office 文档必须走 ONLYOFFICE callback 写回。
 3. Office 正文落在 `file_blobs`，版本快照落在 `document_file_revisions`。
 4. `VisibilityService` 按“文档可读/可写”工作，Office 与 Markdown 共用同一套权限判断。
+5. 未启用 ONLYOFFICE 时，已有 `docx` 和 `xlsx` 在阅读页与分享页使用本地预览。通过阅读权限校验后，服务复用已生成的预览，或读取当前版本的源文件生成预览。独立的复制与导出权限仍然生效。
+6. `npm run web:build` 和 `npm run web:build-ssr` 会在 `dist-ssr` 生成 `render-docx.cjs` 和 `convert-html-to-markdown.cjs`。发布包和容器需保留这两个文件供 Node 执行。这样未启用 ONLYOFFICE 的部署也能把上传的 Word 和 Excel 转为可读 Markdown。
 5. callback 成功后会更新 `documents.version/content_version/source_blob_id`，并追加 `audit_logs` 记录。
 
 文档历史版本规则：
@@ -605,17 +614,15 @@ Docker 镜像内的可执行文件为 `/app/bugodoc-server`。从旧版升级时
 
 ## 13. 全文检索可行性方案（M0-M9 对齐，适配当前项目）
 
-本章节给出“可落地、可切换、可回滚”的全文检索方案，目标是先交付 L1 基线能力，再平滑演进到 L2。
+站内全文检索默认启用。首页与阅读页通过 `GET /search?q=关键词` 搜索用户可阅读的文档标题和正文，支持分页和命中摘要。
 
 分词抽象与自定义词典专题见：`docs/FULLTEXT_SEARCH_ANALYZER_DESIGN.md`。
 
-### 13.1 现状与可行性结论
+### 13.1 运行方式
 
-基于当前代码与结构（`router.go`、`workspace/access handler`、`VisibilityService`、`system_configs`、后台审计与 operation token、`main.go` 后台循环任务模型）：
-
-1. **可行**：项目已有单体服务、统一路由注入、配置中心、后台治理与审计机制，具备新增检索子系统的基础。
-2. **主要缺口**：目前无通用搜索 API、无可插拔搜索 Provider、无索引任务队列与状态机。
-3. **推荐路线**：`Bleve 先行（L1） -> 补齐任务系统与状态机 -> 对接 Meilisearch/Typesense（L2）`。
+1. 缺少 `system_configs.search` 配置时，使用内置数据库引擎搜索 Markdown 和导入的纯文本文档。该引擎直接读取当前数据，已有内容和已保存的修改可立即参与搜索。
+2. 已保存的引擎配置和开关继续生效。管理员可通过「系统配置 → 全文检索」调整设置。
+3. 配置 Bleve 时，成功完成本地 HTML 渲染的 Word 和 Excel 也可参与站内检索。文件夹通过目录浏览。
 
 ### 13.2 L1/L2 范围定义（产品边界）
 
@@ -624,10 +631,7 @@ Docker 镜像内的可执行文件为 `/app/bugodoc-server`。从旧版升级时
 | L1（首期必须） | `q` 关键词、`space_id` 过滤、权限过滤、分页、排序（`relevance` / `updated_at_desc`）、返回 `doc_id + score`（snippet 可选） |
 | L2（增强） | 高亮、typo、同义词、facets、复杂排序、多字段权重可配 |
 
-首期明确不做：
-
-1. 跨空间一次性聚合搜索（先做单空间检索，降低权限泄露风险）。
-2. 基于向量/语义检索的复杂召回（留到后续专题）。
+站内搜索默认跨空间。内部调用可以传入 `space_id` 将结果限制在指定空间。基于向量的语义检索属于后续范围。
 
 ### 13.3 权限模型映射（检索统一口径）
 
@@ -673,8 +677,8 @@ flowchart TD
 
 1. `spaces.visibility` 与 `documents.visibility`（`public/authenticated/member`）。
 2. 空间成员角色：`owner/collaborator/reader`（见 `space_members.role`、`models.Role`）。
-3. 可见性判定由 `VisibilityService` 统一执行（后端真值来源）。
-4. 平台管理员搜索范围覆盖所有正常空间内可检索的 Markdown 文档。检索结果返回前仍校验数据库中的最新空间、文档状态和格式。文件夹通过阅读页目录查看。
+3. 搜索使用与阅读页一致的可见范围，包括拥有者、空间成员及已授权范围的空间管理员，并逐篇校验文档的拒绝访问设置。
+4. 平台管理员搜索范围覆盖所有正常空间内可检索的文档。检索使用数据库中的当前空间和文档状态执行权限校验，索引内容变更可以异步同步。
 
 为兼容检索过滤，定义 `role_level`（内容访问角色）：
 
@@ -787,13 +791,10 @@ flowchart TD
 
 `search` 配置建议结构：
 
-1. `enabled`: 全局开关；仅开启时前台显示检索入口并执行检索。
-2. `activeProvider`: `database|bleve|meili|typesense`
-3. `fallbackPolicy`: `error|degrade_to_bleve`
-4. `providers.bleve`: `{ enabled, indexDir }`
-5. `providers.meili`: `{ enabled, endpoint, apiKey, indexName }`
-6. `providers.typesense`: `{ enabled, endpoint, apiKey, collectionName }`
-7. `switch`: `{ dualWriteEnabled, dualWriteWindowMinutes }`
+1. `enabled` 控制全文检索入口和查询，默认开启。
+2. `activeProvider` 可选 `database` 或 `bleve`，默认使用数据库。配置也接受预留的 `meili` 和 `typesense` 名称。
+3. `fallbackPolicy` 可设为 `degrade_to_database` 或 `return_error`。
+4. `analysis` 配置分词器，默认使用 `simple`。
 
 说明：`database` provider 为数据库 `LIKE` 方案，仅支持简单搜索（不提供倒排索引与高级相关性排序）。
 
@@ -897,7 +898,7 @@ Worker 建议复用 `main.go` 现有后台循环模式（参考 `runDataRetentio
 
 ### 13.12 API 与后台操作建议
 
-业务检索 API（L1）：
+已提供的用户入口为 `GET /search?q=&page=&pageSize=`。以下单空间 JSON API 属于后续接口方案。
 
 1. `GET /api/spaces/:spaceId/search?q=&page=&pageSize=&sort=`
 
@@ -915,10 +916,9 @@ Worker 建议复用 `main.go` 现有后台循环模式（参考 `runDataRetentio
 
 1. Reader（1）不能检索到 `min_role > 1` 的成员内容。
 2. Collaborator（2）不能检索到 `min_role = 3` 内容。
-3. Owner（3）可见该空间全部可检索文档。
-4. 任意查询必须强制携带 `space_id`，不得跨空间返回。
-5. 文档权限变更后，短暂延迟可接受，但不得出现越权可读字段泄露。
-6. 外部引擎返回结果后仍做后端兜底校验（防索引漂移），但**主过滤必须在引擎侧完成**。
+3. 空间拥有者和平台管理员可按既有授权查看各自范围内的可检索文档。
+4. 跨空间搜索可同时命中多个可读空间，并过滤私有空间和被明确拒绝访问的文档。
+5. 在返回标题及正文摘要之前，按数据库当前权限和状态校验检索候选，防止索引延迟泄露已撤回访问权的内容。
 
 ### 13.14 可观测性与运维（按现阶段能力）
 

@@ -15,7 +15,7 @@ async function readStdin() {
   return Buffer.concat(chunks).toString("utf8");
 }
 
-try {
+async function main() {
   const rawInput = (await readStdin()).trim();
   if (!rawInput) {
     writeError("mammoth render input is empty");
@@ -54,6 +54,6 @@ try {
       messages: Array.isArray(messages) ? messages : []
     })
   );
-} catch (error) {
-  writeError(error instanceof Error ? error.message : String(error));
 }
+
+main().catch((error) => writeError(error instanceof Error ? error.message : String(error)));

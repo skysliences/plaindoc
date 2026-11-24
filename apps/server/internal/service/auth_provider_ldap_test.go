@@ -105,8 +105,8 @@ func TestLDAPAuthLoginProvider_LoginSuccess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected ldap login success, got err=%v", err)
 	}
-	if session.User.ID == "" || session.Token == "" || session.RefreshToken == "" {
-		t.Fatalf("expected session fields non-empty, got %+v", session)
+	if session.User.ID == "" || session.passwordProof == "" {
+		t.Fatalf("expected primary identity fields non-empty, got %+v", session)
 	}
 	if session.User.Email != "alice@example.com" {
 		t.Fatalf("expected user email alice@example.com, got %q", session.User.Email)
@@ -133,6 +133,22 @@ func TestLDAPAuthLoginProvider_LoginSuccess(t *testing.T) {
 	}
 	if identity.UserID != user.UserID {
 		t.Fatalf("expected identity user_id=%q, got %q", user.UserID, identity.UserID)
+	}
+	if identity.LastLoginAt != nil {
+		t.Fatal("LDAP primary authentication must not record a completed login before MFA")
+	}
+	now := time.Unix(1_700_000_010, 0).UTC()
+	provider.authService.mfaNow = func() time.Time { return now }
+	challenge, err := provider.authService.BeginLoginMFA(context.Background(), session, user.Email)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := provider.authService.VerifyMFA(context.Background(), challenge.ChallengeToken, testAuthMFACode(t, challenge.Secret, now), nil); err != nil {
+		t.Fatal(err)
+	}
+	verifiedIdentity, err := provider.userIdentityRepo.GetByProviderExternalID(context.Background(), provider.ProviderID(), "entry-uuid-1")
+	if err != nil || verifiedIdentity.LastLoginAt == nil || !verifiedIdentity.LastLoginAt.Equal(now) {
+		t.Fatalf("expected the verified LDAP login timestamp: %v", err)
 	}
 }
 
@@ -276,7 +292,7 @@ func setupLDAPAuthProviderTest(t *testing.T) (*ldapAuthLoginProvider, func()) {
 		Secret:          "test-secret",
 		AccessTokenTTL:  15 * time.Minute,
 		RefreshTokenTTL: 24 * time.Hour,
-	})
+	}, repository.NewAuthMFARepository(database.ORM))
 
 	provider, err := NewLDAPAuthLoginProvider(LDAPAuthProviderConfig{
 		ProviderID:     "corp-ldap",

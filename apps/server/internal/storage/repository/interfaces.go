@@ -29,6 +29,8 @@ type UserRepository interface {
 	UpdateProfile(ctx context.Context, params UpdateUserProfileParams) (bool, error)
 	UpdatePassword(ctx context.Context, userID string, passwordHash string, updatedAt time.Time) (bool, error)
 	UpdateStatus(ctx context.Context, params UpdateUserStatusParams) (bool, error)
+	UpdateLoginIPAddresses(ctx context.Context, userID string, addressesJSON string, audit *models.AuditLog) (bool, error)
+	ResetMFA(ctx context.Context, userID string, audit *models.AuditLog) (bool, error)
 	SoftDelete(ctx context.Context, userID string, deletedAt time.Time) (bool, error)
 }
 
@@ -221,11 +223,12 @@ type SearchVisibleDocumentsParams struct {
 
 // SearchVisibleDocumentIDsByCandidatesParams 候选文档可见性过滤参数。
 type SearchVisibleDocumentIDsByCandidatesParams struct {
-	ActorUserID          string
-	SpaceID              string
-	ScopeSpaceIDs        []string
-	CanViewAllDocuments  bool
-	CandidateDocumentIDs []string
+	ActorUserID           string
+	SpaceID               string
+	ScopeSpaceIDs         []string
+	CanViewAllDocuments   bool
+	IncludeRenderedOffice bool
+	CandidateDocumentIDs  []string
 }
 
 // SearchVisibilityRepository 检索可见性仓储接口。
@@ -379,6 +382,7 @@ type ReaderPageRepository interface {
 		ctx context.Context,
 		documentID string,
 	) (*ReaderPageDocumentRecord, error)
+	SaveOfficePreview(ctx context.Context, documentID string, contentVersion int, sourceBlobID, renderedHTML string, renderedAt time.Time) (bool, error)
 	ListSpaceDocumentIDs(
 		ctx context.Context,
 		spaceID string,

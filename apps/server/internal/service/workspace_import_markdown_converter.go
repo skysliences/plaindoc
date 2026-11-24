@@ -1,4 +1,4 @@
-package handler
+package service
 
 import (
 	"bytes"
@@ -6,12 +6,18 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"os/exec"
-	"path/filepath"
-	"runtime"
 	"strings"
 )
+
+// WorkspaceImportMarkdownConverter preserves the Markdown formatting rules for imported files.
+type WorkspaceImportMarkdownConverter struct {
+	scripts converterScriptPaths
+}
+
+func NewWorkspaceImportMarkdownConverter(webDistDir, ssrWorkerEntry string) WorkspaceImportMarkdownConverter {
+	return WorkspaceImportMarkdownConverter{scripts: converterScriptPaths{webDistDir, ssrWorkerEntry}}
+}
 
 type workspaceHTMLToMarkdownRequest struct {
 	HTML string `json:"html"`
@@ -21,13 +27,13 @@ type workspaceHTMLToMarkdownResult struct {
 	Markdown string `json:"markdown"`
 }
 
-func convertWorkspaceImportHTMLToMarkdown(ctx context.Context, rawHTML string) (string, error) {
+func (c WorkspaceImportMarkdownConverter) Convert(ctx context.Context, rawHTML string) (string, error) {
 	normalizedHTML := strings.TrimSpace(rawHTML)
 	if normalizedHTML == "" {
 		return "", nil
 	}
 
-	scriptPath, err := resolveWorkspaceImportHTMLToMarkdownScriptPath()
+	scriptPath, err := c.scripts.resolve("convert-html-to-markdown.cjs", "convert_html_to_markdown.mjs")
 	if err != nil {
 		return "", err
 	}
@@ -61,16 +67,4 @@ func convertWorkspaceImportHTMLToMarkdown(ctx context.Context, rawHTML string) (
 		return "", fmt.Errorf("decode html to markdown output failed: %w", err)
 	}
 	return strings.TrimSpace(output.Markdown), nil
-}
-
-func resolveWorkspaceImportHTMLToMarkdownScriptPath() (string, error) {
-	_, currentFile, _, ok := runtime.Caller(0)
-	if !ok {
-		return "", errors.New("resolve html to markdown script path failed")
-	}
-	scriptPath := filepath.Join(filepath.Dir(currentFile), "..", "..", "service", "scripts", "convert_html_to_markdown.mjs")
-	if _, err := os.Stat(scriptPath); err != nil {
-		return "", err
-	}
-	return scriptPath, nil
 }

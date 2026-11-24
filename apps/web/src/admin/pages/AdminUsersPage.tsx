@@ -1,12 +1,13 @@
-import { LoaderCircle, Mail, PencilLine, RefreshCw, Search, ShieldBan, ShieldCheck, Trash2, UserPlus } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState, type FormEventHandler } from "react";
+import { KeyRound, LoaderCircle, Mail, Network, PencilLine, RefreshCw, Search, ShieldBan, ShieldCheck, Trash2, UserPlus } from "lucide-react";
+import { useCallback, useEffect, useId, useMemo, useState, type FormEventHandler } from "react";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select";
+import { Textarea } from "../../components/ui/textarea";
 import { showToast } from "../../components/ui/toast";
 import { type AdminUser, type AdminUserListResult, type DataGateway } from "../../data-access";
-import { useAdminDialogs } from "../components/AdminDialogs";
+import { AdminDialogLayer, useAdminDialogs } from "../components/AdminDialogs";
 import { AdminPageCard, AdminPaginationFooter, AdminTableContainer, AdminToolbarActions } from "../components/AdminPageLayout";
 import { formatError } from "../../editor/status-utils";
 
@@ -20,6 +21,7 @@ const USER_ROLE_OPTIONS = [
 interface AdminUsersPageProps {
   currentUserID: string;
   dataGateway: DataGateway;
+  onLogout: () => Promise<void>;
 }
 
 interface AdminUsersState {
@@ -108,7 +110,64 @@ function renderRoleBadgeClass(role: AdminUser["role"]): string {
   return "border-slate-200 bg-slate-100 text-slate-600";
 }
 
-export function AdminUsersPage({ currentUserID, dataGateway }: AdminUsersPageProps) {
+function LoginIPsDialog({ user, onSave, onClose }: {
+  user: AdminUser;
+  onSave: (ipAddresses: string[]) => Promise<void>;
+  onClose: () => void;
+}) {
+  const formID = useId();
+  const [value, setValue] = useState((user.loginIpAddresses ?? []).join("\n"));
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  const submit: FormEventHandler<HTMLFormElement> = async (event) => {
+    event.preventDefault();
+    const ipAddresses = [...new Set(value.split(/[\s,，]+/).filter(Boolean))];
+    setSaving(true);
+    setError("");
+    try {
+      await onSave(ipAddresses);
+    } catch (cause) {
+      setError(formatError(cause));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <AdminDialogLayer
+      open
+      title="登录 IP 白名单"
+      description={user.email}
+      onClose={() => { if (!saving) onClose(); }}
+      footer={(
+        <>
+          <Button type="button" variant="outline" disabled={saving} onClick={onClose}>取消</Button>
+          <Button type="submit" form={formID} disabled={saving}>{saving ? "保存中…" : "保存白名单"}</Button>
+        </>
+      )}
+    >
+      <form id={formID} onSubmit={submit} className="space-y-3">
+        <label className="grid gap-1.5 text-sm font-medium">
+          允许的 IP 地址
+          <Textarea
+            value={value}
+            onChange={(event) => setValue(event.target.value)}
+            placeholder={"203.0.113.5\n2001:db8::5"}
+            rows={5}
+            className="font-mono"
+            disabled={saving}
+            autoFocus
+          />
+        </label>
+        <p className="text-xs text-slate-600">每行一个 IPv4 或 IPv6 地址，可填写多个。留空时允许任意 IP。</p>
+        {error && <p role="alert" className="text-sm text-rose-700">{error}</p>}
+      </form>
+    </AdminDialogLayer>
+  );
+}
+
+export function AdminUsersPage({ currentUserID, dataGateway, onLogout }: AdminUsersPageProps) {
   const { confirm, prompt, dialogs } = useAdminDialogs();
 
   const [keywordInput, setKeywordInput] = useState("");
@@ -120,6 +179,7 @@ export function AdminUsersPage({ currentUserID, dataGateway }: AdminUsersPagePro
   const [loading, setLoading] = useState(false);
   const [creatingUser, setCreatingUser] = useState(false);
   const [actioningUserID, setActioningUserID] = useState<string | null>(null);
+  const [editingLoginIPs, setEditingLoginIPs] = useState<AdminUser | null>(null);
 
   const openToast = useCallback((message: string, variant: "success" | "info" | "error" = "error") => {
     showToast(message, variant);
@@ -172,7 +232,7 @@ export function AdminUsersPage({ currentUserID, dataGateway }: AdminUsersPagePro
   const handleCreateUser = useCallback(async () => {
     const promptResult = await prompt({
       title: "新增用户",
-      description: "创建一个新用户账号，创建后可直接使用邮箱和密码登录。",
+      description: "新用户首次登录时需要绑定 Google Authenticator。",
       confirmText: "确认创建",
       fields: [
         {
@@ -263,11 +323,13 @@ export function AdminUsersPage({ currentUserID, dataGateway }: AdminUsersPagePro
   }, [dataGateway.admin, loadUsers, openToast, page, prompt]);
 
   const runUserAction = useCallback(
-    async (targetUserID: string, callback: () => Promise<void>) => {
+    async (targetUserID: string, callback: () => Promise<void>, reloadUsers = true) => {
       setActioningUserID(targetUserID);
       try {
         await callback();
-        await loadUsers();
+        if (reloadUsers) {
+          await loadUsers();
+        }
       } catch (error) {
         openToast(`执行操作失败：${formatError(error)}`);
       } finally {
@@ -435,9 +497,51 @@ export function AdminUsersPage({ currentUserID, dataGateway }: AdminUsersPagePro
     [confirm, currentUserID, dataGateway.admin, openToast, runUserAction]
   );
 
+  const handleResetMfa = useCallback(
+    async (user: AdminUser) => {
+      const isCurrentUser = user.userId === currentUserID;
+      const confirmed = await confirm({
+        title: `重置二次验证（${user.email}）`,
+        description: isCurrentUser
+          ? "你将退出所有设备。下次登录时需要重新绑定 Google Authenticator。"
+          : "该用户将退出所有设备。下次登录时需要重新绑定 Google Authenticator。",
+        confirmText: "确认重置",
+        tone: "danger"
+      });
+      if (!confirmed) {
+        return;
+      }
+      await runUserAction(user.userId, async () => {
+        await dataGateway.admin.resetUserMfa({ userId: user.userId });
+        openToast("二次验证已重置", "success");
+        if (isCurrentUser) {
+          await onLogout();
+        }
+      }, !isCurrentUser);
+    },
+    [confirm, currentUserID, dataGateway.admin, onLogout, openToast, runUserAction]
+  );
+
   return (
     <section aria-label="用户管理">
       {dialogs}
+      {editingLoginIPs && (
+        <LoginIPsDialog
+          key={editingLoginIPs.userId}
+          user={editingLoginIPs}
+          onClose={() => setEditingLoginIPs(null)}
+          onSave={async (ipAddresses) => {
+            const userId = editingLoginIPs.userId;
+            const { loginIpAddresses } = await dataGateway.admin.updateUserLoginIPs({ userId, ipAddresses });
+            setUsersState((state) => ({
+              ...state,
+              items: state.items.map((item) => item.userId === userId ? { ...item, loginIpAddresses } : item)
+            }));
+            setEditingLoginIPs(null);
+            openToast("登录 IP 白名单已保存", "success");
+          }}
+        />
+      )}
       <AdminPageCard>
           <form className="grid gap-3 md:grid-cols-[minmax(0,1fr)_180px_auto]" onSubmit={handleSearchSubmit}>
             <label className="space-y-1.5">
@@ -560,6 +664,16 @@ export function AdminUsersPage({ currentUserID, dataGateway }: AdminUsersPagePro
                                 <PencilLine size={14} />
                                 <span>角色</span>
                               </Button>
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="outline"
+                                disabled={isActioning || user.status === "deleted"}
+                                onClick={() => setEditingLoginIPs(user)}
+                              >
+                                <Network size={14} aria-hidden="true" />
+                                <span>登录 IP</span>
+                              </Button>
                               {user.status === "banned" ? (
                                 <Button type="button" size="sm" variant="secondary" disabled={isActioning} onClick={() => void handleUnban(user)}>
                                   <ShieldCheck size={14} />
@@ -589,6 +703,16 @@ export function AdminUsersPage({ currentUserID, dataGateway }: AdminUsersPagePro
                               >
                                 <Mail size={14} />
                                 <span>重置邮件</span>
+                              </Button>
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="outline"
+                                disabled={isActioning || user.status === "deleted"}
+                                onClick={() => void handleResetMfa(user)}
+                              >
+                                <KeyRound size={14} aria-hidden="true" />
+                                <span>重置二次验证</span>
                               </Button>
                               <Button
                                 type="button"

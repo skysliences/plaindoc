@@ -611,7 +611,7 @@ func registerAccessUser(
 	body := []byte(`{"email":"` + email + `","password":"123456","name":"Test User"}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/auth/register", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	rec := serve(req)
+	rec, _ := completeTestMFASetup(t, serve, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("register failed, status=%d body=%s", rec.Code, rec.Body.String())
 	}

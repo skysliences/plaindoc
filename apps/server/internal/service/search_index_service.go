@@ -147,6 +147,9 @@ func (s *SearchIndexService) Bootstrap(ctx context.Context) (SearchIndexBootstra
 	if err := providerInstance.EnsureSchema(ctx); err != nil {
 		return SearchIndexBootstrapResult{}, err
 	}
+	if providerName == searchcfg.ProviderDatabase {
+		return SearchIndexBootstrapResult{Provider: providerName}, nil
+	}
 
 	if statsProvider, ok := providerInstance.(searchprovider.IndexStatsProvider); ok {
 		docCount, countErr := statsProvider.DocCount(ctx)

@@ -18,8 +18,9 @@ COPY package.json package-lock.json ./
 COPY apps/web/package.json apps/web/package.json
 RUN npm ci
 
-# 构建前端产物：客户端 dist + SSR worker dist-ssr。
+# 构建客户端、SSR Worker 和同目录的文档转换脚本。
 COPY apps/web apps/web
+COPY apps/server/internal/service/scripts/*.mjs apps/server/internal/service/scripts/
 RUN npm run build -w @bugodoc/web
 
 FROM golang:${GO_VERSION}-bookworm AS go-builder

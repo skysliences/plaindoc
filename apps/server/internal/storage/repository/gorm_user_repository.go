@@ -46,12 +46,16 @@ func (r *gormUserRepository) GetByUserID(ctx context.Context, userID string) (*m
 			models.UserColumns.UserID,
 			models.UserColumns.Email,
 			models.UserColumns.PasswordHash,
+			models.UserColumns.TOTPSecret,
+			models.UserColumns.TOTPLastStep,
+			models.UserColumns.MFAGeneration,
 			models.UserColumns.Name,
 			models.UserColumns.AvatarURL,
 			models.UserColumns.Status,
 			models.UserColumns.BannedReason,
 			models.UserColumns.BannedAt,
 			models.UserColumns.DeletedAt,
+			models.UserColumns.LoginIPAddressesJSON,
 		).
 		Where(models.UserColumns.UserID+" = ?", userID).
 		Take(&user).Error; err != nil {
@@ -75,12 +79,16 @@ func (r *gormUserRepository) GetByEmail(ctx context.Context, email string) (*mod
 			models.UserColumns.UserID,
 			models.UserColumns.Email,
 			models.UserColumns.PasswordHash,
+			models.UserColumns.TOTPSecret,
+			models.UserColumns.TOTPLastStep,
+			models.UserColumns.MFAGeneration,
 			models.UserColumns.Name,
 			models.UserColumns.AvatarURL,
 			models.UserColumns.Status,
 			models.UserColumns.BannedReason,
 			models.UserColumns.BannedAt,
 			models.UserColumns.DeletedAt,
+			models.UserColumns.LoginIPAddressesJSON,
 		).
 		Where(models.UserColumns.Email+" = ?", email).
 		Take(&user).Error; err != nil {
@@ -147,6 +155,7 @@ func (r *gormUserRepository) List(
 			models.UserColumns.BannedReason,
 			models.UserColumns.BannedAt,
 			models.UserColumns.DeletedAt,
+			models.UserColumns.LoginIPAddressesJSON,
 			models.UserColumns.CreatedAt+" AS created_at_raw",
 			models.UserColumns.UpdatedAt+" AS updated_at_raw",
 		).
@@ -160,18 +169,19 @@ func (r *gormUserRepository) List(
 	users := make([]models.User, 0, len(rows))
 	for _, row := range rows {
 		users = append(users, models.User{
-			ID:           row.ID,
-			UserID:       row.UserID,
-			Email:        row.Email,
-			PasswordHash: row.PasswordHash,
-			Name:         row.Name,
-			AvatarURL:    row.AvatarURL,
-			Status:       row.Status,
-			BannedReason: row.BannedReason,
-			BannedAt:     row.BannedAt,
-			DeletedAt:    row.DeletedAt,
-			CreatedAt:    recordtime.Parse(row.CreatedAtRaw),
-			UpdatedAt:    recordtime.Parse(row.UpdatedAtRaw),
+			ID:                   row.ID,
+			UserID:               row.UserID,
+			Email:                row.Email,
+			PasswordHash:         row.PasswordHash,
+			Name:                 row.Name,
+			AvatarURL:            row.AvatarURL,
+			Status:               row.Status,
+			BannedReason:         row.BannedReason,
+			BannedAt:             row.BannedAt,
+			DeletedAt:            row.DeletedAt,
+			LoginIPAddressesJSON: row.LoginIPAddressesJSON,
+			CreatedAt:            recordtime.Parse(row.CreatedAtRaw),
+			UpdatedAt:            recordtime.Parse(row.UpdatedAtRaw),
 		})
 	}
 
@@ -182,6 +192,76 @@ func (r *gormUserRepository) List(
 	}
 
 	return users, total, nil
+}
+
+func (r *gormUserRepository) UpdateLoginIPAddresses(ctx context.Context, userID string, addressesJSON string, audit *models.AuditLog) (bool, error) {
+	if r == nil || r.db == nil {
+		return false, fmt.Errorf("user repository db is nil")
+	}
+	if audit == nil {
+		return false, fmt.Errorf("login IP update requires an audit log")
+	}
+	updated := false
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		result := tx.Model(&models.User{}).
+			Where(models.UserColumns.UserID+" = ?", userID).
+			Where(models.UserColumns.Status+" <> ?", models.EntityStatusDeleted).
+			Where(models.UserColumns.DeletedAt + " IS NULL").
+			Updates(map[string]any{
+				models.UserColumns.LoginIPAddressesJSON: addressesJSON,
+				models.UserColumns.UpdatedAt:            audit.CreatedAt,
+			})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return nil
+		}
+		updated = true
+		return NewGormAuditLogRepository(tx).Create(ctx, audit)
+	})
+	return updated && err == nil, err
+}
+
+func (r *gormUserRepository) ResetMFA(ctx context.Context, userID string, audit *models.AuditLog) (bool, error) {
+	if r == nil || r.db == nil {
+		return false, fmt.Errorf("user repository db is nil")
+	}
+	if audit == nil {
+		return false, fmt.Errorf("MFA reset requires an audit log")
+	}
+	columns := models.UserColumns
+	updated := false
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		result := tx.Model(&models.User{}).
+			Where(columns.UserID+" = ?", userID).
+			Where(columns.Status+" <> ?", models.EntityStatusDeleted).
+			Where(columns.DeletedAt + " IS NULL").
+			Updates(map[string]any{
+				columns.TOTPSecret:    "",
+				columns.TOTPLastStep:  -1,
+				columns.MFAGeneration: gorm.Expr(columns.MFAGeneration + " + 1"),
+				columns.UpdatedAt:     audit.CreatedAt,
+			})
+		if result.Error != nil || result.RowsAffected == 0 {
+			return result.Error
+		}
+		updated = true
+		var user models.User
+		if err := tx.Model(&models.User{}).Select(columns.MFAGeneration).
+			Where(columns.UserID+" = ?", userID).Take(&user).Error; err != nil {
+			return err
+		}
+		previousSubjectKey := AuthLoginMFAChallengeSubjectKey(userID, user.MFAGeneration-1)
+		if err := NewAuthMFARepository(tx).deleteChallengeBySubject(ctx, previousSubjectKey); err != nil {
+			return err
+		}
+		if err := NewGormUserSessionRepository(tx).RevokeAllByUserID(ctx, userID, audit.CreatedAt); err != nil {
+			return err
+		}
+		return NewGormAuditLogRepository(tx).Create(ctx, audit)
+	})
+	return updated && err == nil, err
 }
 
 func (r *gormUserRepository) UpdateStatus(ctx context.Context, params UpdateUserStatusParams) (bool, error) {

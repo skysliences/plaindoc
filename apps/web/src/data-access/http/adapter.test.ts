@@ -2,6 +2,67 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AdminSpaceTransferEvent } from "../types";
 import { createHttpAdapter } from "./adapter";
 
+describe("createHttpAdapter two-step authentication", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    window.localStorage.removeItem("plaindoc.auth.access-token");
+    window.localStorage.removeItem("plaindoc.auth.refresh-token");
+  });
+
+  it("only saves session tokens after the authenticator code is accepted", async () => {
+    const user = { id: "user-id", email: "reader@example.test", name: "文档用户" };
+    const initial = {
+      code: 0,
+      data: {
+        mfa: { mode: "setup", challengeToken: "challenge-token", secret: "JBSWY3DPEHPK3PXP" },
+        token: "ignored-unverified-token",
+        refreshToken: "ignored-unverified-refresh"
+      }
+    };
+    const verified = { code: 0, data: { user, token: "verified-token", refreshToken: "verified-refresh" } };
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response(JSON.stringify(initial), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(verified), { status: 200 }));
+    const gateway = createHttpAdapter({ baseUrl: "https://api.example.test/api" });
+
+    await expect(gateway.auth.register({ email: user.email, name: user.name, password: "example-password" }))
+      .resolves.toMatchObject({ mode: "setup", challengeToken: "challenge-token", secret: "JBSWY3DPEHPK3PXP" });
+    expect(window.localStorage.getItem("plaindoc.auth.access-token")).toBeNull();
+    expect(window.localStorage.getItem("plaindoc.auth.refresh-token")).toBeNull();
+
+    const verification = { challengeToken: "challenge-token", code: "012345" };
+    await expect(gateway.auth.verifyMfa(verification)).resolves.toEqual({ user, token: "verified-token" });
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      "https://api.example.test/api/auth/mfa/verify",
+      expect.objectContaining({ body: JSON.stringify(verification), method: "POST" })
+    );
+    expect(window.localStorage.getItem("plaindoc.auth.access-token")).toBe("verified-token");
+    expect(window.localStorage.getItem("plaindoc.auth.refresh-token")).toBe("verified-refresh");
+  });
+});
+
+describe("createHttpAdapter administrator authenticator reset", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("gets a user-scoped operation token before resetting the authenticator", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response(JSON.stringify({ code: 0, data: { token: "reset-token" } })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ code: 0, data: {} })));
+    const gateway = createHttpAdapter({ baseUrl: "https://api.example.test/api" });
+
+    await gateway.admin.resetUserMfa({ userId: " target/user " });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "https://api.example.test/api/admin/operation-tokens", expect.objectContaining({
+      method: "POST",
+      body: JSON.stringify({ operation: "user.reset_mfa", targetType: "user", targetId: "target/user" })
+    }));
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "https://api.example.test/api/admin/users/target%2Fuser/reset-mfa", expect.objectContaining({
+      method: "POST"
+    }));
+    expect(new Headers(fetchMock.mock.calls[1]?.[1]?.headers).get("X-Admin-Operation-Token")).toBe("reset-token");
+  });
+});
+
 class FakeEventSource {
   static instances: FakeEventSource[] = [];
 

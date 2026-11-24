@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strings"
@@ -38,6 +39,15 @@ type loginRequest struct {
 	Password      string `json:"password"`
 	CaptchaID     string `json:"captchaId"`
 	CaptchaAnswer string `json:"captchaAnswer"`
+}
+
+type verifyMFARequest struct {
+	ChallengeToken string `json:"challengeToken"`
+	Code           string `json:"code"`
+}
+
+type authMFAResponse struct {
+	MFA service.AuthMFAChallenge `json:"mfa"`
 }
 
 type refreshCaptchaRequest struct {
@@ -100,12 +110,15 @@ const (
 
 var (
 	authRegisterErrorMappings = []response.ErrorTemplateMapping{
+		{Target: service.ErrAuthMFAChallengeExpired, Template: response.AuthErrMFAChallengeExpired},
 		{
 			Target:   service.ErrEmailAlreadyExists,
 			Template: response.AuthErrEmailAlreadyExists,
 		},
 	}
 	authLoginErrorMappings = []response.ErrorTemplateMapping{
+		{Target: service.ErrAuthMFAChallengeExpired, Template: response.AuthErrMFAChallengeExpired},
+		{Target: service.ErrLoginIPDenied, Template: response.AuthErrLoginIPDenied},
 		{
 			Target:   service.ErrInvalidCredentials,
 			Template: response.AuthErrEmailPassword,
@@ -126,6 +139,15 @@ var (
 			Target:   service.ErrUserDeleted,
 			Template: response.AuthErrUserHasBeenDeleted,
 		},
+	}
+	authMFAErrorMappings = []response.ErrorTemplateMapping{
+		{Target: service.ErrAuthMFAChallengeExpired, Template: response.AuthErrMFAChallengeExpired},
+		{Target: service.ErrAuthMFACodeInvalid, Template: response.AuthErrMFACodeInvalid},
+		{Target: service.ErrAuthRegistrationClosed, Template: response.AuthErrRegistrationDisabled},
+		{Target: service.ErrEmailAlreadyExists, Template: response.AuthErrEmailAlreadyExists},
+		{Target: service.ErrLoginIPDenied, Template: response.AuthErrLoginIPDenied},
+		{Target: service.ErrUserBanned, Template: response.AuthErrUserHasBeenBanned},
+		{Target: service.ErrUserDeleted, Template: response.AuthErrUserHasBeenDeleted},
 	}
 	authRefreshErrorMappings = []response.ErrorTemplateMapping{
 		{
@@ -229,8 +251,9 @@ func NewAuthHandler(
 	}
 }
 
-// Register 创建账号并返回会话 token。
+// Register 启动注册及验证器绑定，确认验证码后才创建账号。
 func (h *authHandler) Register(c *gin.Context) {
+	c.Header("Cache-Control", "no-store")
 	if h == nil || h.authService == nil {
 		response.InternalError(c)
 		return
@@ -259,7 +282,7 @@ func (h *authHandler) Register(c *gin.Context) {
 	email := normalizeEmail(req.Email)
 	name := strings.TrimSpace(req.Name)
 	password := req.Password
-	if email == "" || !strings.Contains(email, "@") {
+	if email == "" || len(email) > 254 || !strings.Contains(email, "@") {
 		setRequestErrmsg(c, nil, "邮箱格式不正确")
 		response.AuthErrEmail.Write(c)
 		return
@@ -288,7 +311,7 @@ func (h *authHandler) Register(c *gin.Context) {
 		return
 	}
 
-	session, err := h.authService.Register(c.Request.Context(), email, password, name)
+	challenge, err := h.authService.BeginRegistration(c.Request.Context(), email, password, name)
 	if err != nil {
 		setRequestErrmsg(c, err, "用户注册失败")
 		h.recordAuthRisk(c, service.AuthRiskRecordInput{
@@ -302,24 +325,7 @@ func (h *authHandler) Register(c *gin.Context) {
 		}
 		return
 	}
-	h.recordAuthRisk(c, service.AuthRiskRecordInput{
-		Scene:      "register",
-		ClientIP:   strings.TrimSpace(c.ClientIP()),
-		Identifier: email,
-		Success:    true,
-	})
-	h.writeSessionCookies(c, session.Token, session.RefreshToken)
-
-	response.JSON(c, http.StatusCreated, authSessionResponse{
-		User: authUserResponse{
-			ID:        session.User.ID,
-			Email:     session.User.Email,
-			Name:      session.User.Name,
-			AvatarURL: session.User.AvatarURL,
-		},
-		Token:        session.Token,
-		RefreshToken: session.RefreshToken,
-	})
+	response.JSON(c, http.StatusOK, authMFAResponse{MFA: challenge})
 }
 
 // Options 返回登录页所需的认证策略选项（不包含敏感配置）。
@@ -371,8 +377,9 @@ func (h *authHandler) Options(c *gin.Context) {
 	})
 }
 
-// Login 校验账号密码并返回会话 token。
+// Login 校验账号密码并返回第二步验证挑战。
 func (h *authHandler) Login(c *gin.Context) {
+	c.Header("Cache-Control", "no-store")
 	if h == nil || h.authService == nil || h.authLoginOrchestrator == nil {
 		response.InternalError(c)
 		return
@@ -407,11 +414,15 @@ func (h *authHandler) Login(c *gin.Context) {
 		return
 	}
 
-	session, err := h.authLoginOrchestrator.Login(c.Request.Context(), service.AuthProviderLoginInput{
+	identity, err := h.authLoginOrchestrator.Login(c.Request.Context(), service.AuthProviderLoginInput{
 		Provider:   strings.TrimSpace(req.Provider),
 		Identifier: identifier,
 		Password:   req.Password,
 	})
+	var challenge service.AuthMFAChallenge
+	if err == nil {
+		challenge, err = h.authService.BeginLoginMFA(c.Request.Context(), identity, identifier)
+	}
 	if err != nil {
 		setRequestErrmsg(c, err, "用户登录失败")
 		h.recordAuthRisk(c, service.AuthRiskRecordInput{
@@ -425,14 +436,44 @@ func (h *authHandler) Login(c *gin.Context) {
 		}
 		return
 	}
-	h.recordAuthRisk(c, service.AuthRiskRecordInput{
-		Scene:      "login",
-		ClientIP:   strings.TrimSpace(c.ClientIP()),
-		Identifier: identifier,
-		Success:    true,
-	})
-	h.writeSessionCookies(c, session.Token, session.RefreshToken)
+	response.JSON(c, http.StatusOK, authMFAResponse{MFA: challenge})
+}
 
+// VerifyMFA completes authentication and creates the verified browser session.
+func (h *authHandler) VerifyMFA(c *gin.Context) {
+	c.Header("Cache-Control", "no-store")
+	if h == nil || h.authService == nil {
+		response.InternalError(c)
+		return
+	}
+	var req verifyMFARequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.AuthErrRequestBody.Write(c)
+		return
+	}
+
+	var allowRegistration func(context.Context) (bool, error)
+	if h.authRegistrationPolicyService != nil {
+		allowRegistration = h.authRegistrationPolicyService.AllowRegistration
+	}
+	session, attempt, err := h.authService.VerifyMFA(c.Request.Context(), req.ChallengeToken, req.Code, allowRegistration)
+	if attempt.Scene != "" && (err == nil || errors.Is(err, service.ErrAuthMFACodeInvalid)) {
+		h.recordAuthRisk(c, service.AuthRiskRecordInput{
+			Scene:      attempt.Scene,
+			ClientIP:   strings.TrimSpace(c.ClientIP()),
+			Identifier: attempt.Identifier,
+			Success:    err == nil,
+		})
+	}
+	if err != nil {
+		setRequestErrmsg(c, err, "二次验证失败")
+		if !response.WriteMappedError(c, err, authMFAErrorMappings...) {
+			response.InternalError(c)
+		}
+		return
+	}
+
+	h.writeSessionCookies(c, session.Token, session.RefreshToken)
 	response.JSON(c, http.StatusOK, authSessionResponse{
 		User: authUserResponse{
 			ID:        session.User.ID,
@@ -530,6 +571,11 @@ func (h *authHandler) Refresh(c *gin.Context) {
 
 	session, err := h.authService.Refresh(c.Request.Context(), refreshToken)
 	if err != nil {
+		if errors.Is(err, service.ErrLoginIPDenied) {
+			clearSessionCookies(c)
+			response.AuthErrAccessToken.WriteWithStatus(c)
+			return
+		}
 		setRequestErrmsg(c, err, "刷新 token 失败")
 		if !response.WriteMappedError(c, err, authRefreshErrorMappings...) {
 			response.InternalError(c)
@@ -565,6 +611,11 @@ func (h *authHandler) Me(c *gin.Context) {
 
 	session, err := h.authService.Me(c.Request.Context(), accessToken)
 	if err != nil {
+		if errors.Is(err, service.ErrLoginIPDenied) {
+			clearSessionCookies(c)
+			response.AuthErrAccessToken.WriteWithStatus(c)
+			return
+		}
 		setRequestErrmsg(c, err, "获取会话信息失败")
 		if !response.WriteMappedError(c, err, authMeErrorMappings...) {
 			response.InternalError(c)

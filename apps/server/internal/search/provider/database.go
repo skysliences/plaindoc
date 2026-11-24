@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sort"
 	"strings"
+	"unicode"
 
 	"github.com/lifei6671/plaindoc/apps/server/internal/storage/models"
 	"github.com/lifei6671/plaindoc/apps/server/internal/storage/repository"
@@ -73,8 +74,9 @@ func (p *DatabaseProvider) Search(ctx context.Context, request SearchRequest) (S
 		return SearchResponse{}, err
 	}
 
-	terms := buildSearchQueryTermsWithRaw(request.Query, request.RawQuery)
-	snippetKeywords := buildSearchSnippetKeywords(request.Query, request.RawQuery)
+	hanTerms := strings.FieldsFunc(request.RawQuery, func(r rune) bool { return !unicode.Is(unicode.Han, r) })
+	terms := databaseSearchTerms(request, hanTerms)
+	snippetKeywords := append(hanTerms, buildSearchSnippetKeywords(request.Query, request.RawQuery)...)
 	boostedTerms := extractCompoundLiteralTokens(request.RawQuery)
 	boostedSet := make(map[string]struct{}, len(boostedTerms))
 	for _, item := range boostedTerms {
@@ -84,7 +86,7 @@ func (p *DatabaseProvider) Search(ctx context.Context, request SearchRequest) (S
 		return SearchResponse{Total: 0, Hits: []SearchHit{}}, nil
 	}
 
-	page, pageSize, _ := normalizeDatabaseSearchPagination(request.Page, request.PageSize)
+	page, pageSize := normalizeDatabaseSearchPagination(request.Page, request.PageSize)
 	rows, total, err := p.visibilityRepo.SearchVisibleDocuments(ctx, repository.SearchVisibleDocumentsParams{
 		ActorUserID:         strings.TrimSpace(request.ActorUserID),
 		SpaceID:             strings.TrimSpace(request.SpaceID),
@@ -101,15 +103,6 @@ func (p *DatabaseProvider) Search(ctx context.Context, request SearchRequest) (S
 		return SearchResponse{Total: 0, Hits: []SearchHit{}}, nil
 	}
 
-	if len(request.ExcludedDocumentIDs) > 0 {
-		visible := rows[:0]
-		for _, row := range rows {
-			if _, excluded := request.ExcludedDocumentIDs[strings.TrimSpace(row.DocumentID)]; !excluded {
-				visible = append(visible, row)
-			}
-		}
-		rows = visible
-	}
 	filteredRows, err := p.filterRowsByRole(ctx, request, rows)
 	if err != nil {
 		return SearchResponse{}, err
@@ -124,10 +117,10 @@ func (p *DatabaseProvider) Search(ctx context.Context, request SearchRequest) (S
 		return SearchResponse{Total: 0, Hits: []SearchHit{}}, nil
 	}
 
-	start := (page - 1) * pageSize
-	if start >= len(scoredRows) {
+	if page-1 > (len(scoredRows)-1)/pageSize {
 		return SearchResponse{Total: int64(len(scoredRows)), Hits: []SearchHit{}}, nil
 	}
+	start := (page - 1) * pageSize
 	end := start + pageSize
 	if end > len(scoredRows) {
 		end = len(scoredRows)
@@ -147,6 +140,31 @@ func (p *DatabaseProvider) Search(ctx context.Context, request SearchRequest) (S
 		Total: int64(len(scoredRows)),
 		Hits:  hits,
 	}, nil
+}
+
+func databaseSearchTerms(request SearchRequest, hanTerms []string) []string {
+	terms := buildSearchQueryTermsWithRaw(request.Query, request.RawQuery)
+	if len(hanTerms) == 0 {
+		return terms
+	}
+
+	// 数据库直接匹配子串，保留连续中文，避免将相同但分散的汉字当作命中。
+	filtered := make([]string, 0, len(terms)+len(hanTerms))
+	seen := make(map[string]struct{}, len(terms)+len(hanTerms))
+	for _, term := range hanTerms {
+		if _, exists := seen[term]; !exists {
+			filtered = append(filtered, term)
+			seen[term] = struct{}{}
+		}
+	}
+	joinedHanTerms := strings.Join(hanTerms, " ")
+	for _, term := range terms {
+		if _, exists := seen[term]; exists || strings.Contains(joinedHanTerms, term) {
+			continue
+		}
+		filtered = append(filtered, term)
+	}
+	return filtered
 }
 
 func (p *DatabaseProvider) filterRowsByRole(
@@ -356,7 +374,7 @@ func scoreRowsByTerms(
 	return scored
 }
 
-func normalizeDatabaseSearchPagination(page int, pageSize int) (int, int, int) {
+func normalizeDatabaseSearchPagination(page int, pageSize int) (int, int) {
 	normalizedPage := page
 	if normalizedPage <= 0 {
 		normalizedPage = defaultDatabaseSearchPage
@@ -370,12 +388,7 @@ func normalizeDatabaseSearchPagination(page int, pageSize int) (int, int, int) {
 		normalizedPageSize = maxDatabaseSearchPageSize
 	}
 
-	offset := (normalizedPage - 1) * normalizedPageSize
-	if offset < 0 {
-		offset = 0
-	}
-
-	return normalizedPage, normalizedPageSize, offset
+	return normalizedPage, normalizedPageSize
 }
 
 func buildDatabaseSearchSnippet(title string, contentMD string, queryTerms []string) string {

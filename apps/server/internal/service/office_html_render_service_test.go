@@ -5,7 +5,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -40,24 +42,56 @@ func TestOfficeHTMLRenderServiceRenderDOCXHTMLUsesMammoth(t *testing.T) {
 		t.Skip("node runtime is required for mammoth rendering")
 	}
 
-	sourceContent := buildMinimalDOCX(t, "Hello Mammoth")
-	service := &OfficeHTMLRenderService{}
-
-	renderedHTML, err := service.renderDOCXHTML(context.Background(), OfficeHTMLRenderTask{
-		DocumentID:    "doc-1",
-		SpaceID:       "space-1",
-		Format:        models.DocumentFormatDOCX,
-		SourceContent: sourceContent,
-	})
-	if err != nil {
-		t.Fatalf("renderDOCXHTML returned error: %v", err)
+	for _, tc := range []struct {
+		name    string
+		content string
+		body    string
+	}{
+		{name: "paragraph", content: "Hello Mammoth", body: "<p>Hello Mammoth</p>"},
+		{name: "blank"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			service := &OfficeHTMLRenderService{}
+			renderedHTML, err := service.renderDOCXHTML(context.Background(), OfficeHTMLRenderTask{
+				DocumentID:    "doc-1",
+				SpaceID:       "space-1",
+				Format:        models.DocumentFormatDOCX,
+				SourceContent: buildMinimalDOCX(t, tc.content),
+			})
+			if err != nil {
+				t.Fatalf("renderDOCXHTML returned error: %v", err)
+			}
+			if want := `<div class="office-docx-reader">` + tc.body + `</div>`; renderedHTML != want {
+				t.Fatalf("renderDOCXHTML = %q, want %q", renderedHTML, want)
+			}
+		})
 	}
+}
 
-	if !strings.Contains(renderedHTML, `<div class="office-docx-reader">`) {
-		t.Fatalf("expected docx reader wrapper, got %q", renderedHTML)
+func TestOfficeHTMLRenderServiceFindsPackagedMammothRenderer(t *testing.T) {
+	t.Parallel()
+
+	releaseDir := t.TempDir()
+	webDistDir := filepath.Join(releaseDir, "web", "dist")
+	workerEntry := filepath.Join(releaseDir, "worker", "worker-entry.js")
+	bundledRenderers := []string{
+		filepath.Join(filepath.Dir(webDistDir), "dist-ssr", mammothRenderBundleName),
+		filepath.Join(filepath.Dir(workerEntry), mammothRenderBundleName),
 	}
-	if !strings.Contains(renderedHTML, "<p>Hello Mammoth</p>") {
-		t.Fatalf("expected mammoth paragraph output, got %q", renderedHTML)
+	scripts := converterScriptPaths{webDistDir, workerEntry}
+
+	// The browser assets provide a fallback when the configured worker is elsewhere.
+	for _, renderer := range bundledRenderers {
+		if err := os.MkdirAll(filepath.Dir(renderer), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(renderer, nil, 0600); err != nil {
+			t.Fatal(err)
+		}
+		path, err := scripts.resolve(mammothRenderBundleName, "render_docx_with_mammoth.mjs")
+		if err != nil || path != renderer {
+			t.Fatalf("resolve renderer = %q, %v; want %q", path, err, renderer)
+		}
 	}
 }
 

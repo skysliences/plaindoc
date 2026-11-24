@@ -24,6 +24,9 @@ const (
 	CodePasswordResetTokenExpired  = "PASSWORD_RESET_TOKEN_EXPIRED"
 	CodePasswordResetTokenConsumed = "PASSWORD_RESET_TOKEN_CONSUMED"
 	CodePasswordResetUnsupported   = "PASSWORD_RESET_UNSUPPORTED"
+	CodeAuthMFAChallengeExpired    = "AUTH_MFA_CHALLENGE_EXPIRED"
+	CodeAuthMFACodeInvalid         = "AUTH_MFA_CODE_INVALID"
+	CodeLoginIPDenied              = "LOGIN_IP_DENIED"
 
 	// 2000 段：请求参数与输入校验。
 	CodeInvalidRequest            = "INVALID_REQUEST"
@@ -149,6 +152,9 @@ var errorCodeRegistry = map[string]int{
 	CodePasswordResetTokenExpired:  1015,
 	CodePasswordResetTokenConsumed: 1016,
 	CodePasswordResetUnsupported:   1017,
+	CodeAuthMFAChallengeExpired:    1018,
+	CodeAuthMFACodeInvalid:         1019,
+	CodeLoginIPDenied:              1020,
 
 	// 2000 段：请求参数与输入校验。
 	CodeInvalidRequest:            2001,

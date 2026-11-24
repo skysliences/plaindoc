@@ -34,11 +34,10 @@ type IndexRecord struct {
 
 // SearchRequest 定义统一检索请求结构。
 type SearchRequest struct {
-	ExcludedDocumentIDs map[string]struct{}
-	SpaceID             string
-	ScopeSpaceIDs       []string
-	ActorUserID         string
-	IsAuthenticated     bool
+	SpaceID         string
+	ScopeSpaceIDs   []string
+	ActorUserID     string
+	IsAuthenticated bool
 	// CanViewAllDocuments 仅由服务层验证平台管理员角色后设置。
 	CanViewAllDocuments bool
 	UserRoleLevel       int

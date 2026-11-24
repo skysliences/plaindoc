@@ -36,7 +36,9 @@ type readerPageHandler struct {
 	webOrigin                    string
 	onlyOfficeConfigService      *service.OnlyOfficeConfigService
 	officeRenderingConfigService *service.OfficeRenderingConfigService
+	officeReaderPreview          *service.OfficeReaderPreviewService
 	onlyOfficeTokenService       *service.OnlyOfficeDocumentTokenService
+	searchConfig                 *service.SearchConfigService
 }
 
 type readerPageViewerIdentity struct {
@@ -49,6 +51,7 @@ type readerPagePayload struct {
 	ExportDenied          bool                                        `json:"exportDenied,omitempty"`
 	CopyDenied            bool                                        `json:"copyDenied,omitempty"`
 	TrackDocumentActivity bool                                        `json:"trackDocumentActivity,omitempty"`
+	SearchEnabled         bool                                        `json:"searchEnabled,omitempty"`
 	CreateDocumentURL     string                                      `json:"createDocumentUrl,omitempty"`
 	EditURL               string                                      `json:"editUrl,omitempty"`
 	Space                 service.ReaderSpaceViewModel                `json:"space"`
@@ -59,8 +62,9 @@ type readerPagePayload struct {
 	RequestOrigin         string                                      `json:"requestOrigin,omitempty"`
 	Viewer                readerPageViewerIdentity                    `json:"viewer"`
 	OfficeRendering       readerPageOfficeRenderingState              `json:"officeRendering"`
-	Access                *readerPageAccessState                      `json:"access,omitempty"`
-	Share                 *readerPageShareState                       `json:"share,omitempty"`
+	localOfficeFallback   bool
+	Access                *readerPageAccessState `json:"access,omitempty"`
+	Share                 *readerPageShareState  `json:"share,omitempty"`
 }
 
 type readerPageAccessState struct {
@@ -99,7 +103,9 @@ func NewReaderPageHandler(
 	webOrigin string,
 	onlyOfficeConfigService *service.OnlyOfficeConfigService,
 	officeRenderingConfigService *service.OfficeRenderingConfigService,
+	officeReaderPreview *service.OfficeReaderPreviewService,
 	onlyOfficeTokenService *service.OnlyOfficeDocumentTokenService,
+	searchConfig *service.SearchConfigService,
 ) *readerPageHandler {
 	return &readerPageHandler{
 		authService:                  authService,
@@ -110,7 +116,9 @@ func NewReaderPageHandler(
 		webOrigin:                    normalizeWebOrigin(webOrigin),
 		onlyOfficeConfigService:      onlyOfficeConfigService,
 		officeRenderingConfigService: officeRenderingConfigService,
+		officeReaderPreview:          officeReaderPreview,
 		onlyOfficeTokenService:       onlyOfficeTokenService,
+		searchConfig:                 searchConfig,
 	}
 }
 
@@ -312,7 +320,6 @@ func (h *readerPageHandler) Page(c *gin.Context) {
 		ActiveDocID:           viewModel.ActiveDocID,
 		RequestOrigin:         resolveRequestOrigin(c),
 		Viewer:                viewer,
-		OfficeRendering:       h.resolveOfficeRenderingState(c.Request.Context()),
 	}
 	if viewModel.CanCreateDocument {
 		payload.CreateDocumentURL = h.webOrigin + "/editor/" + url.PathEscape(spaceID) + "?from=reader&create=document"
@@ -477,6 +484,12 @@ func (h *readerPageHandler) renderReaderPayload(
 	payload readerPagePayload,
 	cacheable bool,
 ) {
+	if payload.Share == nil || !payload.Share.Enabled {
+		payload.SearchEnabled = h.searchConfig.IsEnabled(c.Request.Context())
+	}
+	if payload.Access == nil && models.IsOfficeDocumentFormat(payload.Document.Format) {
+		h.prepareOfficeReaderPayload(c.Request.Context(), &payload)
+	}
 	applyReaderBrowserCacheHeaders(c, statusCode, payload, cacheable)
 
 	if h.dispatcher != nil {
@@ -648,6 +661,30 @@ func buildReaderRenderCacheKey(
 		time.Time{},
 		hex.EncodeToString(payloadHash[:]),
 	)
+}
+
+func (h *readerPageHandler) prepareOfficeReaderPayload(ctx context.Context, payload *readerPagePayload) {
+	payload.OfficeRendering = h.resolveOfficeRenderingState(ctx)
+	onlyOfficeConfig, configErr := h.onlyOfficeConfigService.GetConfig(ctx)
+	if configErr == nil && onlyOfficeConfig.Enabled && onlyOfficeConfig.DocumentServerURL != "" {
+		return
+	}
+
+	payload.EditURL = ""
+	payload.OfficeRendering.IndependentRenderEnabled = true
+	payload.OfficeRendering.FallbackToOnlyOfficeOnRenderFailure = false
+	preview, err := h.officeReaderPreview.Read(ctx, payload.Space.ID, payload.Document)
+	if err != nil {
+		h.logWarn("local office preview failed", "document_id", payload.Document.ID, "error", err.Error())
+		payload.Document.ContentMD = ""
+		payload.Document.RenderStatus = models.DocumentRenderStatusFailed
+		payload.Document.RenderError = "暂时无法预览此 Office 文件。请稍后重试。"
+		return
+	}
+	payload.Document.ContentMD = preview
+	payload.Document.RenderStatus = models.DocumentRenderStatusSuccess
+	payload.Document.RenderError = ""
+	payload.localOfficeFallback = true
 }
 
 func (h *readerPageHandler) resolveOfficeRenderingState(ctx context.Context) readerPageOfficeRenderingState {
@@ -920,6 +957,11 @@ func buildReaderFallbackHTML(payload readerPagePayload) string {
 	}
 
 	bodyContent := fmt.Sprintf("<pre>%s</pre>", escapedDocument)
+	if payload.localOfficeFallback {
+		bodyContent = payload.Document.ContentMD
+	} else if models.IsOfficeDocumentFormat(payload.Document.Format) && payload.Document.RenderError != "" {
+		bodyContent = fmt.Sprintf("<p>%s</p>", template.HTMLEscapeString(payload.Document.RenderError))
+	}
 	if payload.Document.ImportedFileKind == models.ImportedFileKindImage && payload.Document.ImportedImageURL != "" {
 		bodyContent = fmt.Sprintf(`<img class="reader-fallback-image" src="%s" alt="%s" />`,
 			template.HTMLEscapeString(payload.Document.ImportedImageURL), escapedDocumentTitle)
@@ -960,6 +1002,9 @@ func buildReaderFallbackHTML(payload readerPagePayload) string {
 			homeNav += ` <a class="reader-home-link" href="` + template.HTMLEscapeString(payload.EditURL) + `">编辑文档</a>`
 		}
 		homeNav += "</nav>"
+		if payload.SearchEnabled {
+			homeNav += `<form class="reader-search" action="/search" method="get" role="search" aria-label="搜索文档"><input type="search" name="q" aria-label="搜索可阅读的文档" placeholder="搜索文档" required><button type="submit">搜索</button></form>`
+		}
 	}
 
 	printPolicy := ""
@@ -983,7 +1028,10 @@ func buildReaderFallbackHTML(payload readerPagePayload) string {
       .reader-meta { font-size: 12px; color: #6b7280; margin-bottom: 12px; }
       .reader-home-link { display: inline-block; margin-bottom: 10px; padding: 7px 10px; border: 1px solid #cbd5e1; border-radius: 8px; color: #334155; font-size: 14px; font-weight: 600; text-decoration: none; }
       .reader-home-link:hover { background: #eef4fb; }
-      @media print { .reader-home-link { display: none; } }
+      .reader-search { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+      .reader-search input, .reader-search button { border: 1px solid #cbd5e1; border-radius: 8px; background: #fff; color: #334155; padding: 7px 10px; font: inherit; }
+      .reader-search button { cursor: pointer; }
+      @media print { .reader-home-link, .reader-search { display: none; } }
       .reader-title { font-size: 28px; font-weight: 700; margin: 0 0 18px; }
       .reader-fallback-notice { margin: 0 0 14px; color: #92400e; background: #fff7ed; border: 1px solid #fed7aa; border-radius: 8px; padding: 10px 12px; }
       .reader-fallback-denied { margin: 0; border: 1px solid #e2e8f0; background: #f8fafc; border-radius: 12px; padding: 16px; }

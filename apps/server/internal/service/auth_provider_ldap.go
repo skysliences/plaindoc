@@ -208,23 +208,27 @@ func (p *ldapAuthLoginProvider) Login(
 	ctx context.Context,
 	identifier string,
 	password string,
-) (AuthSession, error) {
+) (AuthPrimaryIdentity, error) {
 	if p == nil || p.authService == nil || p.userRepo == nil || p.userIdentityRepo == nil || p.dialer == nil {
-		return AuthSession{}, errors.New("ldap auth login provider dependencies are nil")
+		return AuthPrimaryIdentity{}, errors.New("ldap auth login provider dependencies are nil")
 	}
 
 	normalizedIdentifier := strings.TrimSpace(identifier)
 	if normalizedIdentifier == "" || password == "" {
-		return AuthSession{}, ErrInvalidCredentials
+		return AuthPrimaryIdentity{}, ErrInvalidCredentials
 	}
 
 	principal, err := p.authenticate(ctx, normalizedIdentifier, password)
 	if err != nil {
-		return AuthSession{}, err
+		return AuthPrimaryIdentity{}, err
 	}
 	user, err := p.resolveOrCreateLocalUser(ctx, principal)
 	if err != nil {
-		return AuthSession{}, err
+		return AuthPrimaryIdentity{}, err
+	}
+	identity, err := p.authService.LoginByUserID(ctx, user.UserID)
+	if err != nil {
+		return AuthPrimaryIdentity{}, err
 	}
 
 	now := p.now().UTC()
@@ -234,17 +238,14 @@ func (p *ldapAuthLoginProvider) Login(
 		ProviderID:   p.ProviderID(),
 		ExternalID:   principal.ExternalID,
 		LoginName:    principal.LoginName,
-		LastLoginAt:  &now,
 		Now:          now,
 	}); err != nil {
-		return AuthSession{}, err
+		return AuthPrimaryIdentity{}, err
 	}
 
-	session, err := p.authService.LoginByUserID(ctx, user.UserID)
-	if err != nil {
-		return AuthSession{}, err
-	}
-	return session, nil
+	identity.externalProviderID = p.ProviderID()
+	identity.externalID = principal.ExternalID
+	return identity, nil
 }
 
 // CheckHealth 探测 LDAP provider 健康状态：连通性、TLS 升级与 service bind 是否可用。

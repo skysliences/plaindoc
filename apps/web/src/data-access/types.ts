@@ -52,6 +52,21 @@ export interface AuthRegisterInput {
   captchaAnswer?: string;
 }
 
+export type AuthMfaChallenge =
+  | { mode: "verify"; challengeToken: string }
+  | {
+    mode: "setup";
+    challengeToken: string;
+    secret: string;
+    otpauthUrl?: string;
+    qrCodeDataUrl?: string;
+  };
+
+export interface AuthMfaVerifyInput {
+  challengeToken: string;
+  code: string;
+}
+
 export interface AuthCaptchaChallenge {
   captchaId: string;
   captchaImageDataUrl: string;
@@ -366,8 +381,9 @@ export class ConflictError extends Error {
 export interface AuthGateway {
   getLoginOptions(): Promise<AuthLoginOptions>;
   getSession(): Promise<AuthSession>;
-  login(input: AuthLoginInput): Promise<AuthSession>;
-  register(input: AuthRegisterInput): Promise<AuthSession>;
+  login(input: AuthLoginInput): Promise<AuthMfaChallenge>;
+  register(input: AuthRegisterInput): Promise<AuthMfaChallenge>;
+  verifyMfa(input: AuthMfaVerifyInput): Promise<AuthSession>;
   refreshCaptcha(input: AuthCaptchaRefreshInput): Promise<AuthCaptchaChallenge>;
   requestPasswordReset(input: AuthPasswordResetRequestInput): Promise<void>;
   verifyPasswordResetToken(input: AuthPasswordResetVerifyInput): Promise<AuthPasswordResetVerifyResult>;
@@ -542,6 +558,7 @@ export interface AdminUser {
   name: string;
   role: "user" | AdminRole;
   canEditRole: boolean;
+  loginIpAddresses?: string[];
   status: EntityStatus;
   bannedReason: string;
   bannedAt: string | null;
@@ -1267,9 +1284,11 @@ export interface AdminGateway {
   listUsers(input?: AdminUserListInput): Promise<AdminUserListResult>;
   createUser(input: { email: string; name: string; password: string; role: "user" | AdminRole }): Promise<AdminUser>;
   updateUserRole(input: { userId: string; role: "user" | AdminRole }): Promise<AdminUser>;
+  updateUserLoginIPs(input: { userId: string; ipAddresses: string[] }): Promise<{ loginIpAddresses: string[] }>;
   updateUserStatus(input: { userId: string; status: "active" | "banned"; reason?: string }): Promise<AdminUser>;
   deleteUser(userId: string): Promise<void>;
   sendUserPasswordResetEmail(input: { userId: string }): Promise<void>;
+  resetUserMfa(input: { userId: string }): Promise<void>;
   createSpace(input: {
     spaceId?: string;
     name: string;

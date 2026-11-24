@@ -54,6 +54,7 @@ type workspaceHandler struct {
 	imageHostingService        *service.ImageHostingService
 	onlyOfficeConfigService    *service.OnlyOfficeConfigService
 	officeHTMLRenderService    *service.OfficeHTMLRenderService
+	importMarkdownConverter    service.WorkspaceImportMarkdownConverter
 	onlyOfficeTokenService     *service.OnlyOfficeDocumentTokenService
 	attachmentTokenService     *service.DocumentAttachmentDownloadTokenService
 	auditLogRepo               repository.AuditLogRepository
@@ -246,6 +247,7 @@ func NewWorkspaceHandler(
 	imageHostingService *service.ImageHostingService,
 	onlyOfficeConfigService *service.OnlyOfficeConfigService,
 	officeHTMLRenderService *service.OfficeHTMLRenderService,
+	importMarkdownConverter service.WorkspaceImportMarkdownConverter,
 	onlyOfficeTokenService *service.OnlyOfficeDocumentTokenService,
 	attachmentTokenService *service.DocumentAttachmentDownloadTokenService,
 	auditLogRepo repository.AuditLogRepository,
@@ -269,6 +271,7 @@ func NewWorkspaceHandler(
 		imageHostingService:       imageHostingService,
 		onlyOfficeConfigService:   onlyOfficeConfigService,
 		officeHTMLRenderService:   officeHTMLRenderService,
+		importMarkdownConverter:   importMarkdownConverter,
 		onlyOfficeTokenService:    onlyOfficeTokenService,
 		attachmentTokenService:    attachmentTokenService,
 		auditLogRepo:              auditLogRepo,

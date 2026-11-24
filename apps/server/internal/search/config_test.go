@@ -110,8 +110,8 @@ func TestNormalizeConfig_UsesDefaults(t *testing.T) {
 		},
 	})
 
-	if config.ActiveProvider != ProviderBleve {
-		t.Fatalf("expected default provider %q, got %q", ProviderBleve, config.ActiveProvider)
+	if config.ActiveProvider != ProviderDatabase {
+		t.Fatalf("expected default provider %q, got %q", ProviderDatabase, config.ActiveProvider)
 	}
 	if !config.Enabled {
 		t.Fatalf("expected enabled=true from payload")

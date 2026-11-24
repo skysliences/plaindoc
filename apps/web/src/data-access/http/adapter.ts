@@ -66,6 +66,7 @@ import {
   type AuthLoginMode,
   type AuthLoginOptions,
   type AuthLoginProviderOption,
+  type AuthMfaChallenge,
   type AuthRegisterInput,
   type AuthSession,
   ConflictError,
@@ -323,6 +324,28 @@ function normalizeAuthCaptchaChallenge(value: unknown): AuthCaptchaChallenge {
     level: Math.trunc(level),
     expiresInSeconds: Math.trunc(expiresInSeconds)
   };
+}
+
+function normalizeAuthMfaChallenge(value: unknown): AuthMfaChallenge {
+  const challenge = (value as { mfa?: unknown } | null | undefined)?.mfa;
+  if (!challenge || typeof challenge !== "object") {
+    throw new Error("服务端未返回两步验证请求");
+  }
+  const record = challenge as Record<string, unknown>;
+  const challengeToken = typeof record.challengeToken === "string" ? record.challengeToken.trim() : "";
+  if (challengeToken && record.mode === "verify") {
+    return { mode: "verify", challengeToken };
+  }
+  if (challengeToken && record.mode === "setup" && typeof record.secret === "string" && record.secret.trim()) {
+    const otpauthUrl = typeof record.otpauthUrl === "string" && record.otpauthUrl.startsWith("otpauth://totp/")
+      ? record.otpauthUrl
+      : undefined;
+    const qrCodeDataUrl = typeof record.qrCodeDataUrl === "string" && record.qrCodeDataUrl.startsWith("data:image/png;base64,")
+      ? record.qrCodeDataUrl
+      : undefined;
+    return { mode: "setup", challengeToken, secret: record.secret.trim(), otpauthUrl, qrCodeDataUrl };
+  }
+  throw new Error("两步验证请求数据不完整");
 }
 
 function parseResponsePayload(rawBody: string): unknown {
@@ -730,15 +753,14 @@ export function createHttpAdapter(options: HttpAdapterOptions): DataGateway {
       if (captchaAnswer) {
         payload.captchaAnswer = captchaAnswer;
       }
-      const session = await request<HttpAuthSession>("/auth/login", {
+      const result = await request<unknown>("/auth/login", {
         method: "POST",
         body: JSON.stringify(payload)
+      }, {
+        skipAuth: true,
+        retryOnUnauthorized: false
       });
-      saveSessionTokens(session);
-      return {
-        user: session.user,
-        token: session.token
-      };
+      return normalizeAuthMfaChallenge(result);
     },
     async register(input: AuthRegisterInput) {
       const payload: AuthRegisterInput = {
@@ -754,10 +776,26 @@ export function createHttpAdapter(options: HttpAdapterOptions): DataGateway {
       if (captchaAnswer) {
         payload.captchaAnswer = captchaAnswer;
       }
-      const session = await request<HttpAuthSession>("/auth/register", {
+      const result = await request<unknown>("/auth/register", {
         method: "POST",
         body: JSON.stringify(payload)
+      }, {
+        skipAuth: true,
+        retryOnUnauthorized: false
       });
+      return normalizeAuthMfaChallenge(result);
+    },
+    async verifyMfa(input) {
+      const session = await request<HttpAuthSession>("/auth/mfa/verify", {
+        method: "POST",
+        body: JSON.stringify({ challengeToken: input.challengeToken, code: input.code })
+      }, {
+        skipAuth: true,
+        retryOnUnauthorized: false
+      });
+      if (!session?.user) {
+        throw new Error("服务端未返回用户信息");
+      }
       saveSessionTokens(session);
       return {
         user: session.user,
@@ -1436,6 +1474,22 @@ export function createHttpAdapter(options: HttpAdapterOptions): DataGateway {
         })
       });
     },
+    async updateUserLoginIPs(input: { userId: string; ipAddresses: string[] }) {
+      const targetUserID = input.userId.trim();
+      if (!targetUserID) {
+        throw new Error("用户 ID 不能为空");
+      }
+      const operationToken = await issueAdminOperationToken({
+        operation: "user.update_login_ips",
+        targetType: "user",
+        targetId: targetUserID
+      });
+      return request<{ loginIpAddresses: string[] }>(`/admin/users/${encodeURIComponent(targetUserID)}/login-ips`, {
+        method: "PUT",
+        headers: buildAdminOperationTokenHeaders(operationToken),
+        body: JSON.stringify({ ipAddresses: input.ipAddresses })
+      });
+    },
     async deleteUser(userId: string) {
       const targetUserID = userId.trim();
       if (!targetUserID) {
@@ -1465,6 +1519,21 @@ export function createHttpAdapter(options: HttpAdapterOptions): DataGateway {
         method: "POST",
         headers: buildAdminOperationTokenHeaders(operationToken),
         body: JSON.stringify({})
+      });
+    },
+    async resetUserMfa({ userId }) {
+      const targetUserID = userId.trim();
+      if (!targetUserID) {
+        throw new Error("用户 ID 不能为空");
+      }
+      const operationToken = await issueAdminOperationToken({
+        operation: "user.reset_mfa",
+        targetType: "user",
+        targetId: targetUserID
+      });
+      await request<void>(`/admin/users/${encodeURIComponent(targetUserID)}/reset-mfa`, {
+        method: "POST",
+        headers: buildAdminOperationTokenHeaders(operationToken)
       });
     },
     async createSpace(input: {

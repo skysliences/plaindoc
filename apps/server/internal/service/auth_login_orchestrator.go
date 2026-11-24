@@ -51,9 +51,9 @@ func NewAuthLoginOrchestrator(
 func (o *AuthLoginOrchestrator) Login(
 	ctx context.Context,
 	input AuthProviderLoginInput,
-) (AuthSession, error) {
+) (AuthPrimaryIdentity, error) {
 	if o == nil {
-		return AuthSession{}, errors.New("auth login orchestrator is nil")
+		return AuthPrimaryIdentity{}, errors.New("auth login orchestrator is nil")
 	}
 
 	providerID := strings.TrimSpace(input.Provider)
@@ -72,7 +72,7 @@ func (o *AuthLoginOrchestrator) Login(
 			logit.String("auth_login_result", "failed"),
 			logit.String("auth_login_reason", "provider_unavailable"),
 		)
-		return AuthSession{}, ErrAuthProviderUnavailable
+		return AuthPrimaryIdentity{}, ErrAuthProviderUnavailable
 	}
 
 	session, err := provider.Login(
@@ -86,12 +86,12 @@ func (o *AuthLoginOrchestrator) Login(
 			logit.String("auth_login_result", "failed"),
 			logit.String("auth_login_reason", classifyAuthLoginFailureReason(err)),
 		)
-		return AuthSession{}, err
+		return AuthPrimaryIdentity{}, err
 	}
 
 	logit.SetRequestAttrs(
 		ctx,
-		logit.String("auth_login_result", "success"),
+		logit.String("auth_login_result", "primary_verified"),
 		logit.String("auth_login_reason", ""),
 	)
 	return session, nil
@@ -101,6 +101,8 @@ func classifyAuthLoginFailureReason(err error) string {
 	switch {
 	case errors.Is(err, ErrInvalidCredentials):
 		return "invalid_credentials"
+	case errors.Is(err, ErrLoginIPDenied):
+		return "login_ip_denied"
 	case errors.Is(err, ErrUserBanned):
 		return "user_banned"
 	case errors.Is(err, ErrUserDeleted):

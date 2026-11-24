@@ -97,8 +97,8 @@ type JiebaAnalyzerConfig struct {
 // DefaultConfig 返回全文检索默认配置。
 func DefaultConfig() Config {
 	return Config{
-		Enabled:        false,
-		ActiveProvider: ProviderBleve,
+		Enabled:        true,
+		ActiveProvider: ProviderDatabase,
 		FallbackPolicy: FallbackPolicyDegradeToDatabase,
 		Analysis: AnalysisConfig{
 			ActiveAnalyzer: AnalyzerSimple,

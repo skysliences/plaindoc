@@ -2,6 +2,7 @@ package handler
 
 import (
 	"log/slog"
+	"math"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -105,7 +106,7 @@ func (h *homeHandler) Search(c *gin.Context) {
 	}
 
 	viewerIdentity := h.resolveOptionalViewerIdentity(c)
-	searchEnabled := h.resolveHomepageSearchEnabled(c)
+	searchEnabled := h.searchConfig.IsEnabled(c.Request.Context())
 
 	categoryRecord, err := h.homeService.GetPage(c.Request.Context(), service.HomepageQueryInput{
 		ViewerUserID: viewerIdentity.UserID,
@@ -121,6 +122,9 @@ func (h *homeHandler) Search(c *gin.Context) {
 	keyword := strings.TrimSpace(c.Query("q"))
 	page := parsePositiveInt(c.Query("page"), 1)
 	pageSize := parsePositiveInt(c.Query("pageSize"), 20)
+	if page-1 > math.MaxInt/pageSize {
+		page = 1
+	}
 	searchResult := service.HomeSearchPageRecord{
 		Keyword:  keyword,
 		Page:     page,
@@ -144,6 +148,23 @@ func (h *homeHandler) Search(c *gin.Context) {
 	c.Header("Cache-Control", "private, no-store, max-age=0")
 	appendVaryHeader(c, "Authorization")
 	appendVaryHeader(c, "Cookie")
+
+	var searchPageCount int64
+	var previousPageURL, nextPageURL string
+	if searchResult.Total > 0 {
+		searchPageCount = (searchResult.Total-1)/int64(searchResult.PageSize) + 1
+		currentPage := int64(searchResult.Page)
+		if currentPage > searchPageCount {
+			c.Redirect(http.StatusFound, buildSearchPageURL(keyword, searchPageCount, searchResult.PageSize))
+			return
+		}
+		if currentPage > 1 {
+			previousPageURL = buildSearchPageURL(keyword, currentPage-1, searchResult.PageSize)
+		}
+		if currentPage < searchPageCount {
+			nextPageURL = buildSearchPageURL(keyword, currentPage+1, searchResult.PageSize)
+		}
+	}
 
 	htmlBytes, err := view.RenderHomePage(view.HomePageViewData{
 		Title:                "全文检索",
@@ -170,7 +191,9 @@ func (h *homeHandler) Search(c *gin.Context) {
 		SearchKeyword:        keyword,
 		SearchTotal:          searchResult.Total,
 		SearchPage:           searchResult.Page,
-		SearchPageSize:       searchResult.PageSize,
+		SearchPageCount:      searchPageCount,
+		SearchPreviousURL:    previousPageURL,
+		SearchNextURL:        nextPageURL,
 		SearchResults:        mapSearchResultHits(searchResult.Items),
 	})
 	if err != nil {
@@ -180,6 +203,15 @@ func (h *homeHandler) Search(c *gin.Context) {
 	}
 
 	c.Data(http.StatusOK, "text/html; charset=utf-8", htmlBytes)
+}
+
+func buildSearchPageURL(keyword string, page int64, pageSize int) string {
+	query := url.Values{
+		"q":        {keyword},
+		"page":     {strconv.FormatInt(page, 10)},
+		"pageSize": {strconv.Itoa(pageSize)},
+	}
+	return "/search?" + query.Encode()
 }
 
 // Logout 处理首页导航发起的退出登录。
@@ -211,7 +243,7 @@ func (h *homeHandler) renderPage(c *gin.Context, explore bool) {
 	}
 
 	viewerIdentity := h.resolveOptionalViewerIdentity(c)
-	searchEnabled := h.resolveHomepageSearchEnabled(c)
+	searchEnabled := h.searchConfig.IsEnabled(c.Request.Context())
 	record, err := h.homeService.GetPage(c.Request.Context(), service.HomepageQueryInput{
 		ViewerUserID: viewerIdentity.UserID,
 		CategoryID:   categoryID,
@@ -319,23 +351,6 @@ func (h *homeHandler) resolveOptionalViewerIdentity(c *gin.Context) homeViewerId
 		AvatarURL:     strings.TrimSpace(session.User.AvatarURL),
 		Authenticated: strings.TrimSpace(session.User.ID) != "",
 	}
-}
-
-func (h *homeHandler) resolveHomepageSearchEnabled(c *gin.Context) bool {
-	if h == nil || h.searchConfig == nil || c == nil {
-		return false
-	}
-	snapshot, err := h.searchConfig.Refresh(c.Request.Context())
-	if err != nil {
-		return false
-	}
-	if !snapshot.Config.Enabled {
-		return false
-	}
-	if !snapshot.Config.IsAnalyzerEnabled(snapshot.Config.Analysis.ActiveAnalyzer) {
-		return false
-	}
-	return true
 }
 
 func buildHomeCategoryItems(

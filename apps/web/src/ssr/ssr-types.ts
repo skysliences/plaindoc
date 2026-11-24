@@ -78,6 +78,7 @@ export interface ReaderSharePayload {
 export interface ReaderPagePayload {
   exportDenied?: boolean;
   copyDenied?: boolean;
+  searchEnabled?: boolean;
   trackDocumentActivity?: boolean;
   editUrl?: string;
   createDocumentUrl?: string;

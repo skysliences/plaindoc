@@ -32,13 +32,16 @@ var (
 )
 
 type authTokenClaims struct {
-	TokenType string `json:"tokenType"`
+	TokenType     string `json:"tokenType"`
+	MFAValidated  bool   `json:"mfaValidated"`
+	MFAGeneration int64  `json:"mfaGeneration,omitempty"`
 	jwt.RegisteredClaims
 }
 
 type parsedToken struct {
-	UserID    string
-	SessionID string
+	UserID        string
+	SessionID     string
+	MFAGeneration int64
 }
 
 type AuthUser struct {
@@ -46,6 +49,15 @@ type AuthUser struct {
 	Email     string
 	Name      string
 	AvatarURL string
+}
+
+// AuthPrimaryIdentity is returned by login providers after password proof without a session.
+type AuthPrimaryIdentity struct {
+	User               AuthUser
+	passwordProof      string
+	mfaGeneration      int64
+	externalProviderID string
+	externalID         string
 }
 
 type AuthSession struct {
@@ -58,6 +70,8 @@ type AuthSession struct {
 type AuthService struct {
 	userRepo        repository.UserRepository
 	userSessionRepo repository.UserSessionRepository
+	mfaRepo         *repository.AuthMFARepository
+	mfaNow          func() time.Time
 	jwtSecret       []byte
 	accessTokenTTL  time.Duration
 	refreshTokenTTL time.Duration
@@ -68,142 +82,78 @@ func NewAuthService(
 	userRepo repository.UserRepository,
 	userSessionRepo repository.UserSessionRepository,
 	jwtConfig config.JWTConfig,
+	mfaRepo *repository.AuthMFARepository,
 ) *AuthService {
 	return &AuthService{
 		userRepo:        userRepo,
 		userSessionRepo: userSessionRepo,
+		mfaRepo:         mfaRepo,
+		mfaNow:          time.Now,
 		jwtSecret:       []byte(jwtConfig.Secret),
 		accessTokenTTL:  jwtConfig.AccessTokenTTL,
 		refreshTokenTTL: jwtConfig.RefreshTokenTTL,
 	}
 }
 
-func (s *AuthService) Register(ctx context.Context, email string, password string, name string) (AuthSession, error) {
-	if s == nil || s.userRepo == nil || s.userSessionRepo == nil {
-		return AuthSession{}, errors.New("auth service dependencies are nil")
+// Login checks the local password and returns the identity for second-factor verification.
+func (s *AuthService) Login(ctx context.Context, email string, password string) (AuthPrimaryIdentity, error) {
+	if s == nil || s.userRepo == nil {
+		return AuthPrimaryIdentity{}, errors.New("auth service dependencies are nil")
 	}
 
-	normalizedEmail := normalizeEmail(email)
-
-	_, err := s.userRepo.GetByEmail(ctx, normalizedEmail)
-	if err == nil {
-		return AuthSession{}, ErrEmailAlreadyExists
-	}
-	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-		return AuthSession{}, err
-	}
-
-	passwordHash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
-	if err != nil {
-		return AuthSession{}, err
-	}
-
-	user := &models.User{
-		UserID:       strings.ToLower(ulid.Make().String()),
-		Email:        normalizedEmail,
-		PasswordHash: string(passwordHash),
-		Name:         strings.TrimSpace(name),
-		Status:       models.EntityStatusActive,
-	}
-	if err := s.userRepo.Create(ctx, user); err != nil {
-		if isUniqueConstraintError(err) {
-			return AuthSession{}, ErrEmailAlreadyExists
-		}
-		return AuthSession{}, err
-	}
-
-	accessToken, refreshToken, err := s.issueSessionTokens(ctx, user.UserID)
-	if err != nil {
-		return AuthSession{}, err
-	}
-
-	return AuthSession{
-		User: AuthUser{
-			ID:        user.UserID,
-			Email:     user.Email,
-			Name:      user.Name,
-			AvatarURL: strings.TrimSpace(user.AvatarURL),
-		},
-		Token:        accessToken,
-		RefreshToken: refreshToken,
-	}, nil
-}
-
-func (s *AuthService) Login(ctx context.Context, email string, password string) (AuthSession, error) {
-	if s == nil || s.userRepo == nil || s.userSessionRepo == nil {
-		return AuthSession{}, errors.New("auth service dependencies are nil")
-	}
-
-	normalizedEmail := normalizeEmail(email)
-	user, err := s.userRepo.GetByEmail(ctx, normalizedEmail)
+	user, err := s.userRepo.GetByEmail(ctx, normalizeEmail(email))
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return AuthSession{}, ErrInvalidCredentials
+			return AuthPrimaryIdentity{}, ErrInvalidCredentials
 		}
-		return AuthSession{}, err
+		return AuthPrimaryIdentity{}, err
 	}
-
 	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)); err != nil {
-		return AuthSession{}, ErrInvalidCredentials
+		return AuthPrimaryIdentity{}, ErrInvalidCredentials
 	}
-	if err := ensureAuthUserActive(user); err != nil {
-		return AuthSession{}, err
-	}
-
-	accessToken, refreshToken, err := s.issueSessionTokens(ctx, user.UserID)
-	if err != nil {
-		return AuthSession{}, err
-	}
-
-	return AuthSession{
-		User: AuthUser{
-			ID:        user.UserID,
-			Email:     user.Email,
-			Name:      user.Name,
-			AvatarURL: strings.TrimSpace(user.AvatarURL),
-		},
-		Token:        accessToken,
-		RefreshToken: refreshToken,
-	}, nil
+	return primaryAuthIdentity(ctx, user)
 }
 
-// LoginByUserID 直接以 user_id 签发登录会话，用于外部 provider 完成身份校验后的会话复用。
-func (s *AuthService) LoginByUserID(ctx context.Context, userID string) (AuthSession, error) {
-	if s == nil || s.userRepo == nil || s.userSessionRepo == nil {
-		return AuthSession{}, errors.New("auth service dependencies are nil")
+// LoginByUserID loads the local identity after an external provider has checked the password.
+func (s *AuthService) LoginByUserID(ctx context.Context, userID string) (AuthPrimaryIdentity, error) {
+	if s == nil || s.userRepo == nil {
+		return AuthPrimaryIdentity{}, errors.New("auth service dependencies are nil")
 	}
-
 	normalizedUserID := strings.TrimSpace(userID)
 	if normalizedUserID == "" {
-		return AuthSession{}, ErrInvalidCredentials
+		return AuthPrimaryIdentity{}, ErrInvalidCredentials
 	}
-
 	user, err := s.userRepo.GetByUserID(ctx, normalizedUserID)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return AuthSession{}, ErrInvalidCredentials
+			return AuthPrimaryIdentity{}, ErrInvalidCredentials
 		}
-		return AuthSession{}, err
+		return AuthPrimaryIdentity{}, err
 	}
+	return primaryAuthIdentity(ctx, user)
+}
+
+func primaryAuthIdentity(ctx context.Context, user *models.User) (AuthPrimaryIdentity, error) {
 	if err := ensureAuthUserActive(user); err != nil {
-		return AuthSession{}, err
+		return AuthPrimaryIdentity{}, err
 	}
-
-	accessToken, refreshToken, err := s.issueSessionTokens(ctx, user.UserID)
-	if err != nil {
-		return AuthSession{}, err
+	if err := ensureAuthUserLoginIPAllowed(ctx, user); err != nil {
+		return AuthPrimaryIdentity{}, err
 	}
-
-	return AuthSession{
-		User: AuthUser{
-			ID:        user.UserID,
-			Email:     user.Email,
-			Name:      user.Name,
-			AvatarURL: strings.TrimSpace(user.AvatarURL),
-		},
-		Token:        accessToken,
-		RefreshToken: refreshToken,
+	return AuthPrimaryIdentity{
+		User:          authUserFromModel(user),
+		passwordProof: hashToken(user.PasswordHash),
+		mfaGeneration: user.MFAGeneration,
 	}, nil
+}
+
+func authUserFromModel(user *models.User) AuthUser {
+	return AuthUser{
+		ID:        user.UserID,
+		Email:     user.Email,
+		Name:      user.Name,
+		AvatarURL: strings.TrimSpace(user.AvatarURL),
+	}
 }
 
 func (s *AuthService) Refresh(ctx context.Context, refreshToken string) (AuthSession, error) {
@@ -227,6 +177,13 @@ func (s *AuthService) Refresh(ctx context.Context, refreshToken string) (AuthSes
 		if errors.Is(err, ErrUserBanned) || errors.Is(err, ErrUserDeleted) {
 			return AuthSession{}, ErrUnauthorized
 		}
+		return AuthSession{}, err
+	}
+	if user.TOTPSecret == "" || token.MFAGeneration != user.MFAGeneration {
+		return AuthSession{}, ErrInvalidRefreshToken
+	}
+
+	if err := ensureAuthUserLoginIPAllowed(ctx, user); err != nil {
 		return AuthSession{}, err
 	}
 
@@ -273,16 +230,14 @@ func (s *AuthService) Me(ctx context.Context, accessToken string) (AuthSession, 
 		}
 		return AuthSession{}, err
 	}
+	if user.TOTPSecret == "" || token.MFAGeneration != user.MFAGeneration {
+		return AuthSession{}, ErrUnauthorized
+	}
 
-	return AuthSession{
-		User: AuthUser{
-			ID:        user.UserID,
-			Email:     user.Email,
-			Name:      user.Name,
-			AvatarURL: strings.TrimSpace(user.AvatarURL),
-		},
-		Token: accessToken,
-	}, nil
+	if err := ensureAuthUserLoginIPAllowed(ctx, user); err != nil {
+		return AuthSession{}, err
+	}
+	return AuthSession{User: authUserFromModel(user), Token: accessToken}, nil
 }
 
 func (s *AuthService) Logout(ctx context.Context, accessToken string) error {
@@ -299,23 +254,23 @@ func (s *AuthService) Logout(ctx context.Context, accessToken string) error {
 	return s.userSessionRepo.Revoke(ctx, token.UserID, token.SessionID, now)
 }
 
-func (s *AuthService) issueSessionTokens(ctx context.Context, userID string) (string, string, error) {
+func (s *AuthService) issueSessionTokens(ctx context.Context, user *models.User) (string, string, error) {
 	now := time.Now().UTC()
 	sessionID := strings.ToLower(ulid.Make().String())
 
-	accessToken, _, err := s.issueToken(userID, sessionID, authTokenTypeAccess, s.accessTokenTTL)
+	accessToken, _, err := s.issueToken(user.UserID, sessionID, user.MFAGeneration, authTokenTypeAccess, s.accessTokenTTL)
 	if err != nil {
 		return "", "", err
 	}
 
-	refreshToken, refreshExpiresAt, err := s.issueToken(userID, sessionID, authTokenTypeRefresh, s.refreshTokenTTL)
+	refreshToken, refreshExpiresAt, err := s.issueToken(user.UserID, sessionID, user.MFAGeneration, authTokenTypeRefresh, s.refreshTokenTTL)
 	if err != nil {
 		return "", "", err
 	}
 
 	session := &models.UserSession{
 		SessionID:        sessionID,
-		UserID:           userID,
+		UserID:           user.UserID,
 		RefreshTokenHash: hashToken(refreshToken),
 		ExpiresAt:        refreshExpiresAt,
 		CreatedAt:        now,
@@ -336,11 +291,11 @@ func (s *AuthService) rotateSessionTokens(
 	now := time.Now().UTC()
 	nextSessionID := strings.ToLower(ulid.Make().String())
 
-	nextAccessToken, _, err := s.issueToken(currentToken.UserID, nextSessionID, authTokenTypeAccess, s.accessTokenTTL)
+	nextAccessToken, _, err := s.issueToken(currentToken.UserID, nextSessionID, currentToken.MFAGeneration, authTokenTypeAccess, s.accessTokenTTL)
 	if err != nil {
 		return "", "", err
 	}
-	nextRefreshToken, nextExpiresAt, err := s.issueToken(currentToken.UserID, nextSessionID, authTokenTypeRefresh, s.refreshTokenTTL)
+	nextRefreshToken, nextExpiresAt, err := s.issueToken(currentToken.UserID, nextSessionID, currentToken.MFAGeneration, authTokenTypeRefresh, s.refreshTokenTTL)
 	if err != nil {
 		return "", "", err
 	}
@@ -363,13 +318,16 @@ func (s *AuthService) rotateSessionTokens(
 func (s *AuthService) issueToken(
 	userID string,
 	sessionID string,
+	mfaGeneration int64,
 	tokenType string,
 	ttl time.Duration,
 ) (string, time.Time, error) {
 	now := time.Now().UTC()
 	expiresAt := now.Add(ttl)
 	claims := authTokenClaims{
-		TokenType: tokenType,
+		TokenType:     tokenType,
+		MFAValidated:  true,
+		MFAGeneration: mfaGeneration,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ID:        sessionID,
 			Subject:   userID,
@@ -398,7 +356,7 @@ func (s *AuthService) parseToken(rawToken string, expectedTokenType string) (par
 	if err != nil {
 		return parsedToken{}, err
 	}
-	if !parsedTokenValue.Valid {
+	if !parsedTokenValue.Valid || !claims.MFAValidated {
 		return parsedToken{}, errors.New("token is invalid")
 	}
 	if claims.Subject == "" {
@@ -411,8 +369,9 @@ func (s *AuthService) parseToken(rawToken string, expectedTokenType string) (par
 		return parsedToken{}, errors.New("token type mismatch")
 	}
 	return parsedToken{
-		UserID:    claims.Subject,
-		SessionID: claims.ID,
+		UserID:        claims.Subject,
+		SessionID:     claims.ID,
+		MFAGeneration: claims.MFAGeneration,
 	}, nil
 }
 

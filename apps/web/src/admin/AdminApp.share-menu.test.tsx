@@ -61,6 +61,7 @@ describe("AdminApp share menu", () => {
           authChallenge={null}
           dataGateway={dataGateway}
           onLogin={vi.fn()}
+          onVerifyMfa={vi.fn()}
           onRefreshCaptcha={vi.fn()}
           onLogout={vi.fn()}
         />

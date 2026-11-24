@@ -147,6 +147,15 @@ func (s *SearchConfigService) Refresh(ctx context.Context) (SearchRuntimeSnapsho
 	return nextSnapshot, nil
 }
 
+// IsEnabled 判断当前配置是否允许展示和使用站内全文检索。
+func (s *SearchConfigService) IsEnabled(ctx context.Context) bool {
+	if s == nil {
+		return false
+	}
+	snapshot, err := s.Refresh(ctx)
+	return err == nil && snapshot.Config.Enabled && snapshot.Config.IsAnalyzerEnabled(snapshot.Config.Analysis.ActiveAnalyzer)
+}
+
 func (s *SearchConfigService) loadConfigRecord(
 	ctx context.Context,
 ) (*models.SystemConfig, error) {

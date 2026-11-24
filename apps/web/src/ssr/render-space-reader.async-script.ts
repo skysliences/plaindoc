@@ -1973,7 +1973,40 @@ export const READER_ASYNC_ENHANCEMENT_SCRIPT = `(() => {
 
   let inflightController = null;
   let inflightSeq = 0;
-  const loadReaderPage = async (targetURL, pushHistory, refreshInPlace = false, refreshTree = false) => {
+  const replaceReaderTree = (nextDocument, revealFolderId) => {
+    const currentTree = document.querySelector(TREE_SCROLL_SELECTOR);
+    const nextTree = nextDocument.querySelector(TREE_SCROLL_SELECTOR);
+    if (!(currentTree instanceof HTMLElement) || !(nextTree instanceof HTMLElement)) {
+      return false;
+    }
+
+    const scrollTop = currentTree.scrollTop;
+    const openFolders = new Set(Array.from(currentTree.querySelectorAll(TREE_DETAILS_SELECTOR + "[open]"), (folder) =>
+      folder.getAttribute("data-reader-node-id")
+    ));
+    currentTree.replaceChildren(...Array.from(nextTree.children, (child) => document.importNode(child, true)));
+
+    let newFolder = null;
+    for (const folder of currentTree.querySelectorAll(TREE_DETAILS_SELECTOR)) {
+      if (!(folder instanceof HTMLDetailsElement)) continue;
+      const nodeId = folder.getAttribute("data-reader-node-id");
+      if (nodeId && openFolders.has(nodeId)) folder.open = true;
+      if (nodeId && nodeId === revealFolderId) newFolder = folder;
+    }
+    const target = newFolder?.firstElementChild ?? currentTree.querySelector(TREE_ROW_ACTIVE_SELECTOR);
+    const summary = target?.closest(TREE_SUMMARY_SELECTOR);
+    let ancestor = summary ? summary.parentElement?.parentElement : target?.parentElement;
+    for (; ancestor && ancestor !== currentTree; ancestor = ancestor.parentElement) {
+      if (ancestor instanceof HTMLDetailsElement) ancestor.open = true;
+    }
+    currentTree.scrollTop = scrollTop;
+    newFolder?.firstElementChild?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+    return true;
+  };
+
+  const loadReaderPage = async (targetURL, {
+    pushHistory = false, refreshInPlace = false, refreshTree = false, directoryOnly = false, revealFolderId
+  } = {}) => {
     if (!(targetURL instanceof URL)) {
       return false;
     }
@@ -1983,7 +2016,7 @@ export const READER_ASYNC_ENHANCEMENT_SCRIPT = `(() => {
     }
 
     const fallback = () => {
-      if (!refreshInPlace) {
+      if (!refreshInPlace && !directoryOnly) {
         window.location.assign(targetURL.toString());
       }
       return false;
@@ -2000,7 +2033,7 @@ export const READER_ASYNC_ENHANCEMENT_SCRIPT = `(() => {
       const response = await fetch(targetURL.toString(), {
         method: "GET",
         credentials: "include",
-        cache: refreshInPlace || refreshTree ? "no-store" : "default",
+        cache: refreshInPlace || refreshTree || directoryOnly ? "no-store" : "default",
         signal: inflightController.signal,
         headers: {
           Accept: "text/html",
@@ -2018,6 +2051,12 @@ export const READER_ASYNC_ENHANCEMENT_SCRIPT = `(() => {
         return false;
       }
       const parsedDocument = new DOMParser().parseFromString(htmlText, "text/html");
+      if (directoryOnly) {
+        return replaceReaderTree(parsedDocument, revealFolderId);
+      }
+      // Imported documents may redirect from their ID to the canonical reader link.
+      const readerURL = response.redirected && response.url ? new URL(response.url) : targetURL;
+      if (readerURL.origin !== window.location.origin) return fallback();
       destroyOnlyOfficeReader();
       if (!replaceArticleShell(parsedDocument)) {
         return fallback();
@@ -2026,16 +2065,11 @@ export const READER_ASYNC_ENHANCEMENT_SCRIPT = `(() => {
         return fallback();
       }
 
-      if (refreshTree) {
-        const currentTree = document.querySelector(TREE_SCROLL_SELECTOR);
-        const nextTree = parsedDocument.querySelector(TREE_SCROLL_SELECTOR);
-        if (!(currentTree instanceof HTMLElement) || !(nextTree instanceof HTMLElement)) {
-          return fallback();
-        }
-        currentTree.replaceChildren(...Array.from(nextTree.children, (child) => document.importNode(child, true)));
+      if (refreshTree && !replaceReaderTree(parsedDocument)) {
+        return fallback();
       }
 
-      syncDocumentHead(parsedDocument, targetURL);
+      syncDocumentHead(parsedDocument, readerURL);
       syncHeadStyleByID(GOOGLE_SANS_CODE_STYLE_ID, parsedDocument);
       syncHeadStyleByID(APP_STYLE_ID, parsedDocument);
       syncHeadStyleByID(BASE_STYLE_ID, parsedDocument);
@@ -2045,7 +2079,7 @@ export const READER_ASYNC_ENHANCEMENT_SCRIPT = `(() => {
       syncReaderStateScript(parsedDocument);
       syncMobileBarTitle(parsedDocument);
       if (!refreshInPlace || refreshTree) {
-        markActiveTreeItemByPathname(targetPathname);
+        markActiveTreeItemByPathname(normalizePathname(readerURL.pathname));
         setMobileSidebarOpen(false);
       }
 
@@ -2053,8 +2087,8 @@ export const READER_ASYNC_ENHANCEMENT_SCRIPT = `(() => {
       if (readerMain instanceof HTMLElement) {
         readerMain.scrollTop = 0;
       }
-      if (pushHistory && targetURL.href !== window.location.href) {
-        window.history.pushState({ reader: true }, "", targetURL.toString());
+      if (pushHistory && readerURL.href !== window.location.href) {
+        window.history.pushState({ reader: true }, "", readerURL.toString());
       }
       refreshOutlineRegistry();
       syncSpreadsheetTabs();
@@ -2168,7 +2202,7 @@ export const READER_ASYNC_ENHANCEMENT_SCRIPT = `(() => {
     const refresh = async () => {
       retry.hidden = true;
       message.textContent = "正在加载最新预览…";
-      const refreshed = await loadReaderPage(editor.readerURL, false, true);
+      const refreshed = await loadReaderPage(editor.readerURL, { refreshInPlace: true });
       if (inlineEditor !== editor) {
         return;
       }
@@ -2197,74 +2231,128 @@ export const READER_ASYNC_ENHANCEMENT_SCRIPT = `(() => {
     const dialog = document.createElement("dialog");
     dialog.className = "reader-create-dialog";
     dialog.setAttribute("aria-labelledby", "reader-create-dialog-title");
+    const header = document.createElement("div");
+    header.className = "reader-create-dialog__header";
     const title = document.createElement("h2");
     title.id = "reader-create-dialog-title";
-    title.textContent = "新建文档";
+    title.textContent = "添加到目录";
+    const closeButton = document.createElement("button");
+    closeButton.type = "button";
+    closeButton.className = "reader-create-dialog__close";
+    closeButton.setAttribute("aria-label", "关闭");
+    closeButton.textContent = "×";
+    header.append(title, closeButton);
+
     const frame = document.createElement("iframe");
     frame.name = "plaindoc-reader-create-document";
-    frame.title = "文档创建表单";
+    frame.title = "目录操作表单";
     frame.referrerPolicy = "strict-origin-when-cross-origin";
     frame.src = url.href;
-    dialog.append(title, frame);
-    createDocumentDialog = { dialog, frame, trigger, spaceId, origin: url.origin, created: false };
+    dialog.append(header, frame);
+    createDocumentDialog = {
+      dialog, frame, trigger, closeButton, spaceId, origin: url.origin,
+      created: false, frameReady: false, sidebarWasOpen: mobileSidebarOpen,
+      readerURL: new URL(window.location.href)
+    };
     // 创建中的关闭判断由表单处理，避免在请求还未返回时销毁表单。
-    dialog.addEventListener("cancel", (event) => event.preventDefault());
+    closeButton.addEventListener("click", requestCloseCreateDocumentDialog);
+    dialog.addEventListener("cancel", (event) => {
+      event.preventDefault();
+      requestCloseCreateDocumentDialog();
+    });
     setMobileSidebarOpen(false);
     document.body.append(dialog);
     dialog.showModal();
   };
 
-  const closeCreateDocumentDialog = () => {
+  const closeCreateDocumentDialog = (restoreSidebar = true) => {
     if (!createDocumentDialog) return;
-    const { dialog, trigger } = createDocumentDialog;
+    const { dialog, trigger, sidebarWasOpen } = createDocumentDialog;
     createDocumentDialog = null;
     dialog.close();
     dialog.remove();
-    trigger.focus();
+    if (restoreSidebar) {
+      setMobileSidebarOpen(sidebarWasOpen);
+      if (trigger.getClientRects().length) {
+        trigger.focus({ preventScroll: true });
+      } else {
+        collectMobileSidebarOpenButtons()[0]?.focus({ preventScroll: true });
+      }
+    }
   };
 
-  const openCreatedDocument = (creation, documentId, identifier) => {
+  const requestCloseCreateDocumentDialog = () => {
+    const creation = createDocumentDialog;
+    if (!creation || creation.closeButton.disabled) return;
+    if (creation.frameReady && creation.frame.isConnected) {
+      creation.frame.contentWindow?.postMessage({ type: "plaindoc:reader-create-close-request" }, creation.origin);
+      return;
+    }
+    closeCreateDocumentDialog();
+  };
+
+  const finishDirectoryAction = (creation, { documentId, identifier, nodeId, imported } = {}) => {
     creation.created = true;
-    const key = typeof identifier === "string" && identifier ? identifier : documentId;
-    const url = new URL("/r/" + encodeURIComponent(creation.spaceId) + "/" + encodeURIComponent(key), window.location.origin);
+    const documentKey = typeof identifier === "string" && identifier ? identifier : documentId;
+    const panel = document.createElement("div");
+    panel.className = "reader-create-dialog__status";
     const status = document.createElement("p");
     status.setAttribute("role", "status");
     const retry = document.createElement("button");
     retry.type = "button";
     retry.className = "reader-article-action";
-    retry.textContent = "重试打开文档";
-    creation.frame.replaceWith(status, retry);
+    retry.textContent = documentId ? "重试打开文档" : "重试更新目录";
+    panel.append(status, retry);
+    creation.frame.replaceWith(panel);
 
-    const open = async () => {
+    const refresh = async () => {
       retry.hidden = true;
-      status.textContent = "正在打开新文档…";
-      if (!(await loadReaderPage(url, true, true, true))) {
-        status.textContent = "文档已创建，暂时无法打开。";
+      creation.closeButton.disabled = true;
+      status.textContent = documentId ? "正在打开新文档…" : "正在更新目录…";
+      const refreshed = documentId
+        ? await loadReaderPage(new URL("/r/" + encodeURIComponent(creation.spaceId) + "/" + encodeURIComponent(documentKey), creation.readerURL), {
+            pushHistory: true, refreshInPlace: true, refreshTree: true
+          })
+        : await loadReaderPage(creation.readerURL, { directoryOnly: true, revealFolderId: nodeId });
+      if (createDocumentDialog !== creation) return;
+      if (!refreshed) {
+        status.textContent = documentId ? (imported ? "文件已导入，暂时无法打开。" : "文档已创建，暂时无法打开。") :
+          (imported ? "文件夹已导入，暂时无法更新目录。" : "文件夹已创建，暂时无法更新目录。");
+        creation.closeButton.disabled = false;
         retry.hidden = false;
         retry.focus();
         return;
       }
-      closeCreateDocumentDialog();
+      closeCreateDocumentDialog(!documentId);
+      if (!documentId || imported) return;
       const editTrigger = document.querySelector(INLINE_EDIT_TRIGGER_SELECTOR);
       if (editTrigger instanceof HTMLButtonElement) openInlineEditor(editTrigger, true);
     };
 
-    retry.addEventListener("click", () => void open());
-    void open();
+    retry.addEventListener("click", () => void refresh());
+    void refresh();
   };
 
   window.addEventListener("message", (event) => {
     const creation = createDocumentDialog;
     if (creation?.frame.isConnected && event.source === creation.frame.contentWindow && event.origin === creation.origin) {
-      if (event.data?.type === "plaindoc:reader-create-canceled") {
+      if (event.data?.type === "plaindoc:reader-create-resize" && Number.isSafeInteger(event.data.height) && event.data.height > 0) {
+        creation.frameReady = true;
+        creation.dialog.style.setProperty("--reader-create-form-height", event.data.height + "px");
+      } else if (event.data?.type === "plaindoc:reader-create-canceled") {
         closeCreateDocumentDialog();
       } else if (!creation.created && event.data?.type === "plaindoc:reader-document-created" &&
           typeof event.data.documentId === "string" && event.data.documentId) {
-        openCreatedDocument(creation, event.data.documentId, event.data.identifier);
-      } else if (!creation.created && event.data?.type === "plaindoc:reader-folder-imported" &&
-          event.data.spaceId === creation.spaceId) {
-        closeCreateDocumentDialog();
-        void loadReaderPage(new URL(window.location.href), false, false, true);
+        finishDirectoryAction(creation, { documentId: event.data.documentId, identifier: event.data.identifier });
+      } else if (!creation.created && event.data?.spaceId === creation.spaceId) {
+        if (event.data.type === "plaindoc:reader-document-imported" &&
+            typeof event.data.documentId === "string" && event.data.documentId) {
+          finishDirectoryAction(creation, { documentId: event.data.documentId, imported: true });
+        } else if (event.data.type === "plaindoc:reader-folder-created" && typeof event.data.nodeId === "string" && event.data.nodeId) {
+          finishDirectoryAction(creation, { nodeId: event.data.nodeId });
+        } else if (event.data.type === "plaindoc:reader-folder-imported") {
+          finishDirectoryAction(creation, { imported: true });
+        }
       }
       return;
     }
@@ -2383,6 +2471,12 @@ export const READER_ASYNC_ENHANCEMENT_SCRIPT = `(() => {
           event.preventDefault();
           event.stopPropagation();
           setMobileSidebarOpen(true);
+          if (mobileSidebarOpenButton.hasAttribute("data-reader-focus-search")) {
+            const searchInput = document.querySelector("[data-reader-search-input]");
+            if (searchInput instanceof HTMLInputElement) {
+              searchInput.focus();
+            }
+          }
           return;
         }
 
@@ -2467,7 +2561,7 @@ export const READER_ASYNC_ENHANCEMENT_SCRIPT = `(() => {
           }
           closeInlineEditor(false);
           setMobileSidebarOpen(false);
-          void loadReaderPage(targetURL, true);
+          void loadReaderPage(targetURL, { pushHistory: true });
           return;
         }
 
@@ -2511,7 +2605,7 @@ export const READER_ASYNC_ENHANCEMENT_SCRIPT = `(() => {
       }
       closeInlineEditor(false);
       setMobileSidebarOpen(false);
-      void loadReaderPage(targetURL, false);
+      void loadReaderPage(targetURL);
     });
   } catch {
     // no-op: history enhancement should never block rendering.
@@ -2522,7 +2616,7 @@ export const READER_ASYNC_ENHANCEMENT_SCRIPT = `(() => {
       if (!(event instanceof KeyboardEvent)) {
         return;
       }
-      if (event.key !== "Escape" || document.querySelector(UNSUPPORTED_FILE_DIALOG_SELECTOR + "[open]")) {
+      if (event.key !== "Escape" || createDocumentDialog || document.querySelector(UNSUPPORTED_FILE_DIALOG_SELECTOR + "[open]")) {
         return;
       }
       exitSpreadsheetFallbackFullscreen();

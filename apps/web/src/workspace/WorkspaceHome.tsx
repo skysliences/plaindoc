@@ -1,5 +1,5 @@
-import { ChevronRight, FileText, Folder, Plus, Settings2, UserRoundPlus, Users, X } from "lucide-react";
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { ChevronRight, FileQuestionMark, FileText, Folder, Plus, Settings2, UserRoundPlus, Users, X } from "lucide-react";
+import { useEffect, useId, useMemo, useRef, useState, type FormEvent } from "react";
 import { useSearchParams } from "react-router-dom";
 import type {
   ParticipantSpace,
@@ -46,6 +46,78 @@ function flattenDocuments(nodes: TreeNode[], parentPath = ""): { id: string; tit
   });
 }
 
+function WorkspaceSettingsDirectoryRow({ node, editorPath }: { node: TreeNode; editorPath: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const childrenId = useId();
+  const Icon = node.type === "folder" ? Folder : FileText;
+  return (
+    <>
+      <div className="flex items-center gap-2">
+        <Button
+          type="button"
+          variant="ghost"
+          className="h-auto min-h-9 min-w-0 flex-1 justify-start whitespace-normal px-2 py-2 text-left"
+          aria-expanded={expanded}
+          aria-controls={childrenId}
+          onClick={() => setExpanded((open) => !open)}
+        >
+          <ChevronRight size={14} className={`shrink-0 text-slate-500 ${expanded ? "rotate-90" : ""}`} aria-hidden="true" />
+          <Icon size={16} className="shrink-0 text-slate-600" aria-hidden="true" />
+          <span className="min-w-0 break-words">{node.title}</span>
+        </Button>
+        {node.type === "doc" && node.documentId && node.importedFileKind !== "unsupported" && (
+          <Button asChild variant="ghost" size="sm" className="shrink-0 text-xs text-slate-600 no-underline">
+            <a href={`${editorPath}/${encodeURIComponent(node.documentId)}`} aria-label={`编辑 ${node.title}`}>
+              编辑 <ChevronRight size={14} aria-hidden="true" />
+            </a>
+          </Button>
+        )}
+      </div>
+      <div id={childrenId} hidden={!expanded}>
+        {expanded && (node.children.length > 0 ? (
+          <WorkspaceSettingsDocumentTree nodes={node.children} editorPath={editorPath} nested />
+        ) : (
+          <p className="m-0 px-8 py-2 text-xs text-slate-500">文件夹为空</p>
+        ))}
+      </div>
+    </>
+  );
+}
+
+function WorkspaceSettingsDocumentTree({ nodes, editorPath, nested = false }: {
+  nodes: TreeNode[];
+  editorPath: string;
+  nested?: boolean;
+}) {
+  return (
+    <ul className={`m-0 grid list-none gap-1 p-0 ${nested ? "ml-3 border-0 border-l border-solid border-slate-200 pl-2" : "mt-2"}`}>
+      {nodes.map((node) => (
+        <li key={node.id}>
+          {node.type === "folder" || node.children.length > 0 ? (
+            <WorkspaceSettingsDirectoryRow node={node} editorPath={editorPath} />
+          ) : node.documentId && node.importedFileKind !== "unsupported" ? (
+            <Button asChild variant="ghost" className="h-auto min-h-9 w-full justify-between gap-3 px-2 py-2 text-left no-underline">
+              <a href={`${editorPath}/${encodeURIComponent(node.documentId)}`}>
+                <span className="flex min-w-0 items-center gap-2">
+                  <FileText size={16} className="shrink-0 text-slate-500" aria-hidden="true" />
+                  <span className="min-w-0 whitespace-normal break-words">{node.title}</span>
+                </span>
+                <span className="flex shrink-0 items-center gap-1 text-xs text-slate-600">编辑 <ChevronRight size={14} aria-hidden="true" /></span>
+              </a>
+            </Button>
+          ) : (
+            <div className="flex min-h-9 items-center gap-2 px-2 py-2 text-sm text-slate-600">
+              <FileQuestionMark size={16} className="shrink-0" aria-hidden="true" />
+              <span className="min-w-0 flex-1 break-words">{node.title}</span>
+              <span className="shrink-0 text-xs">无法编辑</span>
+            </div>
+          )}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 function WorkspaceSpaceSettings({ space, gateway, onRename }: {
   space: ParticipantSpace;
   gateway: WorkspaceGateway;
@@ -54,7 +126,7 @@ function WorkspaceSpaceSettings({ space, gateway, onRename }: {
   const [name, setName] = useState(space.name);
   const [email, setEmail] = useState("");
   const [role, setRole] = useState<WorkspaceMemberRole>("reader");
-  const [documents, setDocuments] = useState<{ id: string; title: string }[]>([]);
+  const [tree, setTree] = useState<TreeNode[]>([]);
   const [documentId, setDocumentId] = useState("");
   const [members, setMembers] = useState<WorkspaceMember[] | null>(null);
   const [pending, setPending] = useState(false);
@@ -63,11 +135,12 @@ function WorkspaceSpaceSettings({ space, gateway, onRename }: {
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const [memberRevision, setMemberRevision] = useState(0);
+  const permissionDocuments = useMemo(() => flattenDocuments(tree), [tree]);
 
   useEffect(() => {
     let active = true;
     void gateway.getTree(space.id).then(
-      (tree) => { if (active) setDocuments(flattenDocuments(tree)); },
+      (nodes) => { if (active) setTree(nodes); },
       (cause) => { if (active) setDocumentError(formatError(cause)); }
     );
     return () => { active = false; };
@@ -158,19 +231,8 @@ function WorkspaceSpaceSettings({ space, gateway, onRename }: {
             <h3 className={settingsHeading}><FileText size={16} aria-hidden="true" />文档</h3>
             <Button variant="secondary" type="button" onClick={createDocument}><Plus size={16} aria-hidden="true" />新建文档</Button>
           </div>
-          {documents.length > 0 && (
-            <ul className="m-0 mt-2 grid list-none gap-1 p-0">
-              {documents.map((document) => (
-                <li key={document.id}>
-                  <Button asChild variant="ghost" className="h-auto min-h-9 w-full justify-between gap-3 px-2 py-2 text-left no-underline">
-                    <a href={`/editor/${encodeURIComponent(space.id)}/${encodeURIComponent(document.id)}`}>
-                      <span className="min-w-0 whitespace-normal break-words">{document.title}</span>
-                      <span className="flex shrink-0 items-center gap-1 text-xs text-slate-600">编辑 <ChevronRight size={14} aria-hidden="true" /></span>
-                    </a>
-                  </Button>
-                </li>
-              ))}
-            </ul>
+          {tree.length > 0 && (
+            <WorkspaceSettingsDocumentTree nodes={tree} editorPath={`/editor/${encodeURIComponent(space.id)}`} />
           )}
         </div>
 
@@ -201,7 +263,7 @@ function WorkspaceSpaceSettings({ space, gateway, onRename }: {
               setError("");
             }}>
               <option value="">空间成员</option>
-              {documents.map((document) => <option key={document.id} value={document.id}>{document.title}</option>)}
+              {permissionDocuments.map((document) => <option key={document.id} value={document.id}>{document.title}</option>)}
             </select>
           </label>
 

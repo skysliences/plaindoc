@@ -20,17 +20,18 @@ type adminUserHandler struct {
 }
 
 type adminUserResponse struct {
-	UserID       string                `json:"userId"`
-	Email        string                `json:"email"`
-	Name         string                `json:"name"`
-	Role         service.AdminUserRole `json:"role"`
-	CanEditRole  bool                  `json:"canEditRole"`
-	Status       models.EntityStatus   `json:"status"`
-	BannedReason string                `json:"bannedReason"`
-	BannedAt     *time.Time            `json:"bannedAt"`
-	DeletedAt    *time.Time            `json:"deletedAt"`
-	CreatedAt    time.Time             `json:"createdAt"`
-	UpdatedAt    time.Time             `json:"updatedAt"`
+	UserID           string                `json:"userId"`
+	Email            string                `json:"email"`
+	Name             string                `json:"name"`
+	Role             service.AdminUserRole `json:"role"`
+	CanEditRole      bool                  `json:"canEditRole"`
+	Status           models.EntityStatus   `json:"status"`
+	BannedReason     string                `json:"bannedReason"`
+	BannedAt         *time.Time            `json:"bannedAt"`
+	DeletedAt        *time.Time            `json:"deletedAt"`
+	CreatedAt        time.Time             `json:"createdAt"`
+	UpdatedAt        time.Time             `json:"updatedAt"`
+	LoginIPAddresses []string              `json:"loginIpAddresses"`
 }
 
 type adminUserListResponse struct {
@@ -58,6 +59,14 @@ type updateAdminUserStatusRequest struct {
 
 type updateAdminUserRoleRequest struct {
 	Role string `json:"role"`
+}
+
+type adminUserLoginIPAddressesRequest struct {
+	IPAddresses []string `json:"ipAddresses"`
+}
+
+type adminUserLoginIPAddressesResponse struct {
+	LoginIPAddresses []string `json:"loginIpAddresses"`
 }
 
 type sendAdminUserPasswordResetEmailRequest struct{}
@@ -246,6 +255,60 @@ func (h *adminUserHandler) UpdateRole(c *gin.Context) {
 	response.JSON(c, http.StatusOK, mapAdminUserResponse(payload))
 }
 
+// UpdateLoginIPAddresses 设置目标用户的登录 IP。空数组解除限制。
+func (h *adminUserHandler) UpdateLoginIPAddresses(c *gin.Context) {
+	if h == nil || h.adminUserService == nil {
+		response.InternalError(c)
+		return
+	}
+	actorUserID, err := middleware.AdminActorUserID(c)
+	if err != nil {
+		response.AdminUserErrAdminActorMissing.Write(c)
+		return
+	}
+	var req adminUserLoginIPAddressesRequest
+	if err := c.ShouldBindJSON(&req); err != nil || req.IPAddresses == nil {
+		response.AdminUserErrRequestBody.Write(c)
+		return
+	}
+	addresses, err := h.adminUserService.UpdateLoginIPAddresses(c.Request.Context(), service.UpdateAdminUserLoginIPAddressesInput{
+		ActorUserID: actorUserID,
+		RequestID:   response.RequestIDFromContext(c),
+		UserID:      c.Param("userId"),
+		IPAddresses: req.IPAddresses,
+	})
+	if err != nil {
+		setRequestErrmsg(c, err, "更新登录 IP 失败")
+		response.FromError(c, err)
+		return
+	}
+	response.JSON(c, http.StatusOK, adminUserLoginIPAddressesResponse{LoginIPAddresses: addresses})
+}
+
+// ResetMFA 重置目标用户的二次验证绑定。
+func (h *adminUserHandler) ResetMFA(c *gin.Context) {
+	if h == nil || h.adminUserService == nil {
+		response.InternalError(c)
+		return
+	}
+	actorUserID, err := middleware.AdminActorUserID(c)
+	if err != nil {
+		response.AdminUserErrAdminActorMissing.Write(c)
+		return
+	}
+	var req struct{}
+	if err := c.ShouldBindJSON(&req); err != nil && !errors.Is(err, io.EOF) {
+		response.AdminUserErrRequestBody.Write(c)
+		return
+	}
+	if err := h.adminUserService.ResetMFA(c.Request.Context(), actorUserID, c.Param("userId"), response.RequestIDFromContext(c)); err != nil {
+		setRequestErrmsg(c, err, "重置二次验证失败")
+		response.FromError(c, err)
+		return
+	}
+	response.JSON(c, http.StatusOK, struct{}{})
+}
+
 // DeleteUser 软删除后台目标用户。
 func (h *adminUserHandler) DeleteUser(c *gin.Context) {
 	if h == nil || h.adminUserService == nil {
@@ -337,16 +400,17 @@ func parseQueryInt(rawValue string) (int, error) {
 
 func mapAdminUserResponse(value service.AdminUserRecord) adminUserResponse {
 	return adminUserResponse{
-		UserID:       value.UserID,
-		Email:        value.Email,
-		Name:         value.Name,
-		Role:         value.Role,
-		CanEditRole:  value.CanEditRole,
-		Status:       value.Status,
-		BannedReason: value.BannedReason,
-		BannedAt:     value.BannedAt,
-		DeletedAt:    value.DeletedAt,
-		CreatedAt:    value.CreatedAt,
-		UpdatedAt:    value.UpdatedAt,
+		UserID:           value.UserID,
+		Email:            value.Email,
+		Name:             value.Name,
+		Role:             value.Role,
+		CanEditRole:      value.CanEditRole,
+		Status:           value.Status,
+		BannedReason:     value.BannedReason,
+		BannedAt:         value.BannedAt,
+		DeletedAt:        value.DeletedAt,
+		CreatedAt:        value.CreatedAt,
+		UpdatedAt:        value.UpdatedAt,
+		LoginIPAddresses: value.LoginIPAddresses,
 	}
 }

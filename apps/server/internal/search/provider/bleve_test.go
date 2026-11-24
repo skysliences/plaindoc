@@ -17,7 +17,7 @@ func TestBleveProvider_SearchAndPurgeBySpace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open sqlite failed: %v", err)
 	}
-	if err := prepareBleveProviderTestSchema(db); err != nil {
+	if err := prepareVisibilityMatrixTestSchema(db); err != nil {
 		t.Fatalf("prepare schema failed: %v", err)
 	}
 	if err := seedBleveProviderTestData(db); err != nil {
@@ -114,7 +114,7 @@ func TestBleveProvider_SearchEnforcesMinRoleForMemberDocsInSingleSpace(t *testin
 	if err != nil {
 		t.Fatalf("open sqlite failed: %v", err)
 	}
-	if err := prepareBleveProviderTestSchema(db); err != nil {
+	if err := prepareVisibilityMatrixTestSchema(db); err != nil {
 		t.Fatalf("prepare schema failed: %v", err)
 	}
 	if err := seedBleveProviderTestData(db); err != nil {
@@ -225,7 +225,7 @@ func TestBleveProvider_SearchEnforcesMinRoleForMemberDocsAcrossSpaces(t *testing
 	if err != nil {
 		t.Fatalf("open sqlite failed: %v", err)
 	}
-	if err := prepareBleveProviderTestSchema(db); err != nil {
+	if err := prepareVisibilityMatrixTestSchema(db); err != nil {
 		t.Fatalf("prepare schema failed: %v", err)
 	}
 	if err := seedBleveProviderCrossSpaceMinRoleData(db); err != nil {
@@ -319,51 +319,6 @@ func TestBleveProvider_SearchEnforcesMinRoleForMemberDocsAcrossSpaces(t *testing
 	})
 }
 
-func prepareBleveProviderTestSchema(db *gorm.DB) error {
-	if err := db.Exec(`
-CREATE TABLE spaces (
-  space_id TEXT PRIMARY KEY,
-  owner_user_id TEXT,
-  visibility TEXT,
-  status TEXT,
-  deleted_at TEXT NULL,
-  name TEXT
-)`).Error; err != nil {
-		return err
-	}
-	if err := db.Exec(`
-CREATE TABLE nodes (
-  node_id TEXT PRIMARY KEY,
-  space_id TEXT
-)`).Error; err != nil {
-		return err
-	}
-	if err := db.Exec(`
-CREATE TABLE documents (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  document_id TEXT,
-  node_id TEXT,
-  title TEXT,
-  content_md TEXT,
-  visibility TEXT,
-  status TEXT,
-  deleted_at TEXT NULL,
-  updated_at TEXT
-)`).Error; err != nil {
-		return err
-	}
-	if err := db.Exec(`
-CREATE TABLE space_members (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  space_id TEXT,
-  user_id TEXT,
-  role TEXT
-)`).Error; err != nil {
-		return err
-	}
-	return nil
-}
-
 func seedBleveProviderTestData(db *gorm.DB) error {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	if err := db.Exec(`
@@ -385,8 +340,11 @@ INSERT INTO nodes(node_id, space_id) VALUES
 	if err := db.Exec(`
 INSERT INTO documents(document_id, node_id, title, content_md, visibility, status, deleted_at, updated_at) VALUES
   ('doc-1', 'node-1', '检索命中文档', '这是公开文档', 'public', 'active', NULL, ?),
-  ('doc-2', 'node-2', '成员命中文档', '这是成员文档', 'member', 'active', NULL, ?)
-`, now, now).Error; err != nil {
+  ('doc-2', 'node-2', '成员命中文档', '这是成员文档', 'member', 'active', NULL, ?),
+  ('doc-min-role-1', 'node-min-role-1', '成员权限文档1', '单空间 min role 文档 1', 'member', 'active', NULL, ?),
+  ('doc-min-role-2', 'node-min-role-2', '成员权限文档2', '单空间 min role 文档 2', 'member', 'active', NULL, ?),
+  ('doc-min-role-3', 'node-min-role-3', '成员权限文档3', '单空间 min role 文档 3', 'member', 'active', NULL, ?)
+`, now, now, now, now, now).Error; err != nil {
 		return err
 	}
 	if err := db.Exec(`

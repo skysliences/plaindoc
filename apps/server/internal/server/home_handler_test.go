@@ -114,8 +114,8 @@ func TestRouter_Home_AnonymousUsesPublicCacheAndVisibility(t *testing.T) {
 	}
 
 	body := rec.Body.String()
-	if strings.Contains(body, `class="yt-header-search-form"`) {
-		t.Fatalf("expected anonymous homepage hides search form when search is not configured, body=%s", body)
+	if !strings.Contains(body, `class="yt-header-search-form"`) {
+		t.Fatal("expected the anonymous homepage to show search with the default settings")
 	}
 	if !strings.Contains(body, `class="yt-signin-button"`) || !strings.Contains(body, ">登录<") {
 		t.Fatalf("expected anonymous nav has login button, body=%s", body)
@@ -431,6 +431,14 @@ func TestRouter_HomeSearchEnabled_ShowsSearchBoxAndResults(t *testing.T) {
 		Format:     "xlsx",
 		Visibility: "public",
 	})
+	seedHomepageDocument(t, database, homepageSeedDocumentInput{
+		SpaceID:    "01homesearchspace000000000001",
+		NodeID:     "01homesearchdocnode000000000004",
+		DocumentID: "01homesearchdocument00000000004",
+		Title:      "第二个命中文档",
+		Format:     "markdown",
+		Visibility: "public",
+	})
 
 	homeReq := httptest.NewRequest(http.MethodGet, "/", nil)
 	homeRec := serve(homeReq)
@@ -462,6 +470,24 @@ func TestRouter_HomeSearchEnabled_ShowsSearchBoxAndResults(t *testing.T) {
 	}
 	if strings.Contains(searchBody, "/r/01homesearchspace000000000001/01homesearchdocument00000000003") {
 		t.Fatalf("expected homepage search excludes office document, body=%s", searchBody)
+	}
+
+	const firstURL = "/search?page=1&pageSize=1&q=%E5%91%BD%E4%B8%AD"
+	const secondURL = "/search?page=2&pageSize=1&q=%E5%91%BD%E4%B8%AD"
+	firstPage := serve(httptest.NewRequest(http.MethodGet, firstURL, nil))
+	secondPage := serve(httptest.NewRequest(http.MethodGet, secondURL, nil))
+	firstBody, secondBody := firstPage.Body.String(), secondPage.Body.String()
+	if firstPage.Code != http.StatusOK || secondPage.Code != http.StatusOK ||
+		strings.Count(firstBody, `class="yt-search-card-link"`) != 1 || strings.Count(secondBody, `class="yt-search-card-link"`) != 1 {
+		t.Fatalf("expected one search result per page, got statuses %d, %d", firstPage.Code, secondPage.Code)
+	}
+	if !strings.Contains(firstBody, `rel="next" href="`+strings.ReplaceAll(secondURL, "&", "&amp;")+`"`) ||
+		!strings.Contains(secondBody, `rel="prev" href="`+strings.ReplaceAll(firstURL, "&", "&amp;")+`"`) {
+		t.Fatal("expected search navigation to preserve the keyword and page size")
+	}
+	outOfRange := serve(httptest.NewRequest(http.MethodGet, "/search?q=命中&pageSize=1&page=3", nil))
+	if outOfRange.Code != http.StatusFound || outOfRange.Header().Get("Location") != secondURL {
+		t.Fatal("expected an out-of-range request to redirect to the last search page")
 	}
 }
 

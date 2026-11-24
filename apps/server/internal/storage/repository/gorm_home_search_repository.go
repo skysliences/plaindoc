@@ -37,7 +37,7 @@ func (r *gormHomeSearchRepository) ListActiveDocumentMetadataByDocumentIDs(
 	nodeAlias := "n"
 	spaceAlias := "s"
 	rows := make([]homeSearchMetadataRow, 0, len(normalizedDocumentIDs))
-	if err := r.db.WithContext(ctx).
+	query := r.db.WithContext(ctx).
 		Table(tableWithAlias(models.Document{}, documentAlias)).
 		Select(
 			qualifiedColumn(spaceAlias, models.SpaceColumns.SpaceID)+" AS space_id",
@@ -59,11 +59,12 @@ func (r *gormHomeSearchRepository) ListActiveDocumentMetadataByDocumentIDs(
 		).
 		Where(qualifiedColumn(documentAlias, models.DocumentColumns.DocumentID)+" IN ?", normalizedDocumentIDs).
 		Where(qualifiedColumn(documentAlias, models.DocumentColumns.Status)+" = ?", models.EntityStatusActive).
+		Where(qualifiedColumn(documentAlias, models.DocumentColumns.BannedAt)+" IS NULL").
 		Where(qualifiedColumn(documentAlias, models.DocumentColumns.DeletedAt)+" IS NULL").
-		Where(qualifiedColumn(documentAlias, models.DocumentColumns.Format)+" = ?", models.DocumentFormatMarkdown).
 		Where(qualifiedColumn(spaceAlias, models.SpaceColumns.Status)+" = ?", models.EntityStatusActive).
-		Where(qualifiedColumn(spaceAlias, models.SpaceColumns.DeletedAt) + " IS NULL").
-		Find(&rows).Error; err != nil {
+		Where(qualifiedColumn(spaceAlias, models.SpaceColumns.BannedAt) + " IS NULL").
+		Where(qualifiedColumn(spaceAlias, models.SpaceColumns.DeletedAt) + " IS NULL")
+	if err := filterSearchDocumentFormats(query, documentAlias, true).Find(&rows).Error; err != nil {
 		return nil, err
 	}
 

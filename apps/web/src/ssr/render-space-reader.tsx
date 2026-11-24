@@ -14,7 +14,8 @@ import {
   LockOpen,
   Paperclip,
   Plus,
-  Printer
+  Printer,
+  Search
 } from "lucide-react";
 import MarkdownIt from "markdown-it";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -293,7 +294,7 @@ function ReaderTree({ nodes, spaceId, activeDocId, linkBasePath, depth = 0 }: Re
         if (isExpandable) {
           return (
             <li key={node.id} className="reader-tree__item">
-              <details className="reader-tree__details" data-reader-hook="tree-details">
+              <details className="reader-tree__details" data-reader-hook="tree-details" data-reader-node-id={node.id}>
                 <summary className="reader-tree__summary" data-reader-hook="tree-summary">
                   <div
                     className={rowClassName}
@@ -609,6 +610,7 @@ export function renderSpaceReader(payload: ReaderPagePayload): SpaceReaderRender
   const hasReaderOutline = readerOutlineItems.length > 0;
   const documentAttachments = hasDeniedAccess ? [] : (Array.isArray(payload.attachments) ? payload.attachments : []);
   const showSidebarTree = !shareEnabled;
+  const showDocumentSearch = showSidebarTree && payload.searchEnabled === true;
   const spaceLandingPath = shareEnabled ? canonicalPath : `/r/${encodeURIComponent(payload.space.id)}`;
   const homeLink = (
     <a href="/" className="reader-home-link">
@@ -676,6 +678,23 @@ export function renderSpaceReader(payload: ReaderPagePayload): SpaceReaderRender
                     ×
                   </button>
                 </div>
+                {showDocumentSearch ? (
+                  <form className="reader-document-search" action="/search" method="get" role="search" aria-label="全文搜索">
+                    <input
+                      type="search"
+                      name="q"
+                      placeholder="搜索文档全文"
+                      aria-label="全文搜索关键词"
+                      autoComplete="off"
+                      enterKeyHint="search"
+                      data-reader-search-input="1"
+                      required
+                    />
+                    <button type="submit" aria-label="搜索" title="搜索">
+                      <Search size={16} aria-hidden="true" />
+                    </button>
+                  </form>
+                ) : null}
                 <div className="reader-sidebar__header">
                   <div className="reader-sidebar__header-row">
                     <h2 className="reader-sidebar__title">{spaceTitle}</h2>
@@ -685,8 +704,8 @@ export function renderSpaceReader(payload: ReaderPagePayload): SpaceReaderRender
                         className="reader-sidebar__create"
                         data-reader-create-document={payload.createDocumentUrl}
                         aria-haspopup="dialog"
-                        aria-label="新建文档"
-                        title="新建文档"
+                        aria-label="添加到目录"
+                        title="添加到目录"
                       >
                         <Plus size={18} aria-hidden="true" />
                       </button>
@@ -722,6 +741,20 @@ export function renderSpaceReader(payload: ReaderPagePayload): SpaceReaderRender
                 >
                   目录
                 </button>
+                {showDocumentSearch ? (
+                  <button
+                    type="button"
+                    className="reader-home-link reader-mobile-bar__search"
+                    data-reader-hook="mobile-sidebar-open"
+                    data-reader-focus-search="1"
+                    aria-controls="plaindoc-reader-sidebar"
+                    aria-expanded="false"
+                    aria-label="打开全文搜索"
+                    title="打开全文搜索"
+                  >
+                    <Search size={16} aria-hidden="true" />
+                  </button>
+                ) : null}
                 <span className="reader-mobile-bar__title" data-reader-hook="mobile-bar-title" title={articleTitle}>
                   {articleTitle}
                 </span>

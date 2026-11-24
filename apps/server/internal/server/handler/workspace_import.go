@@ -1207,7 +1207,7 @@ func (h *workspaceHandler) convertWorkspaceImportSource(
 		if err != nil {
 			return workspaceImportConversionResult{}, err
 		}
-		markdown, err := convertWorkspaceImportHTMLToMarkdown(ctx, cleanHTML)
+		markdown, err := h.importMarkdownConverter.Convert(ctx, cleanHTML)
 		if err != nil {
 			return workspaceImportConversionResult{}, err
 		}
@@ -1241,7 +1241,7 @@ func (h *workspaceHandler) convertWorkspaceImportSource(
 		if err != nil {
 			return workspaceImportConversionResult{}, err
 		}
-		markdown, err := convertWorkspaceImportHTMLToMarkdown(ctx, renderedHTML)
+		markdown, err := h.importMarkdownConverter.Convert(ctx, renderedHTML)
 		if err != nil {
 			return workspaceImportConversionResult{}, err
 		}
@@ -1275,7 +1275,7 @@ func (h *workspaceHandler) convertWorkspaceImportSource(
 		if err != nil {
 			return workspaceImportConversionResult{}, err
 		}
-		markdown, err := convertWorkspaceImportHTMLToMarkdown(ctx, renderedHTML)
+		markdown, err := h.importMarkdownConverter.Convert(ctx, renderedHTML)
 		if err != nil {
 			return workspaceImportConversionResult{}, err
 		}

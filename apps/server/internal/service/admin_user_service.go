@@ -41,17 +41,18 @@ const (
 
 // AdminUserRecord 管理后台用户信息视图。
 type AdminUserRecord struct {
-	UserID       string
-	Email        string
-	Name         string
-	Role         AdminUserRole
-	CanEditRole  bool
-	Status       models.EntityStatus
-	BannedReason string
-	BannedAt     *time.Time
-	DeletedAt    *time.Time
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
+	UserID           string
+	Email            string
+	Name             string
+	Role             AdminUserRole
+	CanEditRole      bool
+	Status           models.EntityStatus
+	BannedReason     string
+	BannedAt         *time.Time
+	DeletedAt        *time.Time
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
+	LoginIPAddresses []string
 }
 
 // ListAdminUsersInput 定义后台用户列表查询参数。
@@ -641,6 +642,48 @@ func (s *AdminUserService) SendPasswordResetEmail(
 	})
 }
 
+// ResetMFA clears a user's second factor and revokes their existing sessions.
+func (s *AdminUserService) ResetMFA(ctx context.Context, actorUserID, userID, requestID string) (err error) {
+	defer func() { err = errcode.MapAdminUserError(err) }()
+	actorUserID = strings.TrimSpace(actorUserID)
+	if err := s.ensurePlatformAdmin(ctx, actorUserID); err != nil {
+		return err
+	}
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return errcode.ErrAdminUserInvalidUserID
+	}
+	user, err := s.userRepo.GetByUserID(ctx, userID)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return errcode.ErrAdminUserNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if user.Status == models.EntityStatusDeleted || user.DeletedAt != nil {
+		return errcode.ErrAdminUserAlreadyDeleted
+	}
+
+	updated, err := s.userRepo.ResetMFA(ctx, userID, &models.AuditLog{
+		ActorUserID: &actorUserID,
+		Module:      string(AdminAuditModuleUser),
+		Action:      string(AdminAuditActionUpdate),
+		TargetType:  "user",
+		TargetID:    userID,
+		Summary:     "user MFA reset: " + userID,
+		DetailJSON:  `{"operation":"user.reset_mfa"}`,
+		RequestID:   strings.TrimSpace(requestID),
+		CreatedAt:   time.Now().UTC(),
+	})
+	if err != nil {
+		return err
+	}
+	if !updated {
+		return errcode.ErrAdminUserNotFound
+	}
+	return nil
+}
+
 func (s *AdminUserService) ensurePlatformAdmin(ctx context.Context, actorUserID string) error {
 	if s == nil || s.userRepo == nil || s.userSessionRepo == nil || s.adminRoleRepo == nil || s.adminAccessService == nil {
 		return errors.New("admin user service dependencies are nil")
@@ -720,18 +763,23 @@ func mapAdminUserRecord(user *models.User, role AdminUserRole, canEditRole bool)
 	if !models.IsValidEntityStatus(status) {
 		status = models.EntityStatusActive
 	}
+	loginIPAddresses, _ := decodeLoginIPAddresses(user.LoginIPAddressesJSON)
+	if loginIPAddresses == nil {
+		loginIPAddresses = []string{}
+	}
 	return AdminUserRecord{
-		UserID:       user.UserID,
-		Email:        user.Email,
-		Name:         user.Name,
-		Role:         role,
-		CanEditRole:  canEditRole,
-		Status:       status,
-		BannedReason: user.BannedReason,
-		BannedAt:     user.BannedAt,
-		DeletedAt:    user.DeletedAt,
-		CreatedAt:    user.CreatedAt,
-		UpdatedAt:    user.UpdatedAt,
+		UserID:           user.UserID,
+		Email:            user.Email,
+		Name:             user.Name,
+		Role:             role,
+		CanEditRole:      canEditRole,
+		Status:           status,
+		BannedReason:     user.BannedReason,
+		BannedAt:         user.BannedAt,
+		DeletedAt:        user.DeletedAt,
+		CreatedAt:        user.CreatedAt,
+		UpdatedAt:        user.UpdatedAt,
+		LoginIPAddresses: loginIPAddresses,
 	}
 }
 

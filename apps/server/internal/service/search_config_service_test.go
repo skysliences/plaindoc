@@ -105,8 +105,8 @@ func TestSearchConfigService_Resolve_DefaultWhenConfigMissing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve search config failed: %v", err)
 	}
-	if snapshot.Config.ActiveProvider != searchcfg.ProviderBleve {
-		t.Fatalf("expected default active provider %q, got %q", searchcfg.ProviderBleve, snapshot.Config.ActiveProvider)
+	if !snapshot.Config.Enabled || snapshot.Config.ActiveProvider != searchcfg.ProviderDatabase {
+		t.Fatalf("expected search enabled with provider %q, got %+v", searchcfg.ProviderDatabase, snapshot.Config)
 	}
 	if snapshot.ActiveAnalyzer == nil {
 		t.Fatalf("expected active analyzer")

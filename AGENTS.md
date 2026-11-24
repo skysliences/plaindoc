@@ -21,7 +21,7 @@ bugodoc 是一个面向中小团队的文档平台：Go 单体后端 + React 前
 3. 管理后台（用户、空间、文档、主题、系统配置、审计、operation token）。
 4. 阅读页 SSR（Go 调 Node Worker）与首页/分类页 Go 模板 SSR。
 5. 文档分享、文档模板、邮箱找回密码、阅读页 SEO slug、SSR 移动端适配。
-6. ONLYOFFICE 一等文档能力（Word/Excel 编辑、阅读、分享；不进 sitemap/检索）。
+6. ONLYOFFICE 一等文档能力（Word/Excel 编辑、阅读、分享）。Office 文档不进入 sitemap，配置 Bleve 时可检索已成功本地渲染的正文。
 
 仍在推进：
 
@@ -152,6 +152,8 @@ bugodoc 是一个面向中小团队的文档平台：Go 单体后端 + React 前
    - `repository` 做数据访问与事务
 8. 若修改 SSR Worker 相关逻辑，先确认 `apps/web/dist-ssr/worker-entry.js` 存在，避免本地联调误判。
 9. `repository` 层构造 GORM 查询时，优先使用 `models` 结构体或其 `TableName()` 派生表名；复合条件优先拆成多个 `Where(...)`，`EXISTS/NOT EXISTS` 优先使用子查询对象传入，避免硬编码表名和长字符串 `AND` 链接。
+10. 全文检索默认跨空间。返回命中标题和摘要前，检索引擎必须校验数据库中的当前空间和文档权限，索引中的权限字段不作为独立授权依据。
+11. 注册与登录必须完成 TOTP 校验后才能签发会话。IP 白名单只使用可信代理解析出的真实客户端地址，修改白名单需要 operation token 和审计。
 
 ---
 

@@ -2,7 +2,8 @@ import { LoaderCircle } from "lucide-react";
 import type { FormEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ADMIN_BRAND_LOGO_SRC } from "../admin/brand";
-import type { AuthCaptchaChallenge, AuthCaptchaRefreshInput } from "../data-access";
+import type { AuthCaptchaChallenge, AuthCaptchaRefreshInput, AuthLoginInput, AuthMfaChallenge, AuthMfaVerifyInput } from "../data-access";
+import { AuthMfaPanel } from "./AuthMfaPanel";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card";
@@ -15,7 +16,8 @@ interface AdminAuthPanelProps {
   submitting: boolean;
   errorMessage: string | null;
   authChallenge: AuthCaptchaChallenge | null;
-  onLogin: (input: { email: string; password: string; captchaId?: string; captchaAnswer?: string }) => Promise<void>;
+  onLogin: (input: AuthLoginInput) => Promise<AuthMfaChallenge | null>;
+  onVerifyMfa: (input: AuthMfaVerifyInput) => Promise<void>;
   onRefreshCaptcha: (input: AuthCaptchaRefreshInput) => Promise<void>;
 }
 
@@ -26,16 +28,19 @@ export function AdminAuthPanel({
   errorMessage,
   authChallenge,
   onLogin,
+  onVerifyMfa,
   onRefreshCaptcha
 }: AdminAuthPanelProps) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [captchaAnswer, setCaptchaAnswer] = useState("");
   const [refreshingCaptcha, setRefreshingCaptcha] = useState(false);
+  const [mfaChallenge, setMfaChallenge] = useState<AuthMfaChallenge | null>(null);
   const refreshDelayTimerRef = useRef<number | null>(null);
   const refreshCancelledRef = useRef(false);
 
   useEffect(() => {
+    refreshCancelledRef.current = false;
     return () => {
       refreshCancelledRef.current = true;
       if (refreshDelayTimerRef.current !== null) {
@@ -87,13 +92,14 @@ export function AdminAuthPanel({
     if (!canSubmit) {
       return;
     }
-    await onLogin({
+    const challenge = await onLogin({
       email: email.trim(),
       password,
       captchaId: authChallenge?.captchaId,
       captchaAnswer: captchaAnswer.trim()
     });
     setPassword("");
+    setMfaChallenge(challenge);
   }, [authChallenge?.captchaId, canSubmit, captchaAnswer, email, onLogin, password]);
 
   const handleRefreshCaptcha = useCallback(async () => {
@@ -123,6 +129,10 @@ export function AdminAuthPanel({
       }
     }
   }, [authChallenge, canRefreshCaptcha, email, onRefreshCaptcha]);
+
+  if (mfaChallenge) {
+    return <AuthMfaPanel challenge={mfaChallenge} onVerify={onVerifyMfa} onBack={() => setMfaChallenge(null)} />;
+  }
 
   return (
     <div className="admin-auth-page">

@@ -24,9 +24,9 @@ func (p *localAuthLoginProvider) Login(
 	ctx context.Context,
 	identifier string,
 	password string,
-) (AuthSession, error) {
+) (AuthPrimaryIdentity, error) {
 	if p == nil || p.authService == nil {
-		return AuthSession{}, errors.New("local auth login provider dependencies are nil")
+		return AuthPrimaryIdentity{}, errors.New("local auth login provider dependencies are nil")
 	}
 	return p.authService.Login(ctx, identifier, password)
 }

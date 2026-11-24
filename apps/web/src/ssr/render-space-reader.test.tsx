@@ -117,6 +117,15 @@ describe("renderSpaceReader", () => {
     expect(result.html).not.toContain('data-reader-office-editor="1"');
   });
 
+  it.each([false, true])("preserves single Markdown line breaks with sharing enabled = %s", (shareEnabled) => {
+    const payload = createPayload("markdown", { shareEnabled });
+    payload.document.contentMd = "1\n2\n3\n4\n5\n6";
+
+    const reader = new DOMParser().parseFromString(renderSpaceReader(payload).html, "text/html");
+    const paragraph = reader.querySelector("#plaindoc-preview-body > p");
+    expect(paragraph?.innerHTML.split(/<br>\s*/)).toEqual(["1", "2", "3", "4", "5", "6"]);
+  });
+
   it.each(["markdown", "docx"] as const)("keeps %s readable while hiding export actions", (format) => {
     const payload = { ...createPayload(format), exportDenied: true };
     const { html } = renderSpaceReader(payload);
@@ -134,6 +143,32 @@ describe("renderSpaceReader", () => {
     expect(sidebar?.querySelector('.reader-sidebar__documents')).not.toBeNull();
     expect(sidebar?.textContent).not.toContain("本文档使用");
     expect(sidebar?.querySelector('a[href="/"]')?.textContent).toContain("返回首页");
+  });
+
+  it("submits the reader search without limiting it to the current space", () => {
+    const payload = { ...createPayload("markdown"), searchEnabled: true };
+    const { html } = renderSpaceReader(payload);
+    const reader = new DOMParser().parseFromString(html, "text/html");
+    const form = reader.querySelector('[data-reader-hook="sidebar"] form[role="search"]');
+    expect(form?.getAttribute("action")).toBe("/search");
+    expect(form?.getAttribute("method")).toBe("get");
+    expect(form?.hasAttribute("target")).toBe(false);
+    expect(form?.querySelector('input[type="search"][name="q"][required]')?.getAttribute("aria-label")).toBe(
+      "全文搜索关键词"
+    );
+    expect(form?.querySelectorAll("input")).toHaveLength(1);
+    expect(reader.querySelector('[data-reader-hook="mobile-bar"] button[aria-label="打开全文搜索"]')).not.toBeNull();
+  });
+
+  it("hides reader search when disabled and on shared pages", () => {
+    for (const payload of [
+      { ...createPayload("markdown"), searchEnabled: false },
+      { ...createPayload("markdown", { shareEnabled: true }), searchEnabled: true }
+    ]) {
+      const { html } = renderSpaceReader(payload);
+      const reader = new DOMParser().parseFromString(html, "text/html");
+      expect(reader.querySelector('form[action="/search"], button[data-reader-focus-search]')).toBeNull();
+    }
   });
 
   it("shows folder and file icons and keeps unsupported files out of document navigation", () => {
@@ -258,7 +293,7 @@ describe("renderSpaceReader", () => {
     const getCreateButton = (payload: ReaderPagePayload) => {
       const { html } = renderSpaceReader(payload);
       return new DOMParser().parseFromString(html, "text/html")
-        .querySelector('.reader-sidebar button[aria-label="新建文档"]');
+        .querySelector('.reader-sidebar button[aria-label="添加到目录"]');
     };
 
     expect(getCreateButton(createPayload("markdown"))).toBeNull();

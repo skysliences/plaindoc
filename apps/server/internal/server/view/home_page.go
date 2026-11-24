@@ -445,7 +445,9 @@ type HomePageViewData struct {
 	SearchKeyword        string
 	SearchResults        []HomeSearchHitViewData
 	SearchPage           int
-	SearchPageSize       int
+	SearchPageCount      int64
+	SearchPreviousURL    string
+	SearchNextURL        string
 	SearchTotal          int64
 }
 

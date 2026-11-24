@@ -537,8 +537,8 @@ const SEARCH_JIEBA_DICT_SOURCE_OPTIONS: Array<{ value: SearchJiebaDictSource; la
 const SEARCH_DICT_VERSION_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,63}$/;
 
 const SEARCH_TEMPLATE: SearchSystemConfigValue = {
-  enabled: false,
-  activeProvider: "bleve",
+  enabled: true,
+  activeProvider: "database",
   fallbackPolicy: "degrade_to_database",
   analysis: {
     activeAnalyzer: "simple",
