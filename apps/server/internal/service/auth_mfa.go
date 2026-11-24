@@ -84,6 +84,13 @@ func (s *AuthService) BeginRegistration(ctx context.Context, email, password, na
 		return AuthMFAChallenge{}, err
 	}
 
+	taken, err := s.userRepo.IsUserNameTaken(ctx, name)
+	if err != nil {
+		return AuthMFAChallenge{}, err
+	}
+	if taken {
+		return AuthMFAChallenge{}, models.ErrUserNameAlreadyExists
+	}
 	passwordHash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
 		return AuthMFAChallenge{}, err

@@ -47,6 +47,7 @@ var (
 		Code:    CodeInvalidName,
 		Message: "名称不能为空",
 	}
+	AuthErrUserNameAlreadyExists = ErrorTemplate{Status: http.StatusConflict, Code: CodeUserNameAlreadyExists, Message: "用户名已被使用，请换一个"}
 	// AuthErrEmailAlreadyExists 对应场景：email already exists
 	AuthErrEmailAlreadyExists = ErrorTemplate{
 		Status:  http.StatusConflict,

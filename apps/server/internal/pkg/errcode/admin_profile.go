@@ -3,6 +3,7 @@ package errcode
 import (
 	"errors"
 	"github.com/lifei6671/plaindoc/apps/server/internal/server/response"
+	"github.com/lifei6671/plaindoc/apps/server/internal/storage/models"
 	"net/http"
 )
 
@@ -45,6 +46,7 @@ func MapAdminProfileError(err error, targets ...AdminProfileErrorTargets) error 
 
 	return MapAppError(
 		err,
+		AppErrorMapping{Target: models.ErrUserNameAlreadyExists, Status: http.StatusConflict, Code: response.CodeUserNameAlreadyExists, Message: response.AuthErrUserNameAlreadyExists.Message},
 		AppErrorMapping{
 			Target:  resolvedTargets.Forbidden,
 			Status:  http.StatusForbidden,

@@ -31,7 +31,7 @@ func (r *gormUserRepository) Create(ctx context.Context, user *models.User) erro
 			user.Status = models.EntityStatusActive
 		}
 	}
-	return r.db.WithContext(ctx).Create(user).Error
+	return userNameWriteError(r.db.WithContext(ctx).Create(user).Error)
 }
 
 func (r *gormUserRepository) GetByUserID(ctx context.Context, userID string) (*models.User, error) {
@@ -98,6 +98,20 @@ func (r *gormUserRepository) GetByEmail(ctx context.Context, email string) (*mod
 		user.Status = models.EntityStatusActive
 	}
 	return &user, nil
+}
+
+func userNameWriteError(err error) error {
+	if err != nil && strings.Contains(strings.ToLower(err.Error()), "ux_users_login_name") {
+		return models.ErrUserNameAlreadyExists
+	}
+	return err
+}
+
+func (r *gormUserRepository) IsUserNameTaken(ctx context.Context, name string) (bool, error) {
+	var count int64
+	err := r.db.WithContext(ctx).Model(&models.User{}).
+		Where("LOWER(TRIM("+models.UserColumns.Name+")) = LOWER(?)", strings.TrimSpace(name)).Count(&count).Error
+	return count > 0, err
 }
 
 // Two matches are sufficient to distinguish a unique login name from an ambiguous one.
@@ -344,7 +358,7 @@ func (r *gormUserRepository) UpdateProfile(ctx context.Context, params UpdateUse
 		Where(models.UserColumns.UserID+" = ?", userID).
 		Updates(updateValues)
 	if tx.Error != nil {
-		return false, tx.Error
+		return false, userNameWriteError(tx.Error)
 	}
 	return tx.RowsAffected > 0, nil
 }

@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"errors"
+	"github.com/lifei6671/plaindoc/apps/server/internal/storage/models"
 	"net/http"
 	"strings"
 	"time"
@@ -110,6 +111,7 @@ const (
 
 var (
 	authRegisterErrorMappings = []response.ErrorTemplateMapping{
+		{Target: models.ErrUserNameAlreadyExists, Template: response.AuthErrUserNameAlreadyExists},
 		{Target: service.ErrAuthMFAChallengeExpired, Template: response.AuthErrMFAChallengeExpired},
 		{
 			Target:   service.ErrEmailAlreadyExists,
@@ -117,6 +119,7 @@ var (
 		},
 	}
 	authLoginErrorMappings = []response.ErrorTemplateMapping{
+		{Target: models.ErrUserNameAlreadyExists, Template: response.AuthErrUserNameAlreadyExists},
 		{Target: service.ErrAuthMFAChallengeExpired, Template: response.AuthErrMFAChallengeExpired},
 		{Target: service.ErrLoginIPDenied, Template: response.AuthErrLoginIPDenied},
 		{
@@ -141,6 +144,7 @@ var (
 		},
 	}
 	authMFAErrorMappings = []response.ErrorTemplateMapping{
+		{Target: models.ErrUserNameAlreadyExists, Template: response.AuthErrUserNameAlreadyExists},
 		{Target: service.ErrAuthMFAChallengeExpired, Template: response.AuthErrMFAChallengeExpired},
 		{Target: service.ErrAuthMFACodeInvalid, Template: response.AuthErrMFACodeInvalid},
 		{Target: service.ErrAuthRegistrationClosed, Template: response.AuthErrRegistrationDisabled},

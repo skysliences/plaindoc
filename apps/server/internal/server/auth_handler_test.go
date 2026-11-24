@@ -670,21 +670,32 @@ func TestRouter_AuthLoginWithIdentifier(t *testing.T) {
 	}
 }
 
-func TestRouter_DuplicateNicknamesRequireEmail(t *testing.T) {
-	database, serve := setupAuthTestRouter(t)
-	defer database.Close()
-	registerAccessUser(t, serve, "firstname@example.com")
-	registerAccessUser(t, serve, "secondname@example.com")
-	login := func(identifier string) *httptest.ResponseRecorder {
-		body, _ := json.Marshal(map[string]string{"identifier": identifier, "password": "123456"})
-		req := httptest.NewRequest(http.MethodPost, "/api/auth/login", bytes.NewReader(body))
+func TestRouter_RejectsDuplicateUserName(t *testing.T) {
+	db, serve := setupAuthTestRouter(t)
+	defer db.Close()
+
+	register := func(email, name string) *httptest.ResponseRecorder {
+		body, _ := json.Marshal(map[string]string{"email": email, "password": "123456", "name": name})
+		req := httptest.NewRequest(http.MethodPost, "/api/auth/register", bytes.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
 		return serve(req)
 	}
-	if r := login("Test User"); r.Code == http.StatusOK {
-		t.Fatal("ambiguous name accepted")
+	verify := func(challenge testMFAChallenge) *httptest.ResponseRecorder {
+		return serveTestMFAVerification(t, serve, httptest.NewRequest(http.MethodPost, "/", nil), challenge.ChallengeToken, testMFACode(t, challenge.Secret, 0))
 	}
-	readTestMFAChallenge(t, login("firstname@example.com"), "verify")
+	assertTaken := func(result *httptest.ResponseRecorder) {
+		t.Helper()
+		if decodeJSONResultCode(t, result.Body.Bytes()) != response.ResolveErrorCode(response.CodeUserNameAlreadyExists) {
+			t.Fatalf("expected username conflict, HTTP %d", result.Code)
+		}
+	}
+	first := readTestMFAChallenge(t, register("first@example.com", "运维 QA"), "setup")
+	second := readTestMFAChallenge(t, register("second@example.com", "  运维 qa "), "setup")
+	if result := verify(first); result.Code != http.StatusOK {
+		t.Fatalf("first registration HTTP %d", result.Code)
+	}
+	assertTaken(verify(second))
+	assertTaken(register("third@example.com", "运维 Qa"))
 }
 
 func TestRouter_AuthOptions(t *testing.T) {

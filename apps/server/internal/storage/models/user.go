@@ -1,6 +1,11 @@
 package models
 
-import "time"
+import (
+	"errors"
+	"time"
+)
+
+var ErrUserNameAlreadyExists = errors.New("username already exists")
 
 // User 对应 users 表。
 type User struct {

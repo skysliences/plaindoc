@@ -608,7 +608,7 @@ func registerAccessUser(
 ) (string, string, string) {
 	t.Helper()
 
-	body := []byte(`{"email":"` + email + `","password":"123456","name":"Test User"}`)
+	body := []byte(`{"email":"` + email + `","password":"123456","name":"Test User ` + email + `"}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/auth/register", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rec, _ := completeTestMFASetup(t, serve, req)

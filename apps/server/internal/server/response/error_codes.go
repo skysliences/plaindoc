@@ -88,6 +88,7 @@ const (
 	CodeDocumentShareNotFound  = "DOCUMENT_SHARE_NOT_FOUND"
 
 	// 4000 段：冲突与并发状态。
+	CodeUserNameAlreadyExists       = "USERNAME_ALREADY_EXISTS"
 	CodeEmailAlreadyExists          = "EMAIL_ALREADY_EXISTS"
 	CodeConfigVersionConflict       = "CONFIG_VERSION_CONFLICT"
 	CodeThemeAlreadyExists          = "THEME_ALREADY_EXISTS"
@@ -216,6 +217,7 @@ var errorCodeRegistry = map[string]int{
 	CodeDocumentShareNotFound:  3015,
 
 	// 4000 段：冲突与并发状态。
+	CodeUserNameAlreadyExists:       4014,
 	CodeEmailAlreadyExists:          4001,
 	CodeConfigVersionConflict:       4002,
 	CodeThemeAlreadyExists:          4003,
