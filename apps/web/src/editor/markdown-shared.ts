@@ -2,6 +2,7 @@ import type { Components } from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import rehypeRaw from "rehype-raw";
 import rehypeSanitize from "rehype-sanitize";
+import type { Root } from "mdast";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import type { MermaidRenderResult } from "./mermaid-shared";
@@ -61,6 +62,19 @@ function remarkParagraphLineBreaks() {
   return (tree: MarkdownNode) => preserveLineBreaks(tree);
 }
 
+// Preserve explicit spacing between top-level prose blocks in the editor and reader.
+function remarkBlockSpacing() {
+  return (tree: Root) => {
+    tree.children.forEach((node, index) => {
+      const previousEnd = tree.children[index - 1]?.position?.end.line;
+      if (!previousEnd || !node.position || node.position.start.line <= previousEnd + 1) return;
+      if (node.type !== "heading" && node.type !== "paragraph" && node.type !== "list") return;
+      const data = node.data ??= {};
+      (data.hProperties ??= {})["data-markdown-gap"] = node.type;
+    });
+  };
+}
+
 // createSharedRemarkPlugins 统一产出 markdown -> mdast 阶段插件链路。
 export function createSharedRemarkPlugins(
   linkRenderMode: PreviewLinkRenderMode,
@@ -77,7 +91,8 @@ export function createSharedRemarkPlugins(
     remarkMath,
     remarkStyledSpanContainerPlugin,
     referenceFootnotePlugin,
-    remarkParagraphLineBreaks
+    remarkParagraphLineBreaks,
+    remarkBlockSpacing
   ];
   return includeBlockAnchors ? [...plugins, remarkBlockAnchorPlugin] : plugins;
 }

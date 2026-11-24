@@ -16,6 +16,7 @@ import {
   Italic,
   List,
   ListChecks,
+  ListCollapse,
   ListOrdered,
   Link2,
   LoaderCircle,
@@ -34,6 +35,7 @@ import {
 } from "lucide-react";
 import createDOMPurify from "dompurify";
 import MarkdownIt from "markdown-it";
+import { formatMarkdownSpacing } from "./editor/markdown-spacing";
 import TurndownService from "turndown";
 import { gfm as turndownGfmPlugin } from "turndown-plugin-gfm";
 // KaTeX mhchem 扩展：支持 `\\ce{}` 化学公式语法。
@@ -3826,6 +3828,16 @@ export default function App() {
                 </EditorToolbarButton>
                 <EditorToolbarButton label="插入表格" onClick={() => runEditorToolbarCommand(insertTableSyntax)}>
                   <Table2 size={15} />
+                </EditorToolbarButton>
+              </div>
+              <div className="editor-toolbar__group editor-toolbar__group--plain">
+                <EditorToolbarButton
+                  label="一键排版"
+                  className="editor-toolbar__button--with-label"
+                  onClick={() => runEditorToolbarCommand(formatMarkdownSpacing)}
+                >
+                  <ListCollapse size={15} aria-hidden="true" />
+                  <span className="editor-toolbar__button-label">一键排版</span>
                 </EditorToolbarButton>
               </div>
               {canToggleInlinePreview && (

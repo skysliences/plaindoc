@@ -2620,6 +2620,15 @@ input[type="reset"]:not(:disabled) {
 }
 
 /* 引用式脚注区块：文末展示 `[n]: url "title"`，统一关闭段首缩进。 */
+#plaindoc-preview-body > [data-markdown-gap="heading"] {
+  margin-top: max(30px, 1.6em);
+}
+
+#plaindoc-preview-body > [data-markdown-gap="paragraph"],
+#plaindoc-preview-body > [data-markdown-gap="list"] {
+  margin-top: max(var(--pd-preview-paragraph-margin-top, 0px), 0.85em);
+}
+
 #plaindoc-preview-body .reference-footnote-title,
 #plaindoc-preview-body .reference-footnote-line {
   text-indent: 0;
