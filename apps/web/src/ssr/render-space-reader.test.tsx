@@ -75,6 +75,18 @@ describe("renderSpaceReader", () => {
     payload.createDocumentUrl = "/editor/space-reader-test?create=document";
     expect(Array.from(buttons(), button => button.getAttribute("data-reader-delete-file"))).toEqual(["legacy"]);
   });
+  it("shows folder delete actions only on writable folders, independently from their expand control", () => {
+    const payload = createPayload("markdown");
+    const folder = { id: "folder", type: "folder" as const, title: "文件夹", sort: 0, children: [] };
+    payload.tree = [{ ...folder, id: "parent", children: [folder] }, { ...folder, id: "protected", deleteRestricted: true }];
+    const folders = () => Array.from(new DOMParser().parseFromString(renderSpaceReader(payload).html, "text/html")
+      .querySelectorAll<HTMLButtonElement>("button[data-reader-delete-folder]"));
+    expect(folders()).toHaveLength(0);
+    payload.createDocumentUrl = "/editor/space-reader-test?create=document";
+    expect(folders().map(button => button.dataset.readerDeleteFolder)).toEqual(["parent", "folder"]);
+    expect(folders().every(button => button.closest("summary") === null)).toBe(true);
+  });
+
   it("renders folders without document actions when a space has no readable document", () => {
     const payload = createPayload("markdown");
     payload.document = {

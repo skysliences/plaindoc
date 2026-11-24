@@ -50,7 +50,10 @@ func TestRouter_WorkspaceCollaboration(t *testing.T) {
 		rec := request(http.MethodPost, spacePath+"/nodes", ownerToken, `{"type":"doc","title":"`+title+`"}`, http.StatusOK)
 		return decodeJSONResultData[struct{ DocID string }](t, rec.Body.Bytes()).DocID
 	}
-	protectedDoc := createDocument("权限测试文档")
+	folder := request(http.MethodPost, spacePath+"/nodes", ownerToken, `{"type":"folder","title":"权限测试目录"}`, http.StatusOK)
+	folderID := decodeJSONResultData[struct{ NodeID string }](t, folder.Body.Bytes()).NodeID
+	protected := request(http.MethodPost, spacePath+"/nodes", ownerToken, `{"type":"doc","title":"权限测试文档","parentId":"`+folderID+`"}`, http.StatusOK)
+	protectedDoc := decodeJSONResultData[struct{ DocID string }](t, protected.Body.Bytes()).DocID
 	otherDoc := createDocument("其他文档")
 	docPath := "/api/docs/" + protectedDoc
 	memberPath := spacePath + "/members"
@@ -131,6 +134,7 @@ func TestRouter_WorkspaceCollaboration(t *testing.T) {
 	request(http.MethodPut, permissionPath, ownerToken, `{"access":"denied"}`, http.StatusOK)
 	request(http.MethodPut, docPath+"/theme", memberToken, `{"themeId":"default"}`, http.StatusForbidden)
 	request(http.MethodDelete, "/api/nodes/"+protectedDoc, memberToken, "", http.StatusForbidden)
+	request(http.MethodDelete, "/api/nodes/"+folderID, memberToken, "", http.StatusForbidden)
 	request(http.MethodDelete, "/api/nodes/"+protectedDoc+"?leafOnly=true", memberToken, "", http.StatusForbidden)
 	disposable := createDocument("临时删除验证")
 	request(http.MethodDelete, "/api/nodes/"+disposable+"?leafOnly=true", ownerToken, "", http.StatusOK)

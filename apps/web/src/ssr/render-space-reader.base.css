@@ -326,6 +326,21 @@ body:has(.reader-main[data-reader-editing="1"]) .reader-sidebar__create {
   min-width: 0;
 }
 
+.reader-tree__folder-actions {
+  position: relative;
+}
+
+.reader-tree__folder-actions > .reader-tree__delete {
+  position: absolute;
+  top: 2px;
+  right: 0;
+  z-index: 1;
+}
+
+.reader-tree__folder-actions > details > summary {
+  margin-right: 32px;
+}
+
 .reader-tree__delete {
   display: grid;
   place-items: center;

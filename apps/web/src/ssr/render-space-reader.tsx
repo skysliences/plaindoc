@@ -70,7 +70,7 @@ interface ReaderTreeProps {
   nodes: ReaderTreeNode[];
   spaceId: string;
   activeDocId: string;
-  allowFileDeletion: boolean;
+  allowTreeDeletion: boolean;
   linkBasePath: string;
   depth?: number;
 }
@@ -216,7 +216,7 @@ function renderVisibilityMarker(visibilityInput: unknown) {
   );
 }
 
-function ReaderTree({ nodes, spaceId, activeDocId, linkBasePath, allowFileDeletion, depth = 0 }: ReaderTreeProps) {
+function ReaderTree({ nodes, spaceId, activeDocId, linkBasePath, allowTreeDeletion, depth = 0 }: ReaderTreeProps) {
   if (!nodes.length) {
     return <p className="reader-tree__label reader-tree__label--folder">暂无目录</p>;
   }
@@ -293,9 +293,27 @@ function ReaderTree({ nodes, spaceId, activeDocId, linkBasePath, allowFileDeleti
           </>
         );
 
+        const deletable = allowTreeDeletion && !node.deleteRestricted && (isFolderNode || !hasChildren);
+        const deleteLabel = `删除${isFolderNode ? "文件夹" : "文件"}：${title}`;
+        const deleteButton = deletable ? (
+          <button
+            type="button"
+            className="reader-tree__delete"
+            data-reader-delete-folder={isFolderNode ? node.id : undefined}
+            data-reader-delete-file={isFolderNode ? undefined : node.id}
+            data-file-title={title}
+            data-space-path={linkBasePath}
+            aria-label={deleteLabel}
+            title={deleteLabel}
+          >
+            <Trash2 size={15} aria-hidden="true" />
+          </button>
+        ) : null;
+
         if (isExpandable) {
           return (
-            <li key={node.id} className="reader-tree__item">
+            <li key={node.id} className={deletable ? "reader-tree__item reader-tree__folder-actions" : "reader-tree__item"}>
+              {deleteButton}
               <details className="reader-tree__details" data-reader-hook="tree-details" data-reader-node-id={node.id}>
                 <summary className="reader-tree__summary" data-reader-hook="tree-summary">
                   <div
@@ -309,7 +327,7 @@ function ReaderTree({ nodes, spaceId, activeDocId, linkBasePath, allowFileDeleti
                 </summary>
                 {hasChildren ? (
                   <ReaderTree
-                    allowFileDeletion={allowFileDeletion}
+                    allowTreeDeletion={allowTreeDeletion}
                     nodes={node.children}
                     spaceId={spaceId}
                     activeDocId={activeDocId}
@@ -322,7 +340,6 @@ function ReaderTree({ nodes, spaceId, activeDocId, linkBasePath, allowFileDeleti
           );
         }
 
-        const deletable = allowFileDeletion && node.type === "doc" && !node.deleteRestricted;
         return (
           <li key={node.id} className={deletable ? "reader-tree__item reader-tree__file-actions" : "reader-tree__item"}>
             {isDocumentNode ? (
@@ -354,19 +371,7 @@ function ReaderTree({ nodes, spaceId, activeDocId, linkBasePath, allowFileDeleti
                 {rowContent}
               </div>
             )}
-            {deletable ? (
-              <button
-                type="button"
-                className="reader-tree__delete"
-                data-reader-delete-file={node.id}
-                data-file-title={title}
-                data-space-path={linkBasePath}
-                aria-label={`删除文件：${title}`}
-                title={`删除文件：${title}`}
-              >
-                <Trash2 size={15} aria-hidden="true" />
-              </button>
-            ) : null}
+            {deleteButton}
           </li>
         );
       })}
@@ -628,7 +633,7 @@ export function renderSpaceReader(payload: ReaderPagePayload): SpaceReaderRender
   const hasReaderOutline = readerOutlineItems.length > 0;
   const documentAttachments = hasDeniedAccess ? [] : (Array.isArray(payload.attachments) ? payload.attachments : []);
   const showSidebarTree = !shareEnabled;
-  const allowFileDeletion = showSidebarTree && !hasDeniedAccess && Boolean(payload.createDocumentUrl);
+  const allowTreeDeletion = showSidebarTree && !hasDeniedAccess && Boolean(payload.createDocumentUrl);
   const showDocumentSearch = showSidebarTree && payload.searchEnabled === true;
   const spaceLandingPath = shareEnabled ? canonicalPath : `/r/${encodeURIComponent(payload.space.id)}`;
   const homeLink = (
@@ -733,7 +738,7 @@ export function renderSpaceReader(payload: ReaderPagePayload): SpaceReaderRender
                 </div>
                 <div className="reader-sidebar__tree-scroll">
                   <ReaderTree
-                    allowFileDeletion={allowFileDeletion}
+                    allowTreeDeletion={allowTreeDeletion}
                     nodes={payload.tree}
                     spaceId={payload.space.id}
                     activeDocId={payload.activeDocId || payload.document.id}
@@ -1108,7 +1113,7 @@ export function renderSpaceReader(payload: ReaderPagePayload): SpaceReaderRender
           </>
         ) : null}
         <ReaderImageViewerShell />
-        {allowFileDeletion ? <script type="module" src="/web-assets/reader-file-actions.js" /> : null}
+        {allowTreeDeletion ? <script type="module" src="/web-assets/reader-file-actions.js?v=2" /> : null}
         <script src="/assets/document-copy.js" defer />
         <script
           id="plaindoc-reader-state"

@@ -77,14 +77,14 @@ func (s *ReaderPageService) ResolveLandingDocumentID(
 		return "", err
 	}
 
-	candidateRows, err := s.loadVisibleTreeRows(ctx, normalizedSpaceID)
+	candidateRows, err := s.readerPageRepo.ListTreeNodesBySpaceID(ctx, normalizedSpaceID)
 	if err != nil {
 		return "", err
 	}
 
 	hasDocumentAccessDenied := false
 	hasLoginRequired := false
-	for _, row := range candidateRows {
+	for _, row := range visibleReaderTreeRows(candidateRows) {
 		documentID := normalizeReaderOptionalString(row.DocumentID)
 		if documentID == nil || row.ImportedFileKind == models.ImportedFileKindUnsupported {
 			continue
@@ -338,17 +338,28 @@ func (s *ReaderPageService) loadDocumentRow(
 	return *row, nil
 }
 
-func (s *ReaderPageService) loadVisibleTreeRows(
-	ctx context.Context,
-	spaceID string,
-) ([]repository.ReaderPageTreeNodeRecord, error) {
-	if s == nil || s.readerPageRepo == nil {
-		return nil, errors.New("reader page repository is nil")
+// A folder deletion includes every descendant, even documents omitted from the reader tree.
+func readerDeleteRestrictions(rows []repository.ReaderPageTreeNodeRecord, permissions map[string]models.DocumentPermission) map[string]bool {
+	if len(permissions) == 0 {
+		return nil
 	}
-	rows, err := s.readerPageRepo.ListTreeNodesBySpaceID(ctx, spaceID)
-	if err != nil {
-		return nil, err
+	parents := make(map[string]string, len(rows))
+	for _, row := range rows {
+		parents[row.NodeID] = normalizeReaderString(row.ParentNodeID)
 	}
+	restricted := make(map[string]bool)
+	for _, row := range rows {
+		p := permissions[normalizeReaderString(row.DocumentID)]
+		if p.AccessDenied || p.Role == models.RoleReader {
+			for id := row.NodeID; id != "" && !restricted[id]; id = parents[id] {
+				restricted[id] = true
+			}
+		}
+	}
+	return restricted
+}
+
+func visibleReaderTreeRows(rows []repository.ReaderPageTreeNodeRecord) []repository.ReaderPageTreeNodeRecord {
 	paths := make([]models.WorkspaceNodePathEntry, 0, len(rows))
 	for _, row := range rows {
 		paths = append(paths, models.WorkspaceNodePathEntry{ID: row.NodeID, ParentID: row.ParentNodeID, Title: row.Title})
@@ -360,14 +371,14 @@ func (s *ReaderPageService) loadVisibleTreeRows(
 			visibleRows = append(visibleRows, row)
 		}
 	}
-	return visibleRows, nil
+	return visibleRows
 }
 
 func (s *ReaderPageService) loadTree(
 	ctx context.Context,
 	spaceID, viewerUserID string, originalFileScope *models.Space,
 ) ([]ReaderTreeNodeViewModel, error) {
-	rows, err := s.loadVisibleTreeRows(ctx, spaceID)
+	rows, err := s.readerPageRepo.ListTreeNodesBySpaceID(ctx, spaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -381,6 +392,8 @@ func (s *ReaderPageService) loadTree(
 		return nil, err
 	}
 
+	restricted := readerDeleteRestrictions(rows, permissions)
+	rows = visibleReaderTreeRows(rows)
 	treeNodes := make(map[string]*readerTreeNode, len(rows))
 	originalFiles := make(map[string]models.Visibility)
 	for _, row := range rows {
@@ -402,13 +415,8 @@ func (s *ReaderPageService) loadTree(
 			}
 			documentVisibility, documentFormat, readerSlug, documentPath = nil, nil, nil, nil
 		}
-		deleteRestricted := false
-		if documentID != nil {
-			permission := permissions[*documentID]
-			deleteRestricted = permission.AccessDenied || permission.Role == models.RoleReader
-		}
 		treeNodes[nodeID] = &readerTreeNode{
-			DeleteRestricted: deleteRestricted,
+			DeleteRestricted: restricted[nodeID],
 			ID:               nodeID,
 			DocumentID:       documentID,
 			ReaderSlug:       readerSlug,
