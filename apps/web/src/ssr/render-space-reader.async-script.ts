@@ -517,8 +517,9 @@ export const READER_ASYNC_ENHANCEMENT_SCRIPT = `(() => {
   };
 
   const isRecord = (value) => value !== null && typeof value === "object";
-  const isOfficeDocumentFormat = (value) => value === "docx" || value === "xlsx";
-  const resolveOfficeDocumentLabel = (value) => (value === "xlsx" ? "Excel 文档" : "Word 文档");
+  const isOfficeDocumentFormat = (value) => value === "docx" || value === "xlsx" || value === "pdf";
+  const resolveOfficeDocumentLabel = (value) =>
+    value === "xlsx" ? "Excel 文档" : value === "pdf" ? "PDF 文档" : "Word 文档";
 
   const cloneOnlyOfficeConfigPayload = (input) => {
     if (typeof structuredClone === "function") {

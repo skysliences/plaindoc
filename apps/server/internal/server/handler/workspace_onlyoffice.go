@@ -683,6 +683,9 @@ func onlyOfficeDocumentType(format models.DocumentFormat) string {
 	switch models.NormalizeDocumentFormat(format) {
 	case models.DocumentFormatXLSX:
 		return "spreadsheet"
+	case models.DocumentFormatPDF:
+		// ONLYOFFICE Docs 8+ 用 pdf 文档类型打开 PDF（可批注、可编辑）。
+		return "pdf"
 	default:
 		return "text"
 	}
@@ -696,6 +699,8 @@ func resolveOnlyOfficeSourceMimeType(format models.DocumentFormat, storedMimeTyp
 	switch models.NormalizeDocumentFormat(format) {
 	case models.DocumentFormatXLSX:
 		return officeDocumentMIMEXLSX
+	case models.DocumentFormatPDF:
+		return officeDocumentMIMEPDF
 	default:
 		return officeDocumentMIMEDOCX
 	}

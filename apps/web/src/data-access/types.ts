@@ -1,7 +1,7 @@
 export type Role = "owner" | "collaborator" | "reader";
 export type NodeType = "folder" | "doc";
 export type ImportedFileKind = "text" | "image" | "unsupported";
-export type DocumentFormat = "markdown" | "docx" | "xlsx";
+export type DocumentFormat = "markdown" | "docx" | "xlsx" | "pdf";
 export type AdminRole = "platform_admin" | "space_admin";
 export type EntityStatus = "active" | "banned" | "deleted";
 export type Visibility = "public" | "authenticated" | "member";
@@ -147,7 +147,7 @@ export interface Document {
   visibility?: Visibility;
 }
 
-export type DocumentRevisionFormat = "markdown" | "docx" | "xlsx";
+export type DocumentRevisionFormat = "markdown" | "docx" | "xlsx" | "pdf";
 
 export interface DocumentRevisionEditorUser {
   userId: string;

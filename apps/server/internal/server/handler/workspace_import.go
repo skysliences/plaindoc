@@ -54,6 +54,7 @@ const (
 	importDetectedTypeHTML              = "html"
 	importDetectedTypeDOCX              = "docx"
 	importDetectedTypeXLSX              = "xlsx"
+	importDetectedTypePDF               = "pdf"
 	importDetectedTypeZIP               = "zip"
 	importDetectedTypeDirectory         = "directory"
 	importDetectedTypeImage             = "image"
@@ -783,6 +784,8 @@ func detectWorkspaceImportType(filePath string) string {
 		return importDetectedTypeDOCX
 	case "xlsx":
 		return importDetectedTypeXLSX
+	case "pdf":
+		return importDetectedTypePDF
 	case "zip":
 		return importDetectedTypeZIP
 	case "png", "jpg", "jpeg", "gif", "webp", "bmp", "svg":
@@ -1343,7 +1346,7 @@ func (h *workspaceHandler) processWorkspaceImportSource(
 			runtimeState.createdReadmeNodeByDir[normalizeWorkspaceImportDirPath(path.Dir(source.SourcePath))] = strings.TrimSpace(*createdNodeID)
 		}
 		return createdNodeID, createdDocID, createErr
-	case models.DocumentFormatDOCX, models.DocumentFormatXLSX:
+	case models.DocumentFormatDOCX, models.DocumentFormatXLSX, models.DocumentFormatPDF:
 		createdNodeID, createdDocID, createErr := h.createWorkspaceImportedOfficeDocument(ctx, runtimeState, parentNodeID, conversion, source.SourcePath)
 		if createErr == nil && createdNodeID != nil && isWorkspaceImportReadmeSourcePath(source.SourcePath) {
 			runtimeState.createdReadmeNodeByDir[normalizeWorkspaceImportDirPath(path.Dir(source.SourcePath))] = strings.TrimSpace(*createdNodeID)
@@ -1469,6 +1472,22 @@ func (h *workspaceHandler) convertWorkspaceImportSource(
 			Title:        title,
 			ContentMD:    markdown,
 			DetectedType: detectedType,
+		}, nil
+	case importDetectedTypePDF:
+		// PDF 走 ONLYOFFICE 的 pdf 文档类型（可阅读/批注/编辑）。没有 ONLYOFFICE 时无法渲染。
+		if !workspaceImportPDFReadable(source.Content) {
+			return workspaceImportConversionResult{}, errWorkspaceImportUnsupportedType
+		}
+		if !runtimeState.onlyOfficeEnabled {
+			return workspaceImportConversionResult{}, errWorkspaceImportUnsupportedType
+		}
+		return workspaceImportConversionResult{
+			Format:         models.DocumentFormatPDF,
+			Title:          title,
+			SourceContent:  bytes.Clone(source.Content),
+			SourceFileName: path.Base(source.SourcePath),
+			SourceMimeType: officeDocumentMIMEPDF,
+			DetectedType:   importDetectedTypePDF,
 		}, nil
 	default:
 		return workspaceImportConversionResult{}, errWorkspaceImportUnsupportedType

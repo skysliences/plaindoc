@@ -21,6 +21,7 @@ import (
 const (
 	officeDocumentMIMEDOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 	officeDocumentMIMEXLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+	officeDocumentMIMEPDF  = "application/pdf"
 )
 
 var errWorkspaceDocumentFormatInvalid = errors.New("workspace document format invalid")
@@ -150,6 +151,10 @@ func resolveCreateNodeDocumentFormat(rawFormat *models.DocumentFormat) (models.D
 	if !models.IsValidDocumentFormat(normalized) {
 		return "", errWorkspaceDocumentFormatInvalid
 	}
+	// PDF 只能通过导入产生，不支持在空间内新建空白 PDF。
+	if normalized == models.DocumentFormatPDF {
+		return "", errWorkspaceDocumentFormatInvalid
+	}
 	return normalized, nil
 }
 
@@ -175,6 +180,9 @@ func loadBuiltinOfficeTemplate(format models.DocumentFormat) (builtinOfficeTempl
 			mimeType: officeDocumentMIMEXLSX,
 			content:  content,
 		}, nil
+	case models.DocumentFormatPDF:
+		// PDF 只能通过导入产生，没有空白模板。
+		return builtinOfficeTemplate{}, errWorkspaceDocumentFormatInvalid
 	default:
 		return builtinOfficeTemplate{}, fmt.Errorf("unsupported office document format: %s", format)
 	}
@@ -186,9 +194,12 @@ func resolveOfficeSourceFileName(title string, format models.DocumentFormat) str
 	baseName = strings.ReplaceAll(baseName, "\\", "-")
 	baseName = strings.Join(strings.Fields(baseName), " ")
 	if baseName == "" {
-		if format == models.DocumentFormatXLSX {
+		switch format {
+		case models.DocumentFormatXLSX:
 			baseName = "未命名表格"
-		} else {
+		case models.DocumentFormatPDF:
+			baseName = "未命名 PDF"
+		default:
 			baseName = "未命名文档"
 		}
 	}
@@ -199,6 +210,8 @@ func officeDocumentFileExtension(format models.DocumentFormat) string {
 	switch format {
 	case models.DocumentFormatXLSX:
 		return "xlsx"
+	case models.DocumentFormatPDF:
+		return "pdf"
 	default:
 		return "docx"
 	}

@@ -206,7 +206,7 @@ type CodeMirrorCreateEditorHandler = NonNullable<ComponentProps<typeof CodeMirro
 type CodeMirrorCreatedEditorView = Parameters<CodeMirrorCreateEditorHandler>[0];
 
 function isOfficeDocumentFormat(format: DocumentFormat): boolean {
-  return format === "docx" || format === "xlsx";
+  return format === "docx" || format === "xlsx" || format === "pdf";
 }
 
 function resolveDocumentFormatLabel(format: DocumentFormat): string {
@@ -215,6 +215,8 @@ function resolveDocumentFormatLabel(format: DocumentFormat): string {
       return "Word";
     case "xlsx":
       return "Excel";
+    case "pdf":
+      return "PDF";
     default:
       return "Markdown";
   }

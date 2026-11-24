@@ -296,7 +296,7 @@ func (h *workspaceHandler) convertWorkspaceFolderFile(
 		DetectedType: detectedType,
 	}
 	switch detectedType {
-	case importDetectedTypeDOCX, importDetectedTypeXLSX:
+	case importDetectedTypeDOCX, importDetectedTypeXLSX, importDetectedTypePDF:
 		converted, err := h.convertWorkspaceImportSource(ctx, runtimeState, source)
 		if err != nil {
 			return workspaceImportConversionResult{}, err
@@ -338,6 +338,18 @@ func (h *workspaceHandler) convertWorkspaceFolderFile(
 		conversion.ImportedFileKind = models.ImportedFileKindText
 	}
 	return conversion, nil
+}
+
+func workspaceImportPDFReadable(content []byte) bool {
+	if len(content) < 5 {
+		return false
+	}
+	// 允许 PDF 头部前有少量垃圾字节（规范允许 1024 字节内的偏移）。
+	head := content
+	if len(head) > 1024 {
+		head = head[:1024]
+	}
+	return bytes.Contains(head, []byte("%PDF-"))
 }
 
 func workspaceImportOfficePackageReadable(content []byte, detectedType string) bool {

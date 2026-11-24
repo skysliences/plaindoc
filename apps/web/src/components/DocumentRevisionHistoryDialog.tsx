@@ -73,11 +73,14 @@ function getRevisionFormatLabel(format: DocumentRevisionSummary["format"]): stri
   if (format === "docx") {
     return "Word 文档";
   }
+  if (format === "pdf") {
+    return "PDF 文档";
+  }
   return "Excel 表格";
 }
 
 function isOfficeRevision(revision: DocumentRevisionSummary | DocumentRevisionDetail): boolean {
-  return revision.format === "docx" || revision.format === "xlsx";
+  return revision.format === "docx" || revision.format === "xlsx" || revision.format === "pdf";
 }
 
 function getOfficeRevisionFileName(revision: DocumentRevisionDetail): string {

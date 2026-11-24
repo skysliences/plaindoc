@@ -21,11 +21,12 @@ const (
 	DocumentFormatMarkdown DocumentFormat = "markdown"
 	DocumentFormatDOCX     DocumentFormat = "docx"
 	DocumentFormatXLSX     DocumentFormat = "xlsx"
+	DocumentFormatPDF      DocumentFormat = "pdf"
 )
 
 func IsValidDocumentFormat(value DocumentFormat) bool {
 	switch value {
-	case DocumentFormatMarkdown, DocumentFormatDOCX, DocumentFormatXLSX:
+	case DocumentFormatMarkdown, DocumentFormatDOCX, DocumentFormatXLSX, DocumentFormatPDF:
 		return true
 	default:
 		return false
@@ -41,7 +42,7 @@ func NormalizeDocumentFormat(value DocumentFormat) DocumentFormat {
 
 func IsOfficeDocumentFormat(value DocumentFormat) bool {
 	switch NormalizeDocumentFormat(value) {
-	case DocumentFormatDOCX, DocumentFormatXLSX:
+	case DocumentFormatDOCX, DocumentFormatXLSX, DocumentFormatPDF:
 		return true
 	default:
 		return false

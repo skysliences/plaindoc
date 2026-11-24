@@ -203,6 +203,8 @@ function renderFormatLabel(value?: AdminDocument["format"]): string {
       return "Word";
     case "xlsx":
       return "Excel";
+    case "pdf":
+      return "PDF";
     default:
       return "Markdown";
   }
@@ -214,6 +216,8 @@ function renderFormatBadgeClass(value?: AdminDocument["format"]): string {
       return "border-sky-200 bg-sky-50 text-sky-700";
     case "xlsx":
       return "border-emerald-200 bg-emerald-50 text-emerald-700";
+    case "pdf":
+      return "border-rose-200 bg-rose-50 text-rose-700";
     default:
       return "border-amber-200 bg-amber-50 text-amber-700";
   }
@@ -236,7 +240,7 @@ export function AdminDocumentsPage({ dataGateway }: AdminDocumentsPageProps) {
   const [spaceId, setSpaceId] = useState("");
   const [statusFilter, setStatusFilter] = useState<"" | "all" | "active" | "banned" | "deleted">("");
   const [visibilityFilter, setVisibilityFilter] = useState<"" | "all" | "public" | "authenticated" | "member">("");
-  const [formatFilter, setFormatFilter] = useState<"" | "all" | "markdown" | "docx" | "xlsx">("");
+  const [formatFilter, setFormatFilter] = useState<"" | "all" | "markdown" | "docx" | "xlsx" | "pdf">("");
   const [page, setPage] = useState(1);
   const [selectedDocumentIDs, setSelectedDocumentIDs] = useState<string[]>([]);
 
@@ -635,7 +639,7 @@ export function AdminDocumentsPage({ dataGateway }: AdminDocumentsPageProps) {
               <Select
                 value={formatFilter || "default"}
                 onValueChange={(value) => {
-                  setFormatFilter((value === "default" ? "" : value) as "" | "all" | "markdown" | "docx" | "xlsx");
+                  setFormatFilter((value === "default" ? "" : value) as "" | "all" | "markdown" | "docx" | "xlsx" | "pdf");
                   setPage(1);
                 }}
               >
@@ -648,6 +652,7 @@ export function AdminDocumentsPage({ dataGateway }: AdminDocumentsPageProps) {
                   <SelectItem value="markdown">Markdown</SelectItem>
                   <SelectItem value="docx">Word</SelectItem>
                   <SelectItem value="xlsx">Excel</SelectItem>
+                  <SelectItem value="pdf">PDF</SelectItem>
                 </SelectContent>
               </Select>
             </label>

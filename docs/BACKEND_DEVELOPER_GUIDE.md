@@ -343,7 +343,8 @@
 
 ONLYOFFICE 一等文档规则：
 
-1. `documents.format` 区分 `markdown/docx/xlsx`，`nodes.type` 仍只表示 `folder/doc`。
+1. `documents.format` 区分 `markdown/docx/xlsx/pdf`，`nodes.type` 仍只表示 `folder/doc`。
+   其中 `pdf` 只能由导入产生（`POST /api/spaces/:spaceId/imports` 识别 `.pdf`），不支持在空间内新建空白 PDF；ONLYOFFICE 侧按 `documentType: "pdf"`、`fileType: "pdf"` 打开，可批注与编辑，写回同样走 callback。
 2. `SaveDocument` 仅适用于 Markdown；Office 文档必须走 ONLYOFFICE callback 写回。
 3. Office 正文落在 `file_blobs`，版本快照落在 `document_file_revisions`。
 4. `VisibilityService` 按“文档可读/可写”工作，Office 与 Markdown 共用同一套权限判断。

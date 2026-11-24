@@ -5,7 +5,7 @@ export interface ReaderTreeNode {
   documentId?: string;
   documentIdentifier?: string;
   documentRouteKey?: string;
-  documentFormat?: "markdown" | "docx" | "xlsx";
+  documentFormat?: "markdown" | "docx" | "xlsx" | "pdf";
   importedFileKind?: "text" | "image" | "unsupported";
   importedOriginalDownloadUrl?: string;
   parentId?: string | null;
@@ -28,7 +28,7 @@ export interface ReaderDocumentPayload {
   identifier?: string;
   routeKey: string;
   themeId: string;
-  format?: "markdown" | "docx" | "xlsx";
+  format?: "markdown" | "docx" | "xlsx" | "pdf";
   importedFileKind?: "text" | "image";
   importedImageUrl?: string;
   visibility: "public" | "authenticated" | "member";

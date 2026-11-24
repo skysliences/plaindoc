@@ -68,7 +68,7 @@ function createProps(overrides?: {
     title: string;
     documentIdentifier?: string;
     templateId?: string;
-    format?: "markdown" | "docx" | "xlsx";
+    format?: "markdown" | "docx" | "xlsx" | "pdf";
   }) => Promise<CreateNodeResult>;
   onImportDocuments?: (input: {
     targetNodeId: string | null;
@@ -89,7 +89,7 @@ function createProps(overrides?: {
         title: string;
         documentIdentifier?: string;
         templateId?: string;
-        format?: "markdown" | "docx" | "xlsx";
+        format?: "markdown" | "docx" | "xlsx" | "pdf";
       }) => Promise<CreateNodeResult>
     >().mockResolvedValue({
       nodeId: "node-created",
@@ -238,7 +238,7 @@ describe("WorkspaceTree", () => {
           title: string;
           documentIdentifier?: string;
           templateId?: string;
-          format?: "markdown" | "docx" | "xlsx";
+          format?: "markdown" | "docx" | "xlsx" | "pdf";
         }) => Promise<CreateNodeResult>
       >()
       .mockResolvedValue({
@@ -388,7 +388,7 @@ describe("WorkspaceTree", () => {
           title: string;
           documentIdentifier?: string;
           templateId?: string;
-          format?: "markdown" | "docx" | "xlsx";
+          format?: "markdown" | "docx" | "xlsx" | "pdf";
         }) => Promise<CreateNodeResult>
       >()
       .mockResolvedValue({
@@ -437,7 +437,7 @@ describe("WorkspaceTree", () => {
           title: string;
           documentIdentifier?: string;
           templateId?: string;
-          format?: "markdown" | "docx" | "xlsx";
+          format?: "markdown" | "docx" | "xlsx" | "pdf";
         }) => Promise<CreateNodeResult>
       >()
       .mockResolvedValue({

@@ -164,12 +164,18 @@ function normalizeReaderVisibility(value: unknown): ReaderVisibility {
   return "member";
 }
 
-function isOfficeDocumentFormat(value: unknown): value is "docx" | "xlsx" {
-  return value === "docx" || value === "xlsx";
+function isOfficeDocumentFormat(value: unknown): value is "docx" | "xlsx" | "pdf" {
+  return value === "docx" || value === "xlsx" || value === "pdf";
 }
 
 function resolveOfficeDocumentLabel(value: unknown): string {
-  return value === "xlsx" ? "Excel 文档" : "Word 文档";
+  if (value === "xlsx") {
+    return "Excel 文档";
+  }
+  if (value === "pdf") {
+    return "PDF 文档";
+  }
+  return "Word 文档";
 }
 
 function renderOfficeDocumentIcon(value: unknown) {
