@@ -215,13 +215,17 @@ func newRouter(
 	readerRenderCache := buildReaderRenderCache(cfg, logger, readerSSRDispatcher != nil)
 	collaborationService := service.NewWorkspaceCollaborationService(workspaceRepo, spaceRepo, userRepo, visibilityService)
 	// 首页 Handler：承接 SSR 渲染与登录态相关行为。
+	navigationOrigin := cfg.WebOrigin
+	if cfg.WebSameOrigin {
+		navigationOrigin = ""
+	}
 	homeHandler := handler.NewHomeHandler(
 		authService,
 		homeService,
 		homeSearchService,
 		searchConfigService,
 		collaborationService,
-		cfg.WebOrigin,
+		navigationOrigin,
 	)
 	// sitemap Handler：承接 /sitemap.xml 输出。
 	sitemapHandler := handler.NewSitemapHandler(sitemapService, cfg.WebOrigin)
@@ -267,7 +271,7 @@ func newRouter(
 		readerSSRDispatcher,
 		readerRenderCache,
 		logger,
-		cfg.WebOrigin,
+		navigationOrigin,
 		onlyOfficeConfigService,
 		officeRenderingConfigService,
 		service.NewOfficeReaderPreviewService(officeHTMLRenderService),

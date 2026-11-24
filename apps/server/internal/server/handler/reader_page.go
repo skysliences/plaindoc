@@ -853,28 +853,7 @@ func (h *readerPageHandler) redirectToLogin(c *gin.Context) {
 	if c == nil {
 		return
 	}
-	c.Redirect(http.StatusSeeOther, h.buildWebAuthEntryURL(c, "/login"))
-}
-
-func (h *readerPageHandler) buildWebAuthEntryURL(c *gin.Context, targetPath string) string {
-	path := strings.TrimSpace(targetPath)
-	if path == "" {
-		path = "/"
-	}
-	if !strings.HasPrefix(path, "/") {
-		path = "/" + path
-	}
-
-	baseOrigin := strings.TrimSpace(h.webOrigin)
-	if baseOrigin == "" {
-		return path
-	}
-
-	redirectURL := buildRequestAbsoluteURL(c)
-	if redirectURL == "" {
-		return baseOrigin + path
-	}
-	return baseOrigin + path + "?redirect=" + url.QueryEscape(redirectURL)
+	c.Redirect(http.StatusSeeOther, buildWebAuthEntryURL(c, h.webOrigin, "/login"))
 }
 
 func resolveRequestOrigin(c *gin.Context) string {

@@ -18,6 +18,7 @@ type Config struct {
 	Env            string
 	Addr           string
 	WebOrigin      string
+	WebSameOrigin  bool
 	WebDistDir     string
 	LogLevel       slog.Level
 	LogOutput      string
@@ -134,6 +135,11 @@ func Load() (Config, error) {
 	cfg.LogLevel = logLevel
 	cfg.LogOutput = strings.ToLower(getenv("LOG_OUTPUT", "stdout"))
 	cfg.LogFilePath = getenv("LOG_FILE_PATH", "")
+
+	cfg.WebSameOrigin, err = parseBool("WEB_SAME_ORIGIN", "false")
+	if err != nil {
+		return Config{}, err
+	}
 
 	autoMigrate, err := parseBool("DB_AUTO_MIGRATE", "true")
 	if err != nil {

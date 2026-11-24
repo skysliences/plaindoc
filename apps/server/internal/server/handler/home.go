@@ -181,8 +181,8 @@ func (h *homeHandler) Search(c *gin.Context) {
 		CurrentUserName:      viewerIdentity.Name,
 		CurrentUserAvatar:    buildUserAvatarText(viewerIdentity.Name, viewerIdentity.Email),
 		CurrentUserAvatarURL: strings.TrimSpace(viewerIdentity.AvatarURL),
-		LoginURL:             h.buildWebAuthEntryURL(c, "/login"),
-		RegisterURL:          h.buildWebAuthEntryURL(c, "/register"),
+		LoginURL:             buildWebAuthEntryURL(c, h.webOrigin, "/login"),
+		RegisterURL:          buildWebAuthEntryURL(c, h.webOrigin, "/register"),
 		AdminURL:             "/admin",
 		LogoutURL:            "/logout",
 		Categories:           buildHomeCategoryItems(categoryRecord, false, false, true),
@@ -276,8 +276,8 @@ func (h *homeHandler) renderPage(c *gin.Context, explore bool) {
 
 	categoryItems := buildHomeCategoryItems(record, explore, isExploreAll, false)
 	spaceItems := mapHomepageSpaces(record.Spaces, viewerIdentity.UserID, h.webOrigin+"/editor")
-	loginURL := h.buildWebAuthEntryURL(c, "/login")
-	registerURL := h.buildWebAuthEntryURL(c, "/register")
+	loginURL := buildWebAuthEntryURL(c, h.webOrigin, "/login")
+	registerURL := buildWebAuthEntryURL(c, h.webOrigin, "/register")
 	activeCategoryName := strings.TrimSpace(record.ActiveCategory)
 	if isExploreAll {
 		activeCategoryName = "全部"
@@ -504,25 +504,27 @@ func normalizeExploreCategoryID(raw string) (string, bool) {
 	return normalized, false
 }
 
-func (h *homeHandler) buildWebAuthEntryURL(c *gin.Context, targetPath string) string {
-	path := strings.TrimSpace(targetPath)
-	if path == "" {
-		path = "/"
-	}
-	if !strings.HasPrefix(path, "/") {
-		path = "/" + path
+func buildWebAuthEntryURL(c *gin.Context, origin, path string) string {
+	entry := origin + path
+	if c == nil || c.Request == nil || c.Request.URL == nil {
+		return entry
 	}
 
-	baseOrigin := strings.TrimSpace(h.webOrigin)
-	if baseOrigin == "" {
-		return path
+	var target string
+	if origin == "" {
+		u := c.Request.URL
+		// A return path must stay on the origin serving the login form.
+		if !strings.HasPrefix(u.Path, "/") || strings.HasPrefix(u.Path, "//") || strings.Contains(u.Path, "\\") {
+			return entry
+		}
+		target = u.RequestURI()
+	} else {
+		target = buildRequestAbsoluteURL(c)
 	}
-
-	redirectURL := buildRequestAbsoluteURL(c)
-	if redirectURL == "" {
-		return baseOrigin + path
+	if target == "" {
+		return entry
 	}
-	return baseOrigin + path + "?redirect=" + url.QueryEscape(redirectURL)
+	return entry + "?redirect=" + url.QueryEscape(target)
 }
 
 func buildRequestAbsoluteURL(c *gin.Context) string {

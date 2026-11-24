@@ -163,7 +163,8 @@
 | --- | --- | --- | --- | --- |
 | `APP_ENV` | `development` | `config.Load()` | `main.go` | 生产环境触发更严格校验（如 JWT 密钥）。 |
 | `APP_ADDR` | `:8080` | `config.Load()` | `http.Server.Addr` | 服务监听地址。 |
-| `WEB_ORIGIN` | `http://localhost:3001` | `config.Load()` | `router`/handler | CORS 与页面链接构造。 |
+| `WEB_ORIGIN` | `http://localhost:3001` | `config.Load()` | `router`/handler | CORS 与默认页面链接构造。 |
+| `WEB_SAME_ORIGIN` | false | config.Load() | 首页与阅读页 | 同一服务托管前端时设为 true。登录、注册、编辑和登录返回使用站内路径，适用于同时通过内网 IP 和公网域名访问。 |
 | `WEB_DIST_DIR` | `apps/web/dist` | `config.Load()` | `web_spa.go` | SPA 托管目录。 |
 | `DB_DRIVER` | `sqlite` | `config.Load()` | `storage.OpenDatabase` | 支持 sqlite/postgres/mysql。 |
 | `DB_DSN` | sqlite 本地 DSN | `config.Load()` | `storage.OpenDatabase` | 数据源连接串。 |
