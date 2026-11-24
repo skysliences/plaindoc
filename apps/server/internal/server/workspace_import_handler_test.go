@@ -25,9 +25,9 @@ func TestRouter_ImportDocuments_ListsDirectUploadsWithoutAPreview(t *testing.T) 
 	seedSpaceForWorkspaceCreateNode(t, database, ownerID, spaceID, "member")
 	spaceURL := "/api/spaces/" + spaceID
 
-	const csvContent = "name,quantity\nnotebook,2\n"
+	const tsvContent = "name\tquantity\nnotebook\t2\n"
 	contents := map[string][]byte{
-		"counts.csv":  []byte(csvContent),
+		"counts.tsv":  []byte(tsvContent),
 		"diagram.png": buildWorkspaceImportedZIPPNG(t),
 		"broken.png":  []byte("not an image"),
 		"broken.docx": []byte("not a Word document"),
@@ -61,7 +61,7 @@ func TestRouter_ImportDocuments_ListsDirectUploadsWithoutAPreview(t *testing.T) 
 		ImportedFileKind models.ImportedFileKind `json:"importedFileKind"`
 	}](t, treeResponse.Body.Bytes())
 	kindsByTitle := map[string]models.ImportedFileKind{
-		"counts.csv":  models.ImportedFileKindText,
+		"counts.tsv":  models.ImportedFileKindText,
 		"diagram.png": models.ImportedFileKindImage,
 		"broken.png":  models.ImportedFileKindUnsupported,
 		"broken.docx": models.ImportedFileKindUnsupported,
@@ -83,9 +83,9 @@ func TestRouter_ImportDocuments_ListsDirectUploadsWithoutAPreview(t *testing.T) 
 		} else if node.DocumentID == "" || node.DocumentRouteKey == "" {
 			t.Fatalf("supported file is not openable: %+v", node)
 		}
-		if node.Title == "counts.csv" {
-			if content := readWorkspaceImportedZIPDocument(t, database, node.ID); content != csvContent {
-				t.Fatalf("import altered CSV content: %q", content)
+		if node.Title == "counts.tsv" {
+			if content := readWorkspaceImportedZIPDocument(t, database, node.ID); content != tsvContent {
+				t.Fatalf("import altered TSV content: %q", content)
 			}
 		}
 		delete(kindsByTitle, node.Title)
@@ -1500,4 +1500,72 @@ func buildMinimalImportDOCX(t *testing.T, text string) []byte {
 		t.Fatalf("close docx archive failed: %v", err)
 	}
 	return buffer.Bytes()
+}
+func TestRouter_ImportCSVAsEditableXLSX(t *testing.T) {
+	t.Chdir(t.TempDir())
+	db, serve := setupAuthTestRouter(t)
+	t.Cleanup(func() { _ = db.Close() })
+	owner, _, token := registerAccessUser(t, serve, "csv-workbook@example.com")
+	space := "csv-workbook-space"
+	seedSpaceForWorkspaceCreateNode(t, db, owner, space, "member")
+	seedOnlyOfficeEnabledConfig(t, db)
+	const sample = "编号,说明,数量,备注\r\n00123,\"中文,逗号\",12.5,\"第一行\r\n第二行\"\r\n\r\n123456789012345678,\"双\"\"引号\",=1+2,"
+	gb, err := simplifiedchinese.GB18030.NewEncoder().Bytes([]byte(sample))
+	if err != nil {
+		t.Fatal(err)
+	}
+	zipContent := buildWorkspaceImportZIP(t, map[string][]byte{"资料/另一份.CSV": gb})
+	body, mime := buildWorkspaceImportMultipartBody(t, "", map[string][]byte{"预算.csv": []byte("\xef\xbb\xbf" + sample), "资料.zip": zipContent})
+	req := httptest.NewRequest(http.MethodPost, "/api/spaces/"+space+"/imports", body)
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", mime)
+	rec := serve(req)
+	result := decodeJSONResultData[struct {
+		Items []struct {
+			DetectedType      string
+			CreatedDocumentID string
+			Status            string
+		}
+	}](t, rec.Body.Bytes())
+	count := 0
+	for _, item := range result.Items {
+		if item.DetectedType != "csv" {
+			continue
+		}
+		if item.Status != "success" {
+			t.Fatalf("import failed: %s", rec.Body.String())
+		}
+		cfg := fetchOnlyOfficeEditConfigForTest(t, serve, token, item.CreatedDocumentID)
+		doc := requireJSONMap(t, cfg.Config["document"], "document")
+		if doc["fileType"] != "xlsx" || cfg.Config["documentType"] != "spreadsheet" {
+			t.Fatal("expected editable spreadsheet", doc["fileType"], cfg.Config["documentType"])
+		}
+		source := serve(httptest.NewRequest(http.MethodGet, requestURIFromAbsoluteURL(t, stringValue(doc["url"])), nil))
+		if source.Code != 200 || !strings.Contains(source.Header().Get("Content-Disposition"), ".xlsx") {
+			t.Fatalf("unexpected workbook response: %d", source.Code)
+		}
+		book, err := excelize.OpenReader(bytes.NewReader(source.Body.Bytes()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for cell, want := range map[string]string{"A2": "00123", "B2": "中文,逗号", "C2": "12.5", "D2": "第一行\n第二行", "A3": "", "A4": "123456789012345678", "B4": "双\"引号", "C4": "=1+2"} {
+			got, err := book.GetCellValue("Sheet1", cell)
+			if err != nil || got != want {
+				t.Fatalf("%s=%q, want %q (%v)", cell, got, want, err)
+			}
+		}
+		if formula, _ := book.GetCellFormula("Sheet1", "C4"); formula != "" {
+			t.Fatal("unexpected formula", formula)
+		}
+		if typ, _ := book.GetCellType("Sheet1", "C2"); typ == excelize.CellTypeSharedString || typ == excelize.CellTypeInlineString {
+			t.Fatal("quantity stored as text")
+		}
+		if err := book.Close(); err != nil {
+			t.Fatal(err)
+		}
+		count++
+	}
+	if count != 2 {
+		t.Fatalf("expected direct and archived CSV workbooks: %s", rec.Body.String())
+	}
 }

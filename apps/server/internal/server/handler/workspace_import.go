@@ -54,6 +54,7 @@ const (
 	importDetectedTypeHTML              = "html"
 	importDetectedTypeDOCX              = "docx"
 	importDetectedTypeXLSX              = "xlsx"
+	importDetectedTypeCSV               = "csv"
 	importDetectedTypePDF               = "pdf"
 	importDetectedTypeZIP               = "zip"
 	importDetectedTypeDirectory         = "directory"
@@ -782,6 +783,8 @@ func detectWorkspaceImportType(filePath string) string {
 		return importDetectedTypeHTML
 	case "docx":
 		return importDetectedTypeDOCX
+	case "csv":
+		return importDetectedTypeCSV
 	case "xlsx":
 		return importDetectedTypeXLSX
 	case "pdf":
@@ -1429,12 +1432,23 @@ func (h *workspaceHandler) convertWorkspaceImportSource(
 			ContentMD:    markdown,
 			DetectedType: importDetectedTypeHTML,
 		}, nil
-	case importDetectedTypeDOCX, importDetectedTypeXLSX:
-		if !workspaceImportOfficePackageReadable(source.Content, detectedType) {
+	case importDetectedTypeDOCX, importDetectedTypeXLSX, importDetectedTypeCSV:
+		fileName := path.Base(source.SourcePath)
+		packageType := detectedType
+		if detectedType == importDetectedTypeCSV {
+			workbook, err := workspaceCSVWorkbook(ctx, source.Content)
+			if err != nil {
+				return workspaceImportConversionResult{}, err
+			}
+			source.Content = workbook
+			packageType = importDetectedTypeXLSX
+			fileName = strings.TrimSuffix(fileName, path.Ext(fileName)) + ".xlsx"
+		}
+		if !workspaceImportOfficePackageReadable(source.Content, packageType) {
 			return workspaceImportConversionResult{}, errWorkspaceImportUnsupportedType
 		}
 		format, mimeType := models.DocumentFormatDOCX, officeDocumentMIMEDOCX
-		if detectedType == importDetectedTypeXLSX {
+		if packageType == importDetectedTypeXLSX {
 			format, mimeType = models.DocumentFormatXLSX, officeDocumentMIMEXLSX
 		}
 		if runtimeState.onlyOfficeEnabled {
@@ -1442,7 +1456,7 @@ func (h *workspaceHandler) convertWorkspaceImportSource(
 				Format:         format,
 				Title:          title,
 				SourceContent:  bytes.Clone(source.Content),
-				SourceFileName: path.Base(source.SourcePath),
+				SourceFileName: fileName,
 				SourceMimeType: mimeType,
 				DetectedType:   detectedType,
 			}, nil

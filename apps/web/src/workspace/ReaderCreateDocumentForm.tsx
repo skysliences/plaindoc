@@ -322,7 +322,7 @@ export function ReaderCreateDocumentForm({
                 {selectedFile ? "更换文件" : "选择文件"}
               </Button>
               <p className={`m-0 min-w-0 ${selectedFile ? "break-all text-sm text-slate-700" : "text-center text-xs text-slate-600"}`}>
-                {selectedFile ? selectedFile.name : "ZIP 会解压到同名目录。"}
+                {selectedFile ? selectedFile.name : "支持 CSV 和 Excel 表格；CSV 将转换为 .xlsx。ZIP 会解压到同名目录。"}
               </p>
             </div>
           ) : (

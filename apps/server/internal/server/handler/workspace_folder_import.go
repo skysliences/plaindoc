@@ -296,7 +296,7 @@ func (h *workspaceHandler) convertWorkspaceFolderFile(
 		DetectedType: detectedType,
 	}
 	switch detectedType {
-	case importDetectedTypeDOCX, importDetectedTypeXLSX, importDetectedTypePDF:
+	case importDetectedTypeDOCX, importDetectedTypeXLSX, importDetectedTypeCSV, importDetectedTypePDF:
 		converted, err := h.convertWorkspaceImportSource(ctx, runtimeState, source)
 		if err != nil {
 			return workspaceImportConversionResult{}, err
@@ -385,7 +385,7 @@ func workspaceFolderTextType(name string) (knownText bool, supported bool) {
 		".mp3", ".m4a", ".wav", ".ogg", ".flac", ".mp4", ".mkv", ".mov", ".webm", ".avi",
 		".rar", ".7z", ".tar", ".gz", ".zip", ".bin", ".dmg", ".exe", ".dll", ".so", ".class", ".wasm":
 		return false, false
-	case ".txt", ".csv", ".tsv", ".json", ".jsonl", ".yaml", ".yml", ".toml", ".xml", ".html", ".htm",
+	case ".txt", ".tsv", ".json", ".jsonl", ".yaml", ".yml", ".toml", ".xml", ".html", ".htm",
 		".css", ".scss", ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".vue", ".svelte",
 		".ini", ".conf", ".env", ".properties", ".log", ".sql", ".rst", ".tex",
 		".go", ".py", ".rb", ".php", ".swift", ".rs", ".c", ".h", ".cpp", ".hpp",

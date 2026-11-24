@@ -2366,7 +2366,7 @@ export const WorkspaceTree = memo(function WorkspaceTree({
                     <p className="mt-1 mb-0 text-[12px] text-[#64748b]">
                       {isFolderImport
                         ? "保留原来的文件名和目录结构。"
-                        : "ZIP 会解压到同名目录。"}
+                        : "支持 CSV 和 Excel 表格；CSV 将转换为 .xlsx。ZIP 会解压到同名目录。"}
                     </p>
                   </div>
                   {isFolderImport ? (

@@ -69,12 +69,12 @@ func TestRouter_ImportDocuments_PopulatesZIPsContainingOnlyOtherFileTypes(t *tes
 	spaceID := "zip-non-document-files-space"
 	seedSpaceForWorkspaceCreateNode(t, database, ownerID, spaceID, "member")
 
-	const csvContent = "name,quantity\nnotebook,2\n"
+	const tsvContent = "name\tquantity\nnotebook\t2\n"
 	const jsonContent = "{\"enabled\":true}\n"
 	const goContent = "package example\n"
 	const pdfContent = "%PDF-1.4\n"
 	importStandaloneZIPFixture(t, serve, spaceID, token, "project.zip", map[string][]byte{
-		"reports/data.csv":      []byte(csvContent),
+		"reports/data.tsv":      []byte(tsvContent),
 		"reports/options.json":  []byte(jsonContent),
 		"src/main.go":           []byte(goContent),
 		"images/diagram.png":    buildWorkspaceImportedZIPPNG(t),
@@ -90,7 +90,7 @@ func TestRouter_ImportDocuments_PopulatesZIPsContainingOnlyOtherFileTypes(t *tes
 	for _, item := range []struct {
 		name, parentID, content string
 	}{
-		{"data.csv", reportsID, csvContent},
+		{"data.tsv", reportsID, tsvContent},
 		{"options.json", reportsID, jsonContent},
 		{"main.go", sourceID, goContent},
 	} {
