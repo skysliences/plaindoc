@@ -79,7 +79,7 @@ describe("AdminUsersPage", () => {
     const resetButton = await screen.findByRole("button", { name: "重置二次验证" });
     fireEvent.click(resetButton);
     const dialog = within(screen.getByRole("dialog", { name: `重置二次验证（${listedUser.email}）` }));
-    expect(dialog.getByText("该用户将退出所有设备。下次登录时需要重新绑定 Google Authenticator。")).toBeInTheDocument();
+    expect(dialog.getByText("该用户将退出所有设备，已绑定的 Passkey 将被移除。下次登录时需要重新绑定 Google Authenticator。")).toBeInTheDocument();
     fireEvent.click(dialog.getByRole("button", { name: "取消" }));
     expect(resetUserMfa).not.toHaveBeenCalled();
 
@@ -106,7 +106,7 @@ describe("AdminUsersPage", () => {
 
     render(<AdminUsersPage currentUserID={listedUser.userId} dataGateway={dataGateway} onLogout={onLogout} />);
     fireEvent.click(await screen.findByRole("button", { name: "重置二次验证" }));
-    expect(screen.getByText("你将退出所有设备。下次登录时需要重新绑定 Google Authenticator。")).toBeInTheDocument();
+    expect(screen.getByText("你将退出所有设备，已绑定的 Passkey 将被移除。下次登录时需要重新绑定 Google Authenticator。")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "确认重置" }));
     await waitFor(() => expect(onLogout).toHaveBeenCalledOnce());
     expect(resetUserMfa).toHaveBeenCalledWith({ userId: listedUser.userId });

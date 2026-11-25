@@ -18,6 +18,7 @@ import { showToast } from "../../components/ui/toast";
 import { type AdminProfile, type DataGateway } from "../../data-access";
 import { formatError } from "../../editor/status-utils";
 import { AdminPageCard } from "../components/AdminPageLayout";
+import { AdminPasskeysCard } from "../components/AdminPasskeysCard";
 
 const AVATAR_FRAME_SIZE = 220;
 const AVATAR_STAGE_SIZE = 320;
@@ -596,6 +597,8 @@ export function AdminProfilePage({ dataGateway, onProfileUpdated }: AdminProfile
           </div>
         </form>
       </AdminPageCard>
+
+      <AdminPasskeysCard auth={dataGateway.auth} />
 
       {cropDialogOpen && loadedAvatarImage
         ? createPortal(

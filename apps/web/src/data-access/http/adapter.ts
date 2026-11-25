@@ -187,6 +187,7 @@ const DEFAULT_AUTH_LOGIN_OPTIONS: AuthLoginOptions = {
   defaultProviderId: "local",
   allowUserRegister: true,
   passwordResetEnabled: false,
+  passkeyEnabled: false,
   providers: []
 };
 
@@ -251,6 +252,7 @@ function normalizeAuthLoginOptions(value: unknown): AuthLoginOptions {
     defaultProviderId,
     allowUserRegister,
     passwordResetEnabled,
+    passkeyEnabled: record.passkeyEnabled === true,
     providers
   };
 }
@@ -578,6 +580,14 @@ export function createHttpAdapter(options: HttpAdapterOptions): DataGateway {
     }
   };
 
+  const acceptVerifiedSession = (session: HttpAuthSession): AuthSession => {
+    if (!session?.user) {
+      throw new Error("服务端未返回用户信息");
+    }
+    saveSessionTokens(session);
+    return { user: session.user, token: session.token };
+  };
+
   const request = async <T>(
     path: string,
     init?: RequestInit,
@@ -799,14 +809,38 @@ export function createHttpAdapter(options: HttpAdapterOptions): DataGateway {
         skipAuth: true,
         retryOnUnauthorized: false
       });
-      if (!session?.user) {
-        throw new Error("服务端未返回用户信息");
-      }
-      saveSessionTokens(session);
-      return {
-        user: session.user,
-        token: session.token
-      };
+      return acceptVerifiedSession(session);
+    },
+    async beginPasskeyLogin() {
+      return request("/auth/passkeys/login/options", { method: "POST", body: "{}" }, {
+        skipAuth: true,
+        retryOnUnauthorized: false
+      });
+    },
+    async verifyPasskeyLogin(input) {
+      const session = await request<HttpAuthSession>("/auth/passkeys/login/verify", {
+        method: "POST",
+        body: JSON.stringify(input)
+      }, {
+        skipAuth: true,
+        retryOnUnauthorized: false
+      });
+      return acceptVerifiedSession(session);
+    },
+    async listPasskeys() {
+      return request("/auth/passkeys");
+    },
+    async beginPasskeyRegistration() {
+      return request("/auth/passkeys/register/options", { method: "POST", body: "{}" });
+    },
+    async verifyPasskeyRegistration(input) {
+      return request("/auth/passkeys/register/verify", {
+        method: "POST",
+        body: JSON.stringify(input)
+      });
+    },
+    async deletePasskey(id) {
+      await request<void>(`/auth/passkeys/${encodeURIComponent(id)}`, { method: "DELETE" });
     },
     async refreshCaptcha(input: AuthCaptchaRefreshInput) {
       const scene = typeof input.scene === "string" ? input.scene.trim() : "";

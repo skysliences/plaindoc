@@ -1,4 +1,4 @@
-import { LoaderCircle } from "lucide-react";
+import { KeyRound, LoaderCircle } from "lucide-react";
 import type { FormEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ADMIN_BRAND_LOGO_SRC } from "../admin/brand";
@@ -17,6 +17,8 @@ interface AdminAuthPanelProps {
   errorMessage: string | null;
   authChallenge: AuthCaptchaChallenge | null;
   onLogin: (input: AuthLoginInput) => Promise<AuthMfaChallenge | null>;
+  passkeyEnabled: boolean;
+  onPasskeyLogin: () => Promise<void>;
   onVerifyMfa: (input: AuthMfaVerifyInput) => Promise<void>;
   onRefreshCaptcha: (input: AuthCaptchaRefreshInput) => Promise<void>;
 }
@@ -28,6 +30,8 @@ export function AdminAuthPanel({
   errorMessage,
   authChallenge,
   onLogin,
+  passkeyEnabled,
+  onPasskeyLogin,
   onVerifyMfa,
   onRefreshCaptcha
 }: AdminAuthPanelProps) {
@@ -209,11 +213,23 @@ export function AdminAuthPanel({
                 </label>
               </div>
             ) : null}
-            {errorMessage ? <p className="admin-auth-form__error">{errorMessage}</p> : null}
+            {errorMessage ? <p className="admin-auth-form__error" role="alert">{errorMessage}</p> : null}
             <Button type="submit" className="w-full" disabled={!canSubmit}>
               {checking || submitting ? <LoaderCircle className="admin-auth-form__submit-loader" size={14} /> : null}
               <span>{submitText}</span>
             </Button>
+            {passkeyEnabled && (
+              <Button
+                type="button"
+                variant="outline"
+                className="w-full"
+                disabled={checking || submitting || refreshingCaptcha}
+                onClick={() => void onPasskeyLogin()}
+              >
+                <KeyRound size={16} aria-hidden="true" />
+                使用 Passkey 登录
+              </Button>
+            )}
           </form>
         </CardContent>
       </Card>

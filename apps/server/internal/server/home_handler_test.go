@@ -238,6 +238,9 @@ func TestRouter_Explore_LoggedInUsesNoStoreAndCategoryFilter(t *testing.T) {
 	if !strings.Contains(body, "Test User") || strings.Contains(body, "我的空间") || strings.Contains(body, "后台管理") || !strings.Contains(body, "退出登录") {
 		t.Fatalf("expected logged-in nav dropdown items, body=%s", body)
 	}
+	if !strings.Contains(body, `href="/admin/profile" class="yt-user-menu-item">个人设置</a>`) {
+		t.Fatal("expected a personal settings link for a logged-in normal user")
+	}
 	if !strings.Contains(body, "Public In Category") ||
 		!strings.Contains(body, "Authenticated In Category") ||
 		!strings.Contains(body, "Member In Category") {

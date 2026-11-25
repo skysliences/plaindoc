@@ -50,6 +50,10 @@ type AuthLoginOptions struct {
 	Providers         []AuthLoginProviderOption
 }
 
+func (o AuthLoginOptions) AllowsLocalLogin() bool {
+	return o.LoginMode != authLoginModeLDAPOnly
+}
+
 // AuthRegistrationPolicyService 负责读取注册相关系统配置。
 type AuthRegistrationPolicyService struct {
 	systemConfigRepo repository.SystemConfigRepository

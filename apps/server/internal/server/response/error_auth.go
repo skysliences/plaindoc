@@ -5,7 +5,16 @@ import "net/http"
 // 当前文件收敛 `auth.go` 的错误响应模板。
 // 统一在 response 层维护 status/code/message，避免在 handler 中散落字面量。
 var (
-	AuthErrMFAChallengeExpired = ErrorTemplate{
+	AuthErrPasskeyUnavailable   = ErrorTemplate{Status: http.StatusForbidden, Code: CodeAuthPasskeyUnavailable, Message: "当前网址未启用 Passkey，请访问站点配置的登录地址"}
+	AuthErrPasskeyInvalid       = ErrorTemplate{Status: http.StatusBadRequest, Code: CodeAuthPasskeyInvalid, Message: "Passkey 验证失败，请重新选择已绑定的 Passkey"}
+	AuthErrPasskeyExpired       = ErrorTemplate{Status: http.StatusBadRequest, Code: CodeAuthPasskeyExpired, Message: "Passkey 请求已过期或已使用，请重试"}
+	AuthErrPasskeyRecentLogin   = ErrorTemplate{Status: http.StatusForbidden, Code: CodeAuthPasskeyRecentLogin, Message: "请重新登录，再添加 Passkey"}
+	AuthErrPasskeyAlreadyExists = ErrorTemplate{Status: http.StatusConflict, Code: CodeAuthPasskeyAlreadyExists, Message: "这个 Passkey 已绑定"}
+	AuthErrPasskeyNotFound      = ErrorTemplate{Status: http.StatusNotFound, Code: CodeAuthPasskeyNotFound, Message: "找不到这个 Passkey"}
+	AuthErrPasskeyBusy          = ErrorTemplate{Status: http.StatusTooManyRequests, Code: CodeAuthPasskeyBusy, Message: "Passkey 登录请求过多，请稍后重试"}
+	AuthErrPasskeyLocalAccount  = ErrorTemplate{Status: http.StatusForbidden, Code: CodeAuthPasskeyUnavailable, Message: "Passkey 适用于允许本地登录的账号"}
+	AuthErrPasskeyNameTooLong   = ErrorTemplate{Status: http.StatusBadRequest, Code: CodeInvalidName, Message: "Passkey 名称最多 64 个字符"}
+	AuthErrMFAChallengeExpired  = ErrorTemplate{
 		Status: http.StatusBadRequest, Code: CodeAuthMFAChallengeExpired,
 		Message: "验证已过期或尝试次数已用完，请重新提交账号信息",
 	}

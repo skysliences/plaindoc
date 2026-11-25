@@ -32,6 +32,7 @@ export interface AuthLoginOptions {
   defaultProviderId: string;
   allowUserRegister: boolean;
   passwordResetEnabled: boolean;
+  passkeyEnabled: boolean;
   providers: AuthLoginProviderOption[];
 }
 
@@ -65,6 +66,38 @@ export type AuthMfaChallenge =
 export interface AuthMfaVerifyInput {
   challengeToken: string;
   code: string;
+}
+
+export interface PasskeyCeremony<Options> {
+  challengeToken: string;
+  publicKey: Options;
+}
+
+interface PasskeyCredentialResponse<Response> {
+  id: string;
+  rawId: string;
+  type: string;
+  authenticatorAttachment?: string;
+  clientExtensionResults: AuthenticationExtensionsClientOutputs;
+  response: Response & { clientDataJSON: string };
+}
+
+export type PasskeyAssertion = PasskeyCredentialResponse<{
+  authenticatorData: string;
+  signature: string;
+  userHandle: string | null;
+}>;
+
+export type PasskeyAttestation = PasskeyCredentialResponse<{
+  attestationObject: string;
+  transports?: AuthenticatorTransport[];
+}>;
+
+export interface PasskeySummary {
+  id: string;
+  name: string;
+  createdAt: string;
+  lastUsedAt?: string | null;
 }
 
 export interface AuthCaptchaChallenge {
@@ -385,6 +418,16 @@ export interface AuthGateway {
   login(input: AuthLoginInput): Promise<AuthMfaChallenge>;
   register(input: AuthRegisterInput): Promise<AuthMfaChallenge>;
   verifyMfa(input: AuthMfaVerifyInput): Promise<AuthSession>;
+  beginPasskeyLogin(): Promise<PasskeyCeremony<PublicKeyCredentialRequestOptionsJSON>>;
+  verifyPasskeyLogin(input: { challengeToken: string; credential: PasskeyAssertion }): Promise<AuthSession>;
+  listPasskeys(): Promise<{ enabled: boolean; passkeys: PasskeySummary[] }>;
+  beginPasskeyRegistration(): Promise<PasskeyCeremony<PublicKeyCredentialCreationOptionsJSON>>;
+  verifyPasskeyRegistration(input: {
+    challengeToken: string;
+    credential: PasskeyAttestation;
+    name?: string;
+  }): Promise<PasskeySummary>;
+  deletePasskey(id: string): Promise<void>;
   refreshCaptcha(input: AuthCaptchaRefreshInput): Promise<AuthCaptchaChallenge>;
   requestPasswordReset(input: AuthPasswordResetRequestInput): Promise<void>;
   verifyPasswordResetToken(input: AuthPasswordResetVerifyInput): Promise<AuthPasswordResetVerifyResult>;

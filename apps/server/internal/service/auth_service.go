@@ -32,16 +32,20 @@ var (
 )
 
 type authTokenClaims struct {
-	TokenType     string `json:"tokenType"`
-	MFAValidated  bool   `json:"mfaValidated"`
-	MFAGeneration int64  `json:"mfaGeneration,omitempty"`
+	TokenType       string `json:"tokenType"`
+	MFAValidated    bool   `json:"mfaValidated"`
+	MFAGeneration   int64  `json:"mfaGeneration,omitempty"`
+	AuthenticatedAt int64  `json:"authTime,omitempty"`
+	AuthSessionID   string `json:"authSessionId,omitempty"`
 	jwt.RegisteredClaims
 }
 
 type parsedToken struct {
-	UserID        string
-	SessionID     string
-	MFAGeneration int64
+	UserID          string
+	SessionID       string
+	MFAGeneration   int64
+	AuthenticatedAt int64
+	AuthSessionID   string
 }
 
 type AuthUser struct {
@@ -282,12 +286,15 @@ func (s *AuthService) issueSessionTokens(ctx context.Context, user *models.User)
 	now := time.Now().UTC()
 	sessionID := strings.ToLower(ulid.Make().String())
 
-	accessToken, _, err := s.issueToken(user.UserID, sessionID, user.MFAGeneration, authTokenTypeAccess, s.accessTokenTTL)
+	proof := parsedToken{
+		UserID: user.UserID, SessionID: sessionID, MFAGeneration: user.MFAGeneration, AuthenticatedAt: now.Unix(), AuthSessionID: sessionID,
+	}
+	accessToken, _, err := s.issueToken(proof, authTokenTypeAccess, s.accessTokenTTL)
 	if err != nil {
 		return "", "", err
 	}
 
-	refreshToken, refreshExpiresAt, err := s.issueToken(user.UserID, sessionID, user.MFAGeneration, authTokenTypeRefresh, s.refreshTokenTTL)
+	refreshToken, refreshExpiresAt, err := s.issueToken(proof, authTokenTypeRefresh, s.refreshTokenTTL)
 	if err != nil {
 		return "", "", err
 	}
@@ -315,11 +322,13 @@ func (s *AuthService) rotateSessionTokens(
 	now := time.Now().UTC()
 	nextSessionID := strings.ToLower(ulid.Make().String())
 
-	nextAccessToken, _, err := s.issueToken(currentToken.UserID, nextSessionID, currentToken.MFAGeneration, authTokenTypeAccess, s.accessTokenTTL)
+	nextToken := currentToken
+	nextToken.SessionID = nextSessionID
+	nextAccessToken, _, err := s.issueToken(nextToken, authTokenTypeAccess, s.accessTokenTTL)
 	if err != nil {
 		return "", "", err
 	}
-	nextRefreshToken, nextExpiresAt, err := s.issueToken(currentToken.UserID, nextSessionID, currentToken.MFAGeneration, authTokenTypeRefresh, s.refreshTokenTTL)
+	nextRefreshToken, nextExpiresAt, err := s.issueToken(nextToken, authTokenTypeRefresh, s.refreshTokenTTL)
 	if err != nil {
 		return "", "", err
 	}
@@ -340,21 +349,21 @@ func (s *AuthService) rotateSessionTokens(
 }
 
 func (s *AuthService) issueToken(
-	userID string,
-	sessionID string,
-	mfaGeneration int64,
+	proof parsedToken,
 	tokenType string,
 	ttl time.Duration,
 ) (string, time.Time, error) {
 	now := time.Now().UTC()
 	expiresAt := now.Add(ttl)
 	claims := authTokenClaims{
-		TokenType:     tokenType,
-		MFAValidated:  true,
-		MFAGeneration: mfaGeneration,
+		TokenType:       tokenType,
+		MFAValidated:    true,
+		MFAGeneration:   proof.MFAGeneration,
+		AuthenticatedAt: proof.AuthenticatedAt,
+		AuthSessionID:   proof.AuthSessionID,
 		RegisteredClaims: jwt.RegisteredClaims{
-			ID:        sessionID,
-			Subject:   userID,
+			ID:        proof.SessionID,
+			Subject:   proof.UserID,
 			IssuedAt:  jwt.NewNumericDate(now),
 			NotBefore: jwt.NewNumericDate(now),
 			ExpiresAt: jwt.NewNumericDate(expiresAt),
@@ -393,9 +402,11 @@ func (s *AuthService) parseToken(rawToken string, expectedTokenType string) (par
 		return parsedToken{}, errors.New("token type mismatch")
 	}
 	return parsedToken{
-		UserID:        claims.Subject,
-		SessionID:     claims.ID,
-		MFAGeneration: claims.MFAGeneration,
+		UserID:          claims.Subject,
+		SessionID:       claims.ID,
+		MFAGeneration:   claims.MFAGeneration,
+		AuthenticatedAt: claims.AuthenticatedAt,
+		AuthSessionID:   claims.AuthSessionID,
 	}, nil
 }
 

@@ -503,8 +503,8 @@ export function AdminUsersPage({ currentUserID, dataGateway, onLogout }: AdminUs
       const confirmed = await confirm({
         title: `重置二次验证（${user.email}）`,
         description: isCurrentUser
-          ? "你将退出所有设备。下次登录时需要重新绑定 Google Authenticator。"
-          : "该用户将退出所有设备。下次登录时需要重新绑定 Google Authenticator。",
+          ? "你将退出所有设备，已绑定的 Passkey 将被移除。下次登录时需要重新绑定 Google Authenticator。"
+          : "该用户将退出所有设备，已绑定的 Passkey 将被移除。下次登录时需要重新绑定 Google Authenticator。",
         confirmText: "确认重置",
         tone: "danger"
       });

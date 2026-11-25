@@ -21,6 +21,7 @@
           </summary>
           <div class="nav-user-menu">
             <a href="{{ .WorkspaceURL }}?create=1" class="nav-user-menu-item">新建空间</a>
+            <a href="/admin/profile" class="nav-user-menu-item">个人设置</a>
             {{ if .CanAccessAdmin }}<a href="{{ .AdminURL }}" class="nav-user-menu-item">后台管理</a>{{ end }}
             <form method="post" action="{{ .LogoutURL }}">
               <button type="submit" class="nav-user-menu-item nav-user-menu-button">退出登录</button>

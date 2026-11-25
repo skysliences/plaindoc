@@ -429,6 +429,10 @@ func newRouter(
 			}
 		}
 		authLoginOrchestrator := service.NewAuthLoginOrchestrator(cfg.Auth.DefaultProvider, authProviders...)
+		passkeys, err := service.NewAuthPasskeyService(authService, repository.NewAuthPasskeyRepository(db), cfg.Auth.PasskeyOrigin)
+		if err != nil {
+			logger.Error("初始化 Passkey 服务失败", "error", err)
+		}
 		authHandler := handler.NewAuthHandler(
 			authService,
 			authRegistrationPolicyService,
@@ -436,6 +440,7 @@ func newRouter(
 			authRiskControlService,
 			passwordResetService,
 			cfg.JWT,
+			passkeys,
 		)
 
 		// 登录策略选项（登录页模式、provider 列表与注册开关）。
@@ -444,6 +449,12 @@ func newRouter(
 		api.POST("/auth/register", authHandler.Register)
 		api.POST("/auth/login", authHandler.Login)
 		api.POST("/auth/mfa/verify", authHandler.VerifyMFA)
+		api.POST("/auth/passkeys/login/options", authHandler.BeginPasskeyLogin)
+		api.POST("/auth/passkeys/login/verify", authHandler.VerifyPasskeyLogin)
+		api.GET("/auth/passkeys", authHandler.ListPasskeys)
+		api.POST("/auth/passkeys/register/options", authHandler.BeginPasskeyRegistration)
+		api.POST("/auth/passkeys/register/verify", authHandler.VerifyPasskeyRegistration)
+		api.DELETE("/auth/passkeys/:passkeyId", authHandler.DeletePasskey)
 		// 刷新验证码图片（登录/注册风控验证）。
 		api.POST("/auth/captcha/refresh", authHandler.RefreshCaptcha)
 		// refresh token 续签并执行轮换策略。

@@ -17,6 +17,7 @@ import (
 
 type authHandler struct {
 	authService                   *service.AuthService
+	passkeys                      *service.AuthPasskeyService
 	authLoginOrchestrator         *service.AuthLoginOrchestrator
 	authRegistrationPolicyService *service.AuthRegistrationPolicyService
 	authRiskControlService        *service.AuthRiskControlService
@@ -85,6 +86,7 @@ type authLoginProviderOptionResponse struct {
 
 type authLoginOptionsResponse struct {
 	LoginMode            string                            `json:"loginMode"`
+	PasskeyEnabled       bool                              `json:"passkeyEnabled"`
 	DefaultProviderID    string                            `json:"defaultProviderId"`
 	AllowUserRegister    bool                              `json:"allowUserRegister"`
 	PasswordResetEnabled bool                              `json:"passwordResetEnabled"`
@@ -237,6 +239,7 @@ func NewAuthHandler(
 	authRiskControlService *service.AuthRiskControlService,
 	passwordResetService *service.PasswordResetService,
 	jwtConfig config.JWTConfig,
+	passkeys *service.AuthPasskeyService,
 ) *authHandler {
 	if authLoginOrchestrator == nil {
 		authLoginOrchestrator = service.NewAuthLoginOrchestrator(
@@ -246,6 +249,7 @@ func NewAuthHandler(
 	}
 	return &authHandler{
 		authService:                   authService,
+		passkeys:                      passkeys,
 		authLoginOrchestrator:         authLoginOrchestrator,
 		authRegistrationPolicyService: authRegistrationPolicyService,
 		authRiskControlService:        authRiskControlService,
@@ -374,6 +378,7 @@ func (h *authHandler) Options(c *gin.Context) {
 
 	response.JSON(c, http.StatusOK, authLoginOptionsResponse{
 		LoginMode:            options.LoginMode,
+		PasskeyEnabled:       h.passkeysAvailable(c) && options.AllowsLocalLogin(),
 		DefaultProviderID:    options.DefaultProviderID,
 		AllowUserRegister:    options.AllowUserRegister,
 		PasswordResetEnabled: passwordResetEnabled,
@@ -482,6 +487,10 @@ func (h *authHandler) VerifyMFA(c *gin.Context) {
 		return
 	}
 
+	h.writeAuthSession(c, session)
+}
+
+func (h *authHandler) writeAuthSession(c *gin.Context, session service.AuthSession) {
 	h.writeSessionCookies(c, session.Token, session.RefreshToken)
 	response.JSON(c, http.StatusOK, authSessionResponse{
 		User: authUserResponse{

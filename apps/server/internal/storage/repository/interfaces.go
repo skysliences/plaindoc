@@ -43,6 +43,18 @@ type UserIdentityRepository interface {
 	ListByUserID(ctx context.Context, userID string) ([]models.UserIdentity, error)
 }
 
+// AuthPasskeyRepository persists enrolled credentials and one-use WebAuthn challenges.
+type AuthPasskeyRepository interface {
+	ListCredentials(ctx context.Context, userID string) ([]models.AuthPasskey, error)
+	GetCredential(ctx context.Context, credentialIDHash string) (*models.AuthPasskey, error)
+	CreateCredential(ctx context.Context, credential *models.AuthPasskey) error
+	UpdateCredential(ctx context.Context, passkeyID string, previousVersion int64, encryptedCredential string, usedAt time.Time) (bool, error)
+	DeleteCredential(ctx context.Context, userID, passkeyID string) (bool, error)
+	SaveChallenge(ctx context.Context, challenge *models.AuthPasskeyChallenge, now int64) error
+	GetChallenge(ctx context.Context, tokenHash, purpose, userID string, now int64) (*models.AuthPasskeyChallenge, error)
+	ConsumeChallenge(ctx context.Context, tokenHash, purpose, userID string, now int64) (bool, error)
+}
+
 // UpsertUserIdentityParams 用户外部身份写入参数。
 type UpsertUserIdentityParams struct {
 	UserID       string
@@ -93,6 +105,7 @@ type RotateUserSessionParams struct {
 // UserSessionRepository 会话仓储最小接口。
 type UserSessionRepository interface {
 	Create(ctx context.Context, session *models.UserSession) error
+	IsActive(ctx context.Context, userID, sessionID string, now time.Time) (bool, error)
 	Rotate(ctx context.Context, params RotateUserSessionParams) error
 	Revoke(ctx context.Context, userID string, sessionID string, revokedAt time.Time) error
 	RevokeAllByUserID(ctx context.Context, userID string, revokedAt time.Time) error

@@ -90,6 +90,7 @@
           </summary>
           <div class="yt-user-menu">
             <p class="yt-user-menu-name">{{ .CurrentUserName }}</p>
+            <a href="/admin/profile" class="yt-user-menu-item">个人设置</a>
             {{ if .CanAccessAdmin }}<a href="{{ .AdminURL }}" class="yt-user-menu-item">后台管理</a>{{ end }}
             <form method="post" action="{{ .LogoutURL }}">
               <button type="submit" class="yt-user-menu-item yt-user-menu-button">退出登录</button>

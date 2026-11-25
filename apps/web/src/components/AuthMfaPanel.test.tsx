@@ -4,8 +4,10 @@ import { AdminAuthPanel } from "./AdminAuthPanel";
 import { AuthPanel } from "./AuthPanel";
 
 describe("authentication with Google Authenticator", () => {
-  it("shows the BUGO wordmark and toggles password visibility without submitting login", async () => {
+  it("offers Passkey separately from the password flow and retains the public form controls", async () => {
     const onLogin = vi.fn().mockResolvedValue(null);
+    const onPasskeyLogin = vi.fn().mockResolvedValue(undefined);
+    const onVerifyMfa = vi.fn();
     render(<AuthPanel
       mode="login"
       switchPath="/register"
@@ -20,13 +22,19 @@ describe("authentication with Google Authenticator", () => {
       providerOptions={[]}
       authChallenge={null}
       onLogin={onLogin}
+      passkeyEnabled
+      onPasskeyLogin={onPasskeyLogin}
       onRegister={vi.fn()}
-      onVerifyMfa={vi.fn()}
+      onVerifyMfa={onVerifyMfa}
       onRefreshCaptcha={vi.fn()}
     />);
     expect(screen.getByRole("img", { name: "BUGO" })).toHaveAttribute("src", "/assets/favicon.png?v=bugo");
     expect(screen.getByRole("link", { name: "BUGO 首页" })).toHaveAttribute("href", "/");
     expect(screen.getByRole("link", { name: "忘记密码？" })).toHaveAttribute("href", "/forgot-password?redirect=%2Fr%2Fspace%2Fdocument");
+    fireEvent.click(screen.getByRole("button", { name: "使用 Passkey 登录" }));
+    expect(onPasskeyLogin).toHaveBeenCalledOnce();
+    expect(onLogin).not.toHaveBeenCalled();
+    expect(onVerifyMfa).not.toHaveBeenCalled();
     const password = screen.getByLabelText("密码", { exact: true });
     fireEvent.change(screen.getByLabelText("账号（邮箱或用户名）"), { target: { value: "reader@example.test" } });
     fireEvent.change(password, { target: { value: "example-password" } });
@@ -63,11 +71,14 @@ describe("authentication with Google Authenticator", () => {
       providerOptions={[]}
       authChallenge={null}
       onLogin={vi.fn()}
+      passkeyEnabled
+      onPasskeyLogin={vi.fn()}
       onRegister={onRegister}
       onVerifyMfa={onVerifyMfa}
       onRefreshCaptcha={vi.fn()}
     />);
 
+    expect(screen.queryByRole("button", { name: "使用 Passkey 登录" })).not.toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("昵称"), { target: { value: "文档用户" } });
     fireEvent.change(screen.getByLabelText("邮箱"), { target: { value: "reader@example.test" } });
     fireEvent.change(screen.getByLabelText("密码"), { target: { value: "example-password" } });
@@ -97,21 +108,28 @@ describe("authentication with Google Authenticator", () => {
   it("returns to admin credentials after a challenge expires", async () => {
     const onLogin = vi.fn().mockResolvedValue({ mode: "verify", challengeToken: "admin-challenge" });
     const onVerifyMfa = vi.fn().mockRejectedValue(Object.assign(new Error("验证请求已过期"), { code: 1018 }));
+    const onPasskeyLogin = vi.fn().mockResolvedValue(undefined);
     render(<AdminAuthPanel
       checking={false}
       submitting={false}
       errorMessage={null}
       authChallenge={null}
       onLogin={onLogin}
+      passkeyEnabled
+      onPasskeyLogin={onPasskeyLogin}
       onVerifyMfa={onVerifyMfa}
       onRefreshCaptcha={vi.fn()}
     />);
 
-    fireEvent.change(screen.getByLabelText("邮箱"), { target: { value: "admin@example.test" } });
+    fireEvent.click(screen.getByRole("button", { name: "使用 Passkey 登录" }));
+    expect(onPasskeyLogin).toHaveBeenCalledOnce();
+    expect(onLogin).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByLabelText("账号（邮箱或用户名）"), { target: { value: "admin-user" } });
     fireEvent.change(screen.getByLabelText("密码"), { target: { value: "example-password" } });
     fireEvent.click(screen.getByRole("button", { name: "登录管理后台" }));
 
     expect(await screen.findByRole("heading", { name: "输入动态验证码" })).toBeVisible();
+    expect(onLogin).toHaveBeenCalledWith(expect.objectContaining({ email: "admin-user" }));
     expect(screen.queryByText("手动设置密钥")).not.toBeInTheDocument();
     expect(onVerifyMfa).not.toHaveBeenCalled();
     const input = screen.getByRole("textbox", { name: "6 位动态验证码" });

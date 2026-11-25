@@ -156,6 +156,15 @@
   background: var(--color-slate-800);
 }
 
+.site-auth-page .site-auth-passkey {
+  min-height: 48px;
+  width: 100%;
+  border-radius: 10px;
+  font-family: inherit;
+  font-size: 15px;
+  font-weight: 650;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .site-auth-page :is(input, button) {
     transition: none;

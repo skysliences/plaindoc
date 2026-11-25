@@ -52,6 +52,7 @@ type JWTConfig struct {
 type AuthConfig struct {
 	DefaultProvider string
 	LDAP            LDAPConfig
+	PasskeyOrigin   string
 }
 
 // LDAPConfig LDAP provider 配置。
@@ -102,6 +103,7 @@ func Load() (Config, error) {
 		},
 		Auth: AuthConfig{
 			DefaultProvider: strings.ToLower(getenv("AUTH_DEFAULT_PROVIDER", "local")),
+			PasskeyOrigin:   getenv("AUTH_PASSKEY_ORIGIN", ""),
 			LDAP: LDAPConfig{
 				ProviderID:     getenv("AUTH_LDAP_PROVIDER_ID", "ldap"),
 				Host:           getenv("AUTH_LDAP_HOST", ""),
@@ -126,6 +128,14 @@ func Load() (Config, error) {
 			MaxResponseBytes: 16 * 1024 * 1024,
 			ProtocolVersion:  getenv("SSR_PROTOCOL_VERSION", "v1"),
 		},
+	}
+
+	passkeyOrigin, err := ParsePasskeyOrigin(cfg.Auth.PasskeyOrigin)
+	if err != nil {
+		return Config{}, err
+	}
+	if passkeyOrigin != nil {
+		cfg.Auth.PasskeyOrigin = passkeyOrigin.String()
 	}
 
 	logLevel, err := parseLogLevel(getenv("LOG_LEVEL", "info"))

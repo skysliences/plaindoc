@@ -6,7 +6,7 @@
 
 ---
 
-本地登录支持完整邮箱或注册昵称。注册和修改昵称由数据库强制唯一（忽略英文大小写和首尾空格，已软删除账号仍保留其昵称）。含 @ 的输入按邮箱处理。昵称与邮箱共用登录失败计数及验证码，均须完成 TOTP。
+本地密码登录支持完整邮箱或注册昵称。注册和修改昵称由数据库强制唯一（忽略英文大小写和首尾空格，已软删除账号仍保留其昵称）。含 @ 的输入按邮箱处理。昵称与邮箱共用登录失败计数及验证码，密码认证后须完成 TOTP。
 
 工作区导入支持 CSV 工作表。单文件、文件夹与 ZIP 中的 CSV 均先转换为 XLSX，再使用既有 Excel 导入流程。普通数值可参与计算，前导零、超过 15 位的数字和公式样式的文本按原文保存。
 
@@ -169,6 +169,7 @@
 | `APP_ADDR` | `:8080` | `config.Load()` | `http.Server.Addr` | 服务监听地址。 |
 | `WEB_ORIGIN` | `http://localhost:3001` | `config.Load()` | `router`/handler | CORS 与默认页面链接构造。 |
 | `WEB_SAME_ORIGIN` | false | config.Load() | 首页与阅读页 | 同一服务托管前端时设为 true。登录、注册、编辑和登录返回使用站内路径，适用于同时通过内网 IP 和公网域名访问。 |
+| `AUTH_PASSKEY_ORIGIN` | 空 | config.Load() | Passkey 登录 | 设置为前端实际使用的完整来源，如 `https://docs.example.com`。本地开发使用 `http://localhost`，使用非默认端口时须写入端口。来源为空时关闭 Passkey。 |
 | `WEB_DIST_DIR` | `apps/web/dist` | `config.Load()` | `web_spa.go` | SPA 托管目录。 |
 | `DB_DRIVER` | `sqlite` | `config.Load()` | `storage.OpenDatabase` | 支持 sqlite/postgres/mysql。 |
 | `DB_DSN` | sqlite 本地 DSN | `config.Load()` | `storage.OpenDatabase` | 数据源连接串。 |
@@ -240,12 +241,29 @@
 
 1. 登录支持 `identifier + provider`，兼容旧 `email`。
 2. refresh token 使用服务端会话状态，支持旋转后旧 token 失效。
-3. 注册和登录的第一步返回 `mfa` 挑战。通过 `/api/auth/mfa/verify` 提交 `challengeToken` 和六位动态码后才签发会话。注册在完成绑定时创建账号。已有账号、后台创建的账号和 LDAP 账号在首次通过密码认证且未绑定时进入设置流程。
+3. 注册和密码登录的第一步返回 `mfa` 挑战。通过 `/api/auth/mfa/verify` 提交 `challengeToken` 和六位动态码后才签发会话。注册在完成绑定时创建账号。已有账号、后台创建的账号和 LDAP 账号在首次通过密码认证且未绑定时进入设置流程。
 4. TOTP 密钥和待验证挑战加密保存在数据库中，迁移 0039 和 0040 覆盖 SQLite、MySQL 和 PostgreSQL。部署实例使用同一 `JWT_SECRET` 解密已绑定的密钥。同一个账号在挑战有效期内共享动态码失败次数，已使用的时间步不能重放。会话携带二次验证标记，升级后已有会话需重新登录。
 5. 平台管理员用 `PUT /api/admin/users/:userId/login-ips` 保存账号的 `ipAddresses`，请求需要绑定到该用户的 `user.update_login_ips` 一次性 operation token，更新会写入审计。白名单支持多个独立 IPv4 或 IPv6 地址，空数组表示不限制。
 6. 登录、二次验证、刷新会话和识别已登录身份时按请求来源 IP 校验白名单。经过反向代理的部署通过 `GIN_TRUSTED_PROXIES` 配置受信代理范围，由代理通过 `X-Forwarded-For` 或 `X-Real-IP` 转发真实客户端地址。
-7. 平台管理员用 `POST /api/admin/users/:userId/reset-mfa` 重置指定账号的 Google Authenticator 绑定。请求需要绑定到该用户的 `user.reset_mfa` 一次性 operation token，重置会写入审计。重置后原有会话和待验证挑战失效。账号下次通过密码认证后需要完成新的绑定，登录 IP 白名单继续生效。
+7. 平台管理员用 `POST /api/admin/users/:userId/reset-mfa` 重置指定账号的 Google Authenticator 绑定。请求需要绑定到该用户的 `user.reset_mfa` 一次性 operation token，重置会写入审计。重置会吊销原有会话，使待验证挑战失效并删除已绑定的 Passkey。账号下次通过密码认证后需要重新绑定 Google Authenticator，登录 IP 白名单继续生效。
 8. 迁移 0041 为用户增加二次验证版本。重置绑定时递增版本，使该账号此前签发的登录令牌在重新绑定后仍然失效。SQLite、MySQL 和 PostgreSQL 的迁移脚本都提供该字段。
+
+#### Passkey 接口
+
+| 接口 | 请求和响应 |
+| --- | --- |
+| `GET /api/auth/options` | 返回 `passkeyEnabled`，供登录页决定是否提供 Passkey 入口。 |
+| `POST /api/auth/passkeys/login/options` | 接收 `{}`，返回 `{ challengeToken, publicKey }`。浏览器使用可发现凭据选择账号。 |
+| `POST /api/auth/passkeys/login/verify` | 接收 `{ challengeToken, credential }`。通过签名、用户验证和账号策略校验后返回标准会话并设置现有会话 Cookie。 |
+| `GET /api/auth/passkeys` | 返回当前用户的 `{ enabled, passkeys }`。列表项包含 ID、名称、创建时间和最近一次使用时间。 |
+| `POST /api/auth/passkeys/register/options` | 接收 `{}`，返回 `{ challengeToken, publicKey }`。仅开放给十分钟内完成认证的会话。 |
+| `POST /api/auth/passkeys/register/verify` | 接收 `{ challengeToken, credential, name? }`，验证通过后返回新增的 Passkey。 |
+| `DELETE /api/auth/passkeys/:passkeyId` | 删除当前用户的指定凭据。 |
+
+- Passkey 使用 WebAuthn。站点限制以 `AUTH_PASSKEY_ORIGIN` 为准，RP ID 取配置来源的主机名。写入及验证要求匹配的请求 `Origin`，WebAuthn 响应同时校验客户端来源和 RP ID。迁移 0044 在 SQLite、MySQL 和 PostgreSQL 中创建凭据及短期挑战表。凭据由服务端使用 `JWT_SECRET` 派生密钥加密。
+- 绑定要求设备验证用户身份并生成可发现凭据。登录验证设备上的用户操作和用户身份，消费两分钟内的一次性挑战并校验账号状态与登录 IP 后签发会话。通过 Passkey 登录无需再提交 TOTP。匿名登录挑战受服务端实例级限流。
+- 站点仅使用 LDAP 登录时关闭 Passkey。具有本地密码的账号可在本地或混合登录模式下绑定并使用 Passkey，仅由 LDAP 管理的账号继续通过 LDAP 密码和 TOTP 登录。
+- 在 `apps/server` 执行 `go test ./internal/server -run '^TestRouter_AuthPasskey' -count=1`。SQLite 路由测试使用真实签名，覆盖登录会话、设备验证、来源校验、挑战重放、IP 白名单、凭据移除以及重置后的失效。
 
 ### 6.1.1 认证风控（验证码 + 临时封禁）
 

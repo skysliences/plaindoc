@@ -26,6 +26,17 @@ func (r *gormUserSessionRepository) Create(ctx context.Context, session *models.
 	return r.db.WithContext(ctx).Create(session).Error
 }
 
+func (r *gormUserSessionRepository) IsActive(ctx context.Context, userID, sessionID string, now time.Time) (bool, error) {
+	var count int64
+	err := r.db.WithContext(ctx).Model(&models.UserSession{}).
+		Where(models.UserSessionColumns.UserID+" = ?", userID).
+		Where(models.UserSessionColumns.SessionID+" = ?", sessionID).
+		Where(models.UserSessionColumns.RevokedAt+" IS NULL").
+		Where(models.UserSessionColumns.ExpiresAt+" > ?", now).
+		Count(&count).Error
+	return count == 1, err
+}
+
 func (r *gormUserSessionRepository) Rotate(ctx context.Context, params RotateUserSessionParams) error {
 	if r == nil || r.db == nil {
 		return fmt.Errorf("user session repository db is nil")

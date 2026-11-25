@@ -87,6 +87,8 @@ interface AdminAppProps {
   authChallenge: AuthCaptchaChallenge | null;
   dataGateway: DataGateway;
   onLogin: (input: AuthLoginInput) => Promise<AuthMfaChallenge | null>;
+  passkeyEnabled: boolean;
+  onPasskeyLogin: () => Promise<void>;
   onVerifyMfa: (input: AuthMfaVerifyInput) => Promise<void>;
   onRefreshCaptcha: (input: AuthCaptchaRefreshInput) => Promise<void>;
   onLogout: () => Promise<void>;
@@ -105,7 +107,7 @@ function buildAdminMenu(identity: AdminIdentity | null): AdminMenuItem[] {
     {
       key: "profile",
       label: "个人信息",
-      description: "维护昵称、头像与密码",
+      description: "维护昵称、头像和登录方式",
       path: "/admin/profile",
       icon: User
     },
@@ -556,6 +558,8 @@ export function AdminApp({
   authChallenge,
   dataGateway,
   onLogin,
+  passkeyEnabled,
+  onPasskeyLogin,
   onVerifyMfa,
   onRefreshCaptcha,
   onLogout
@@ -708,6 +712,8 @@ export function AdminApp({
         errorMessage={errorMessage}
         authChallenge={authChallenge}
         onLogin={onLogin}
+        passkeyEnabled={passkeyEnabled}
+        onPasskeyLogin={onPasskeyLogin}
         onVerifyMfa={onVerifyMfa}
         onRefreshCaptcha={onRefreshCaptcha}
       />

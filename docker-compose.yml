@@ -14,6 +14,7 @@ services:
       # 必须改成真实对外访问地址；如果你通过域名、HTTPS 或反向代理访问，
       # 这里不要保留 localhost，否则会影响 CORS、回调来源和分享/预览链路判断。
       WEB_ORIGIN: "http://localhost:8080"
+      AUTH_PASSKEY_ORIGIN: "${AUTH_PASSKEY_ORIGIN:-}"
       WEB_DIST_DIR: "/app/apps/web/dist"
       # 当前默认使用 SQLite，适合单机/单容器部署。
       # 如果后续需要多实例、高并发或共享数据库，建议切换到 PostgreSQL/MySQL。

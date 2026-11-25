@@ -1,4 +1,4 @@
-import { Eye, EyeOff, LoaderCircle } from "lucide-react";
+import { Eye, EyeOff, KeyRound, LoaderCircle } from "lucide-react";
 import type { FormEvent } from "react";
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import type {
@@ -34,6 +34,8 @@ interface AuthPanelProps {
   providerOptions: AuthLoginProviderOption[];
   authChallenge: AuthCaptchaChallenge | null;
   onLogin: (input: AuthLoginInput) => Promise<AuthMfaChallenge | null>;
+  passkeyEnabled: boolean;
+  onPasskeyLogin: () => Promise<void>;
   onRegister: (input: AuthRegisterInput) => Promise<AuthMfaChallenge | null>;
   onVerifyMfa: (input: AuthMfaVerifyInput) => Promise<void>;
   onRefreshCaptcha: (input: AuthCaptchaRefreshInput) => Promise<void>;
@@ -54,6 +56,8 @@ export function AuthPanel({
   providerOptions,
   authChallenge,
   onLogin,
+  passkeyEnabled,
+  onPasskeyLogin,
   onRegister,
   onVerifyMfa,
   onRefreshCaptcha
@@ -405,6 +409,19 @@ export function AuthPanel({
           {checking || submitting ? <LoaderCircle className="admin-auth-form__submit-loader" size={14} aria-hidden="true" /> : null}
           <span>{submitText}</span>
         </Button>
+
+        {mode === "login" && passkeyEnabled && (
+          <Button
+            type="button"
+            variant="outline"
+            className="site-auth-passkey"
+            disabled={checking || submitting || refreshingCaptcha}
+            onClick={() => void onPasskeyLogin()}
+          >
+            <KeyRound size={16} aria-hidden="true" />
+            使用 Passkey 登录
+          </Button>
+        )}
 
         {canSwitchToRegister ? (
           <p className="site-auth-switch">

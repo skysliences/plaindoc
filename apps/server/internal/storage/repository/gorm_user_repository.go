@@ -281,6 +281,10 @@ func (r *gormUserRepository) ResetMFA(ctx context.Context, userID string, audit 
 		if err := NewAuthMFARepository(tx).deleteChallengeBySubject(ctx, previousSubjectKey); err != nil {
 			return err
 		}
+		if err := tx.Where(models.AuthPasskeyColumns.UserID+" = ?", userID).
+			Delete(&models.AuthPasskey{}).Error; err != nil {
+			return err
+		}
 		if err := NewGormUserSessionRepository(tx).RevokeAllByUserID(ctx, userID, audit.CreatedAt); err != nil {
 			return err
 		}

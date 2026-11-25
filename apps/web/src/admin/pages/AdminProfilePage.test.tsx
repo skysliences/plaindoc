@@ -41,6 +41,7 @@ describe("AdminProfilePage", () => {
     const onProfileUpdated = vi.fn();
 
     const dataGateway = {
+      auth: { listPasskeys: vi.fn().mockResolvedValue({ enabled: false, passkeys: [] }) },
       admin: {
         getProfile,
         updateProfile,
@@ -81,6 +82,7 @@ describe("AdminProfilePage", () => {
     const uploadAvatar = vi.fn().mockResolvedValue(profile);
 
     const dataGateway = {
+      auth: { listPasskeys: vi.fn().mockResolvedValue({ enabled: false, passkeys: [] }) },
       admin: {
         getProfile,
         updateProfile,

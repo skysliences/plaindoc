@@ -86,6 +86,7 @@ import {
 } from "./components/ui/tooltip";
 import { AdminApp } from "./admin/AdminApp";
 import { ADMIN_LOGIN_ROUTE_PATH, ADMIN_ROUTE_BASE_PATH } from "./admin/routes";
+import { formatPasskeyError, getPasskeyAssertion, supportsPasskeys } from "./lib/passkey";
 import {
   AUTH_UNAUTHORIZED_EVENT,
   ConflictError,
@@ -195,6 +196,7 @@ const DEFAULT_AUTH_LOGIN_OPTIONS: AuthLoginOptions = {
   defaultProviderId: "local",
   allowUserRegister: true,
   passwordResetEnabled: false,
+  passkeyEnabled: false,
   providers: []
 };
 const DEFAULT_ONLY_OFFICE_CLIENT_CONFIG: OnlyOfficeClientConfig = {
@@ -3421,10 +3423,8 @@ export default function App() {
     [beginAuthMfa, dataGateway.auth]
   );
 
-  // 只有动态验证码验证成功才开启已登录的工作区。
-  const handleAuthMfaVerify = useCallback(
-    async (input: AuthMfaVerifyInput) => {
-      const session = await dataGateway.auth.verifyMfa(input);
+  const applyAuthSession = useCallback(
+    (session: AuthSession) => {
       if (!session.user) {
         throw new Error("服务端未返回用户信息");
       }
@@ -3433,8 +3433,30 @@ export default function App() {
       setSaveStatus("loading");
       setStatusMessage(`${route.kind === "register" ? "欢迎使用" : "欢迎回来"}，${session.user.name}`);
     },
-    [dataGateway.auth, route.kind, setSaveStatus]
+    [route.kind, setSaveStatus]
   );
+
+  const handleAuthMfaVerify = useCallback(
+    async (input: AuthMfaVerifyInput) => {
+      applyAuthSession(await dataGateway.auth.verifyMfa(input));
+    },
+    [applyAuthSession, dataGateway.auth]
+  );
+
+  const handleAuthPasskeyLogin = useCallback(async () => {
+    setIsAuthSubmitting(true);
+    setAuthErrorMessage(null);
+    try {
+      const { challengeToken, publicKey } = await dataGateway.auth.beginPasskeyLogin();
+      const credential = await getPasskeyAssertion(publicKey);
+      const session = await dataGateway.auth.verifyPasskeyLogin({ challengeToken, credential });
+      applyAuthSession(session);
+    } catch (error) {
+      setAuthErrorMessage(`Passkey 登录失败：${formatPasskeyError(error)}`);
+    } finally {
+      setIsAuthSubmitting(false);
+    }
+  }, [applyAuthSession, dataGateway.auth]);
 
   const handleAuthCaptchaRefresh = useCallback(
     async (input: AuthCaptchaRefreshInput) => {
@@ -3539,6 +3561,8 @@ export default function App() {
           authChallenge={authChallenge}
           dataGateway={dataGateway}
           onLogin={handleAuthLogin}
+          passkeyEnabled={authLoginOptions.passkeyEnabled && supportsPasskeys()}
+          onPasskeyLogin={handleAuthPasskeyLogin}
           onVerifyMfa={handleAuthMfaVerify}
           onRefreshCaptcha={handleAuthCaptchaRefresh}
           onLogout={handleAuthLogout}
@@ -3611,6 +3635,8 @@ export default function App() {
           providerOptions={authLoginOptions.providers}
           authChallenge={authChallenge}
           onLogin={handleAuthLogin}
+          passkeyEnabled={authLoginOptions.passkeyEnabled && supportsPasskeys()}
+          onPasskeyLogin={handleAuthPasskeyLogin}
           onRegister={handleAuthRegister}
           onVerifyMfa={handleAuthMfaVerify}
           onRefreshCaptcha={handleAuthCaptchaRefresh}

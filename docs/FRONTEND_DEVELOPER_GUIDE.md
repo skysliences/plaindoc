@@ -173,7 +173,8 @@ Markdown 编辑器的「一键排版」会整理全文标题、段落和列表�
 
 1. 基础实体：`User`、`Space`、`TreeNode`、`Document`、`DocumentRevision`。
 2. 认证协议：`AuthLoginInput`、`AuthMfaChallenge`、`AuthSession`、`AuthLoginOptions`。
-   - 登录、后台登录和注册复用 Google Authenticator 验证界面。设置挑战提供二维码和手动密钥，验证挑战只要求输入六位动态码。认证适配器在验证通过后保存会话。
+   - 站点和后台的密码登录与注册复用 Google Authenticator 验证界面。设置挑战提供二维码和手动密钥，验证挑战只要求输入六位动态码。认证适配器在验证通过后保存会话。
+   - 后端启用 Passkey 且浏览器支持 WebAuthn 时，站点和后台登录页提供「使用 Passkey 登录」。该入口供具有本地密码的账号使用。设备验证通过后，认证适配器按统一会话协议保存登录状态，页面按原登录回跳逻辑继续。
 3. 后台协议：`AdminIdentity`、`AdminUser`、`AdminSpace`、`AdminDocument`、`AdminTheme`、`AdminSystemConfig`、`AdminAudit*`。
 4. 错误模型：`ConflictError`（文档/配置版本冲突）。
 
@@ -454,7 +455,8 @@ ONLYOFFICE 相关字段约束：
 5. `AdminProfilePage` 对所有已登录用户可编辑，保存昵称、头像、密码都必须走 `dataGateway.admin`；不要再按管理员角色禁用表单按钮，角色只影响左侧菜单、空间管理页和分享中心行内动作能力。
 6. 后台概览读取各管理列表返回的 `pagination.total`。用户、空间和文档采用列表默认口径，计入正常和封禁记录。平台管理员可查看用户数和保留的审计记录总数，空间管理员可查看其授权范围内的空间和文档数。加载失败时提供重试。
 7. 平台管理员在「用户管理 → 登录 IP」为指定账号填写允许的 IPv4 和 IPv6 地址。每行一个地址，清空并保存即可解除限制。
-8. 平台管理员可在「用户管理」的账号操作中选择「重置二次验证」并确认。目标账号的现有会话会失效，下次登录需要重新绑定 Google Authenticator。
+8. 平台管理员可在「用户管理」的账号操作中选择「重置二次验证」并确认。目标账号的现有会话和已绑定的 Passkey 都会失效，下次密码登录需要重新绑定 Google Authenticator。
+9. 登录用户可从首页头像菜单的「个人设置」进入个人信息页，查看、添加和移除自己的 Passkey。添加凭据需在登录后十分钟内完成，设备验证使用浏览器原生 WebAuthn 提示。
 
 ### 首页与我的空间
 

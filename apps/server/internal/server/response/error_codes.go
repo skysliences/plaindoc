@@ -27,6 +27,13 @@ const (
 	CodeAuthMFAChallengeExpired    = "AUTH_MFA_CHALLENGE_EXPIRED"
 	CodeAuthMFACodeInvalid         = "AUTH_MFA_CODE_INVALID"
 	CodeLoginIPDenied              = "LOGIN_IP_DENIED"
+	CodeAuthPasskeyUnavailable     = "AUTH_PASSKEY_UNAVAILABLE"
+	CodeAuthPasskeyInvalid         = "AUTH_PASSKEY_INVALID"
+	CodeAuthPasskeyExpired         = "AUTH_PASSKEY_EXPIRED"
+	CodeAuthPasskeyRecentLogin     = "AUTH_PASSKEY_RECENT_LOGIN"
+	CodeAuthPasskeyAlreadyExists   = "AUTH_PASSKEY_ALREADY_EXISTS"
+	CodeAuthPasskeyNotFound        = "AUTH_PASSKEY_NOT_FOUND"
+	CodeAuthPasskeyBusy            = "AUTH_PASSKEY_BUSY"
 
 	// 2000 段：请求参数与输入校验。
 	CodeInvalidRequest            = "INVALID_REQUEST"
@@ -154,6 +161,13 @@ var errorCodeRegistry = map[string]int{
 	CodePasswordResetTokenConsumed: 1016,
 	CodePasswordResetUnsupported:   1017,
 	CodeAuthMFAChallengeExpired:    1018,
+	CodeAuthPasskeyUnavailable:     1021,
+	CodeAuthPasskeyInvalid:         1022,
+	CodeAuthPasskeyExpired:         1023,
+	CodeAuthPasskeyRecentLogin:     1024,
+	CodeAuthPasskeyAlreadyExists:   1025,
+	CodeAuthPasskeyNotFound:        1026,
+	CodeAuthPasskeyBusy:            1027,
 	CodeAuthMFACodeInvalid:         1019,
 	CodeLoginIPDenied:              1020,
 
