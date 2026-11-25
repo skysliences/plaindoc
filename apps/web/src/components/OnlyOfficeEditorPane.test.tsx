@@ -69,10 +69,14 @@ describe("OnlyOfficeEditorPane", () => {
     );
     expect(onStateChange).toHaveBeenCalledWith(
       expect.objectContaining({
-        status: "loading",
-        message: "正在初始化 ONLYOFFICE 文档..."
+        status: "opening",
+        message: "正在打开文档..."
       })
     );
+
+    // Native password dialogs need to receive pointer input before document readiness.
+    expect(screen.getByLabelText("Word · 季度计划")).not.toHaveClass("office-pane__editor--hidden");
+    expect(document.querySelector(".office-pane__placeholder")).toBeNull();
 
     const events = latestConfig?.events as Record<string, unknown>;
     expect(events).toBeTruthy();

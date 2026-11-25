@@ -2,7 +2,7 @@ import { AlertCircle, FileSpreadsheet, FileText, LoaderCircle } from "lucide-rea
 import { memo, useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import type { DocumentFormat, OnlyOfficeEditConfig } from "../data-access";
 
-type OnlyOfficeEditorRuntimeStatus = "loading" | "ready" | "dirty" | "error";
+type OnlyOfficeEditorRuntimeStatus = "loading" | "opening" | "ready" | "dirty" | "error";
 
 export interface OnlyOfficeEditorPaneState {
   status: OnlyOfficeEditorRuntimeStatus;
@@ -154,11 +154,12 @@ export const OnlyOfficeEditorPane = memo(function OnlyOfficeEditorPane({
           }
         );
 
-        editorInstanceRef.current = new DocEditor(containerId, runtimeConfig);
+        // The iframe may ask for a password before it emits onDocumentReady.
         publishState({
-          status: "loading",
-          message: "正在初始化 ONLYOFFICE 文档..."
+          status: "opening",
+          message: "正在打开文档..."
         });
+        editorInstanceRef.current = new DocEditor(containerId, runtimeConfig);
       } catch (error) {
         if (cancelled) {
           return;
@@ -190,7 +191,7 @@ export const OnlyOfficeEditorPane = memo(function OnlyOfficeEditorPane({
     publishState
   ]);
 
-  const isEditorReady = runtimeState.status === "ready" || runtimeState.status === "dirty";
+  const showPlaceholder = runtimeState.status === "loading" || runtimeState.status === "error";
   const titleText = resolveOnlyOfficeFormatLabel(documentFormat).trim() + resolveOnlyOfficeTitleSuffix(documentTitle);
 
   return (
@@ -201,10 +202,10 @@ export const OnlyOfficeEditorPane = memo(function OnlyOfficeEditorPane({
       <div className="office-pane__surface">
         <div
           id={containerId}
-          className={`office-pane__editor ${isEditorReady ? "" : "office-pane__editor--hidden"}`}
+          className={`office-pane__editor ${showPlaceholder ? "office-pane__editor--hidden" : ""}`}
           aria-label={titleText}
         />
-        {!isEditorReady ? (
+        {showPlaceholder ? (
           <div className={`office-pane__placeholder office-pane__placeholder--${runtimeState.status}`}>
             <div className="office-pane__placeholder-icon" aria-hidden="true">
               {resolveOnlyOfficePlaceholderIcon(documentFormat, runtimeState.status)}

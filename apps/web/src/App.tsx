@@ -3322,6 +3322,7 @@ export default function App() {
         case "dirty":
           setSaveStatus("ready");
           break;
+        case "opening":
         case "loading":
           setSaveStatus("loading");
           break;

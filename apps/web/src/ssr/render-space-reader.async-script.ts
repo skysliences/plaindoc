@@ -725,9 +725,10 @@ export const READER_ASYNC_ENHANCEMENT_SCRIPT = `(() => {
   };
 
   const setOfficePlaceholderState = (status, title, message) => {
+    const showEditor = status === "opening" || status === "ready";
     const editorNode = resolveOfficeEditorNode();
     if (editorNode instanceof HTMLElement) {
-      editorNode.classList.toggle(OFFICE_EDITOR_HIDDEN_CLASS, status !== "ready");
+      editorNode.classList.toggle(OFFICE_EDITOR_HIDDEN_CLASS, !showEditor);
     }
 
     const placeholderNode = resolveOfficePlaceholderNode();
@@ -736,8 +737,8 @@ export const READER_ASYNC_ENHANCEMENT_SCRIPT = `(() => {
     }
     // 不使用 hidden 属性，因为样式里的 display:flex 会覆盖 UA 默认的 [hidden]{display:none}。
     // 显式切换 display，避免“已就绪文案仍覆盖编辑器”的情况。
-    placeholderNode.style.display = status === "ready" ? "none" : "flex";
-    placeholderNode.setAttribute("aria-hidden", status === "ready" ? "true" : "false");
+    placeholderNode.style.display = showEditor ? "none" : "flex";
+    placeholderNode.setAttribute("aria-hidden", showEditor ? "true" : "false");
     placeholderNode.setAttribute("data-reader-office-status", status);
     placeholderNode.classList.toggle(OFFICE_PLACEHOLDER_ERROR_CLASS, status === "error");
 
@@ -1163,10 +1164,9 @@ export const READER_ASYNC_ENHANCEMENT_SCRIPT = `(() => {
         }
       );
 
-      editorNode.classList.add(OFFICE_EDITOR_HIDDEN_CLASS);
+      setOfficePlaceholderState("opening", officeTitle, "正在打开文档...");
       activeOnlyOfficeReader = new DocEditor(editorNode.id, runtimeConfig);
       scheduleOfficePaneViewportHeightSync();
-      setOfficePlaceholderState("loading", officeTitle, "正在初始化文档...");
     } catch (error) {
       if (currentSeq !== onlyOfficeReaderSeq) {
         return;
