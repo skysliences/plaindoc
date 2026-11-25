@@ -953,3 +953,5 @@ Worker 建议复用 `main.go` 现有后台循环模式（参考 `runDataRetentio
    高亮、typo、同义词、facets、复杂排序与性能优化。
 
 > 结论：按上述路径，全文检索可在不破坏当前分层与权限体系的前提下逐步上线，且支持可控切换与回滚。
+
+启用 ONLYOFFICE 时，导入器也接受扩展名为 .xlsx、含有 Office 文件加密流的复合文档，保留原始密文。打开密码由 ONLYOFFICE 在查看或编辑时询问。

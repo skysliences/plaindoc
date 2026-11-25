@@ -1444,7 +1444,8 @@ func (h *workspaceHandler) convertWorkspaceImportSource(
 			packageType = importDetectedTypeXLSX
 			fileName = strings.TrimSuffix(fileName, path.Ext(fileName)) + ".xlsx"
 		}
-		if !workspaceImportOfficePackageReadable(source.Content, packageType) {
+		encryptedWorkbook := runtimeState.onlyOfficeEnabled && packageType == importDetectedTypeXLSX && workspaceEncryptedWorkbook(source.Content)
+		if !encryptedWorkbook && !workspaceImportOfficePackageReadable(source.Content, packageType) {
 			return workspaceImportConversionResult{}, errWorkspaceImportUnsupportedType
 		}
 		format, mimeType := models.DocumentFormatDOCX, officeDocumentMIMEDOCX

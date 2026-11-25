@@ -17,6 +17,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/oklog/ulid/v2"
+	"github.com/richardlehane/mscfb"
 	unicodeencoding "golang.org/x/text/encoding/unicode"
 
 	"github.com/lifei6671/plaindoc/apps/server/internal/storage/models"
@@ -350,6 +351,30 @@ func workspaceImportPDFReadable(content []byte) bool {
 		head = head[:1024]
 	}
 	return bytes.Contains(head, []byte("%PDF-"))
+}
+
+// Password-encrypted OOXML stores the workbook in two root OLE streams.
+func workspaceEncryptedWorkbook(content []byte) bool {
+	if !bytes.HasPrefix(content, []byte{0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1}) {
+		return false
+	}
+	reader, err := mscfb.New(bytes.NewReader(content))
+	if err != nil {
+		return false
+	}
+	var info, payload bool
+	for _, entry := range reader.File {
+		if len(entry.Path) != 0 || entry.FileInfo().IsDir() {
+			continue
+		}
+		switch entry.Name {
+		case "EncryptionInfo":
+			info = entry.Size >= 8
+		case "EncryptedPackage":
+			payload = entry.Size > 8
+		}
+	}
+	return info && payload
 }
 
 func workspaceImportOfficePackageReadable(content []byte, detectedType string) bool {
