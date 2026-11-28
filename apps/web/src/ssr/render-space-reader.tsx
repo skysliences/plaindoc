@@ -380,7 +380,7 @@ function ReaderTree({ nodes, spaceId, activeDocId, linkBasePath, createUrl, dept
                 className={`${rowClassName} reader-tree__row--unsupported`}
                 data-reader-hook="tree-row"
                 data-reader-unsupported-file={title}
-                data-reader-original-download={node.importedOriginalDownloadUrl?.startsWith("/api/") ? node.importedOriginalDownloadUrl : undefined}
+                data-reader-original-download={node.importedOriginalDownloadUrl?.startsWith("/api/") || node.importedOriginalDownloadUrl?.startsWith("/r/") ? node.importedOriginalDownloadUrl : undefined}
                 aria-haspopup="dialog"
                 style={rowStyle}
               >

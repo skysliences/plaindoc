@@ -59,11 +59,21 @@ func TestAdminSpaceExportService_DocumentExportDenialBlocksJobAndDownload(t *tes
 	svc := newAllowExportService()
 	svc.exportDir = t.TempDir()
 	denied := true
+	locked := false
 	WithAdminSpaceExportDocumentDenialChecker(func(_ context.Context, spaceID, actorID string) (map[string]bool, error) {
 		if spaceID != "space-a" || actorID != "actor-user" {
 			t.Fatalf("unexpected export permission lookup: space=%q actor=%q", spaceID, actorID)
 		}
 		if denied {
+			return map[string]bool{"doc-a": true}, nil
+		}
+		return nil, nil
+	})(svc)
+	WithAdminSpaceExportLockedDocumentChecker(func(_ context.Context, spaceID string) (map[string]bool, error) {
+		if spaceID != "space-a" {
+			t.Fatalf("unexpected document lock lookup for %q", spaceID)
+		}
+		if locked {
 			return map[string]bool{"doc-a": true}, nil
 		}
 		return nil, nil
@@ -108,6 +118,14 @@ func TestAdminSpaceExportService_DocumentExportDenialBlocksJobAndDownload(t *tes
 		t.Fatalf("expected issued download token to be denied, got %v", err)
 	}
 	denied = false
+	locked = true
+	if _, err := svc.StartExport(ctx, input); !errors.Is(err, errcode.ErrAdminForbidden) {
+		t.Fatalf("expected a document lock to block whole-space export, got %v", err)
+	}
+	if _, err := svc.ConsumeDownloadToken(ctx, result.JobID, input.ActorUserID, initialToken); !errors.Is(err, errcode.ErrAdminSpaceExportDownloadForbidden) {
+		t.Fatalf("expected a new document lock to block an old archive, got %v", err)
+	}
+	locked = false
 	if _, err := svc.ConsumeDownloadToken(ctx, result.JobID, input.ActorUserID, initialToken); err != nil {
 		t.Fatalf("restoring export permission should allow the current token: %v", err)
 	}

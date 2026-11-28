@@ -31,6 +31,10 @@ func (h *readerPageHandler) CheckDocumentExportAccess(c *gin.Context) {
 	case !allowed:
 		writeDocumentExportForbidden(c)
 	default:
+		if _, err := h.authorizeDocumentPassword(c, authorizedDocumentID, viewer.UserID); err != nil {
+			writeReaderDocumentPasswordError(c, err)
+			return
+		}
 		if c.Request.Method == http.MethodPost {
 			recordDocumentActivity(c, h.activityRepo, viewer.UserID, authorizedDocumentID, "download")
 		}

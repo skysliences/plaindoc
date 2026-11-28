@@ -48,7 +48,14 @@ type imageHostingHandler struct {
 	imageHostingService    *service.ImageHostingService
 	documentAttachmentRepo repository.DocumentAttachmentRepository
 	visibilityService      *service.VisibilityService
+	documentPasswords      *service.DocumentPasswordService
+	canReadSharedAsset     func(*gin.Context, string) bool
 	localImageRootDir      string
+}
+
+func (h *imageHostingHandler) SetDocumentPasswords(passwords *service.DocumentPasswordService, canReadSharedAsset func(*gin.Context, string) bool) {
+	h.documentPasswords = passwords
+	h.canReadSharedAsset = canReadSharedAsset
 }
 
 type imageHostingClientConfigResponse struct {
@@ -478,6 +485,9 @@ func (h *imageHostingHandler) ServeLocalImage(c *gin.Context) {
 		response.ImageHostingFileNotFound(c)
 		return
 	}
+	if !h.allowLocalDocumentAsset(c, cleanPath) {
+		return
+	}
 
 	localRootDir := strings.TrimSpace(h.localImageRootDir)
 	if localRootDir == "" {
@@ -537,9 +547,41 @@ func (h *imageHostingHandler) ServeLocalImage(c *gin.Context) {
 		return
 	}
 
-	// 静态图片长期缓存，减少重复回源。
-	c.Header("Cache-Control", "public, max-age=31536000, immutable")
 	c.File(targetAbsPath)
+}
+
+func (h *imageHostingHandler) allowLocalDocumentAsset(c *gin.Context, objectKey string) bool {
+	c.Header("Cache-Control", "private, no-cache")
+	ctx := c.Request.Context()
+	documentIDs, err := h.documentPasswords.LockedDocumentIDsByLocalObjectKey(ctx, objectKey)
+	if err != nil {
+		setRequestErrmsg(c, err, "查询文件的文档密码状态失败")
+		c.Status(http.StatusInternalServerError)
+		return false
+	}
+	if len(documentIDs) == 0 {
+		return true
+	}
+
+	c.Header("Cache-Control", "private, no-store")
+	viewerUserID := ""
+	if token, ok := bearerTokenFromRequest(c); ok {
+		if session, err := h.authService.Me(ctx, token); err == nil {
+			viewerUserID = session.User.ID
+		}
+	}
+	for _, documentID := range documentIDs {
+		grant := documentUnlockGrant(c, documentID)
+		if grant == "" || h.documentPasswords.Check(ctx, documentID, viewerUserID, grant) != nil {
+			continue
+		}
+		if h.documentPasswords.AuthorizeRead(ctx, documentID, viewerUserID) == nil ||
+			(h.canReadSharedAsset != nil && h.canReadSharedAsset(c, documentID)) {
+			return true
+		}
+	}
+	c.Status(http.StatusForbidden)
+	return false
 }
 
 func (h *imageHostingHandler) requireAuthenticatedUser(c *gin.Context) (string, bool) {

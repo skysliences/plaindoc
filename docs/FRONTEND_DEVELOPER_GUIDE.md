@@ -215,6 +215,8 @@ ONLYOFFICE 相关字段约束：
 4. 若 `code=4002/4010` 或 HTTP `409` 且有 `latestDocument`，抛 `ConflictError`。
 5. `response.ok` 但 `JsonResult.code != 0` 同样视为业务失败。
 
+文档查看密码由编辑器工具栏的「文档锁设置」管理，界面根据 `GET /api/docs/:docId/lock` 返回的 `canManage` 显示入口。编辑器收到 `DocumentLockedError` 时显示解锁面板，验证成功后重新读取文档。同源解锁凭据由浏览器以 HttpOnly Cookie 携带。
+
 ### 6.3 认证失效事件链路
 
 1. 事件定义：`apps/web/src/data-access/auth-events.ts`（`plaindoc.auth.unauthorized`）。
@@ -385,6 +387,7 @@ ONLYOFFICE 相关字段约束：
 2. 使用 ONLYOFFICE 时，阅读页与分享页输出只读容器，由 `render-space-reader.async-script.ts` 挂载。未配置 ONLYOFFICE 时，已有 Word 和 Excel 文档走本地 HTML 阅读。
 3. Office 模式必须隐藏 Markdown 导出、PDF 打印、TOC 和滚动同步相关 UI。
 4. 只读配置由后端 `onlyoffice/view-config` 接口生成，前端不得自行拼接 token 或 Document Server URL。
+5. 页面上的文档查看密码校验先于 ONLYOFFICE 加载。通过设备或浏览器发起的阅读和分享访问，需在解锁表单中完成校验后才能加载正文及文档预览。
 
 ### 8.3.2 Mermaid 阅读页增强
 

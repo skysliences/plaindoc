@@ -1,4 +1,5 @@
 import { useCallback, useState } from "react";
+import { DocumentLockedError } from "../data-access";
 import type {
   CreateNodeResult,
   Document,
@@ -61,13 +62,13 @@ function containsNode(nodes: TreeNode[], nodeId: string): boolean {
 }
 
 // 根据节点 ID 查找节点快照：用于按类型决定默认命名文案。
-function findNodeById(nodes: TreeNode[], nodeId: string): TreeNode | null {
+function findNodeById(nodes: TreeNode[], nodeId: string, includeDocumentId = false): TreeNode | null {
   for (const node of nodes) {
-    if (node.id === nodeId) {
+    if (node.id === nodeId || (includeDocumentId && node.documentId === nodeId)) {
       return node;
     }
     if (node.children.length > 0) {
-      const childMatched = findNodeById(node.children, nodeId);
+      const childMatched = findNodeById(node.children, nodeId, includeDocumentId);
       if (childMatched) {
         return childMatched;
       }
@@ -100,6 +101,7 @@ export function useWorkspace(options: UseWorkspaceOptions): UseWorkspaceResult {
   const [activeDocumentIsPlainText, setActiveDocumentIsPlainText] = useState(false);
   const [activeDocumentImage, setActiveDocumentImage] = useState<{ url: string | null } | null>(null);
   const [activeDocId, setActiveDocId] = useState<string | null>(null);
+  const [lockedDocumentId, setLockedDocumentId] = useState<string | null>(null);
   const [activeDocumentFormat, setActiveDocumentFormat] =
     useState<DocumentFormat>(DEFAULT_DOCUMENT_FORMAT);
   const [activeDocumentTitle, setActiveDocumentTitle] = useState(initialDocumentTitle);
@@ -120,6 +122,7 @@ export function useWorkspace(options: UseWorkspaceOptions): UseWorkspaceResult {
     async (docId: string): Promise<Document> => {
       try {
         const document = await dataGateway.document.getDocument(docId);
+        setLockedDocumentId(null);
         setActiveDocId(document.id);
         setActiveDocumentCopyDenied(document.copyDenied === true);
         setActiveDocumentIsPlainText(document.importedFileKind === "text");
@@ -137,6 +140,9 @@ export function useWorkspace(options: UseWorkspaceOptions): UseWorkspaceResult {
         setWorkspaceErrorMessage(null);
         return document;
       } catch (error) {
+        if (error instanceof DocumentLockedError) {
+          setLockedDocumentId(error.documentId);
+        }
         setWorkspaceErrorMessage(formatError(error));
         throw error;
       }
@@ -178,7 +184,7 @@ export function useWorkspace(options: UseWorkspaceOptions): UseWorkspaceResult {
       setWorkspaceTree(tree);
 
       // 启动恢复场景优先使用上次文档；不存在时回退到首篇文档。
-      const preferredDocNode = preferredDocId ? findNodeById(tree, preferredDocId) : null;
+      const preferredDocNode = preferredDocId ? findNodeById(tree, preferredDocId, true) : null;
       let docId =
         preferredDocNode?.type === "doc" && preferredDocNode.importedFileKind !== "unsupported"
           ? preferredDocNode.documentId ?? preferredDocNode.id
@@ -389,6 +395,7 @@ export function useWorkspace(options: UseWorkspaceOptions): UseWorkspaceResult {
 
         // 极端兜底：若仍找不到文档，清空当前激活态避免残留脏 ID。
         setActiveDocId(null);
+        setLockedDocumentId(null);
         setActiveDocumentIsPlainText(false);
         setActiveDocumentImage(null);
         setActiveDocumentFormat(DEFAULT_DOCUMENT_FORMAT);
@@ -486,6 +493,7 @@ export function useWorkspace(options: UseWorkspaceOptions): UseWorkspaceResult {
         setActiveSpaceName(initialSpaceName);
         setWorkspaceTree([]);
         setActiveDocId(null);
+        setLockedDocumentId(null);
         setActiveDocumentIsPlainText(false);
         setActiveDocumentImage(null);
         setActiveDocumentFormat(DEFAULT_DOCUMENT_FORMAT);
@@ -510,6 +518,7 @@ export function useWorkspace(options: UseWorkspaceOptions): UseWorkspaceResult {
     canCreateWorkspaceNodes,
     workspaceTree,
     activeDocId,
+    lockedDocumentId,
     activeDocumentCopyDenied,
     activeDocumentIsPlainText,
     activeDocumentImage,
@@ -538,6 +547,7 @@ export function useWorkspace(options: UseWorkspaceOptions): UseWorkspaceResult {
     reloadTree,
     moveNode,
     deleteSpace,
+    setLockedDocumentId,
     setActiveSpaceName,
     setActiveDocumentFormat,
     setActiveDocumentTitle,

@@ -51,6 +51,7 @@ type workspaceHandler struct {
 	searchIndexService         *service.SearchIndexService
 	authService                *service.AuthService
 	visibilityService          *service.VisibilityService
+	documentPasswords          *service.DocumentPasswordService
 	imageHostingService        *service.ImageHostingService
 	onlyOfficeConfigService    *service.OnlyOfficeConfigService
 	officeHTMLRenderService    *service.OfficeHTMLRenderService

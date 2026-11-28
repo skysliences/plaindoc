@@ -375,6 +375,7 @@ type ReaderPageDocumentRecord struct {
 // ReaderPageTreeNodeRecord 阅读页目录树节点记录。
 type ReaderPageTreeNodeRecord struct {
 	ImportedFileKind   models.ImportedFileKind
+	PasswordProtected  bool
 	NodeID             string
 	DocumentID         *string
 	ReaderSlug         *string
@@ -1082,6 +1083,15 @@ type DocumentRepository interface {
 	SoftDelete(ctx context.Context, documentID string, deletedAt time.Time) (bool, error)
 	HardDelete(ctx context.Context, documentID string) (bool, error)
 	UpdateWithVersion(ctx context.Context, document *models.Document, baseVersion int) (bool, error)
+}
+
+// DocumentPasswordRepository persists document password state separately from document content.
+type DocumentPasswordRepository interface {
+	Get(ctx context.Context, documentID string) (*models.DocumentPassword, error)
+	Set(ctx context.Context, password *models.DocumentPassword) error
+	Delete(ctx context.Context, documentID string) error
+	LockedDocumentIDsBySpace(ctx context.Context, spaceID string) (map[string]bool, error)
+	LockedDocumentIDsByLocalObjectKey(ctx context.Context, objectKey string) ([]string, error)
 }
 
 // DocumentShareRepository 文档分享仓储接口。

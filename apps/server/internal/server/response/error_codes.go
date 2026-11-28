@@ -135,6 +135,9 @@ const (
 	CodeDocumentSharePasswordInvalid  = "DOCUMENT_SHARE_PASSWORD_INVALID"
 	CodeDocumentSharePasswordTooShort = "DOCUMENT_SHARE_PASSWORD_TOO_SHORT"
 	CodeDocumentShareAccessDenied     = "DOCUMENT_SHARE_ACCESS_DENIED"
+	CodeDocumentPasswordRequired      = "DOCUMENT_PASSWORD_REQUIRED"
+	CodeDocumentPasswordInvalid       = "DOCUMENT_PASSWORD_INVALID"
+	CodeDocumentPasswordRateLimited   = "DOCUMENT_PASSWORD_RATE_LIMITED"
 
 	// 9000 段：系统级错误。
 	CodeRequestTimeout = "REQUEST_TIMEOUT"
@@ -245,6 +248,9 @@ var errorCodeRegistry = map[string]int{
 	CodeSpaceAlreadyExists:          4011,
 	CodeDocumentIdentifierConflict:  4012,
 	CodeTemplateAlreadyExists:       4013,
+	CodeDocumentPasswordRequired:    4033,
+	CodeDocumentPasswordInvalid:     4034,
+	CodeDocumentPasswordRateLimited: 4035,
 
 	// 5000 段：业务约束。
 	CodeSpaceDeleted:                  5001,

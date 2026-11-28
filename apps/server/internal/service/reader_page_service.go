@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"net/url"
 	"strings"
 	"time"
 
@@ -119,25 +120,57 @@ func (s *ReaderPageService) ResolveLandingDocumentID(
 
 // ResolveDocumentExportAccess checks read access and export policy for the current reader route.
 func (s *ReaderPageService) ResolveDocumentExportAccess(ctx context.Context, spaceID, routeKey, viewerID string) (string, bool, error) {
-	documentID, err := s.resolveDocumentID(ctx, spaceID, routeKey)
+	documentID, err := s.ResolveDocumentReadAccess(ctx, spaceID, routeKey, viewerID)
 	if err != nil {
-		return "", false, err
-	}
-	row, err := s.loadDocumentRow(ctx, documentID)
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return "", false, ErrDocumentNotFound
-	}
-	if err != nil {
-		return "", false, err
-	}
-	if row.SpaceID != spaceID {
-		return "", false, ErrDocumentNotFound
-	}
-	if _, err := s.visibilityService.GetDocument(ctx, documentID, viewerID); err != nil {
 		return "", false, err
 	}
 	allowed, err := s.visibilityService.DocumentExportAllowed(ctx, documentID, viewerID)
 	return documentID, allowed, err
+}
+
+// ResolveDocumentReadAccess checks ordinary reader access before accepting an unlock form.
+func (s *ReaderPageService) ResolveDocumentReadAccess(ctx context.Context, spaceID, routeKey, viewerID string) (string, error) {
+	documentID, _, err := s.resolveDocumentInSpace(ctx, spaceID, routeKey)
+	if err != nil {
+		return "", err
+	}
+	if _, err := s.visibilityService.GetDocument(ctx, documentID, viewerID); err != nil {
+		return "", err
+	}
+	return documentID, nil
+}
+
+// ResolveImportedOriginalDownloadAccess checks ordinary read and export permissions for unpreviewable files.
+func (s *ReaderPageService) ResolveImportedOriginalDownloadAccess(ctx context.Context, spaceID, routeKey, viewerID string) (string, error) {
+	documentID, row, err := s.resolveDocumentInSpace(ctx, spaceID, routeKey)
+	if err != nil {
+		return "", err
+	}
+	if row.ImportedFileKind != models.ImportedFileKindUnsupported {
+		return "", ErrDocumentNotFound
+	}
+	if err := s.visibilityService.AuthorizeImportedOriginalDownload(ctx, documentID, viewerID); err != nil {
+		return "", err
+	}
+	return documentID, nil
+}
+
+func (s *ReaderPageService) resolveDocumentInSpace(ctx context.Context, spaceID, routeKey string) (string, repository.ReaderPageDocumentRecord, error) {
+	documentID, err := s.resolveDocumentID(ctx, spaceID, routeKey)
+	if err != nil {
+		return "", repository.ReaderPageDocumentRecord{}, err
+	}
+	row, err := s.loadDocumentRow(ctx, documentID)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return "", row, ErrDocumentNotFound
+	}
+	if err != nil {
+		return "", row, err
+	}
+	if row.SpaceID != spaceID {
+		return "", row, ErrDocumentNotFound
+	}
+	return documentID, row, nil
 }
 
 // BuildPage 按 space/doc/viewer 组装阅读页 SSR 输入视图。
@@ -449,8 +482,11 @@ func (s *ReaderPageService) loadTree(
 		if !ok {
 			continue
 		}
-		if node.ImportedFileKind == models.ImportedFileKindUnsupported && node.DocumentID != nil {
+		if node.ImportedFileKind == models.ImportedFileKindUnsupported && node.DocumentID != nil && urls[*node.DocumentID] != "" {
 			node.ImportedOriginalDownloadURL = urls[*node.DocumentID]
+			if row.PasswordProtected {
+				node.ImportedOriginalDownloadURL = "/r/" + url.PathEscape(spaceID) + "/" + url.PathEscape(*node.DocumentID) + "/unlock"
+			}
 		}
 		parentID := normalizeReaderOptionalString(row.ParentNodeID)
 		if parentID == nil {

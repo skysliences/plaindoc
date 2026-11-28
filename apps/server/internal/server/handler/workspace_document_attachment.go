@@ -768,6 +768,7 @@ func (h *workspaceHandler) CreateDocumentAttachmentAccessLink(c *gin.Context) {
 
 // ServeDocumentAttachmentByToken 通过签名链接下载或预览附件。
 func (h *workspaceHandler) ServeDocumentAttachmentByToken(c *gin.Context) {
+	c.Header("Cache-Control", "private, no-store")
 	if h == nil || h.documentAttachmentRepo == nil || h.visibilityService == nil || h.attachmentTokenService == nil {
 		setRequestErrmsgText(c, "初始化失败: handler or dependencies is nil")
 		response.InternalError(c)
@@ -815,6 +816,10 @@ func (h *workspaceHandler) ServeDocumentAttachmentByToken(c *gin.Context) {
 	if err := h.authorizeAttachmentLink(c.Request.Context(), claims.DocumentID, viewerUserID, claims.Purpose); err != nil {
 		setRequestErrmsg(c, err, "验证文档访问权限失败")
 		writeWorkspaceDocumentAccessError(c, err)
+		return
+	}
+	if err := h.documentPasswords.Check(c.Request.Context(), claims.DocumentID, viewerUserID, documentUnlockGrant(c, claims.DocumentID)); err != nil {
+		writeDocumentPasswordError(c, err)
 		return
 	}
 

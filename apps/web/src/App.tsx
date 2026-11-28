@@ -19,6 +19,7 @@ import {
   ListCollapse,
   ListOrdered,
   Link2,
+  LockKeyhole,
   LoaderCircle,
   Monitor,
   Minus,
@@ -61,6 +62,7 @@ import { AuthPanel } from "./components/AuthPanel";
 import { ForgotPasswordPanel } from "./components/ForgotPasswordPanel";
 import { EditorAccessErrorPage } from "./components/EditorAccessErrorPage";
 import { EditorLoadingPage } from "./components/EditorLoadingPage";
+import { DocumentLockSettings, DocumentUnlockPanel } from "./components/DocumentLockPanel";
 import { OnlyOfficeEditorPane, type OnlyOfficeEditorPaneState } from "./components/OnlyOfficeEditorPane";
 import { ResetPasswordPanel } from "./components/ResetPasswordPanel";
 import { ReaderCreateDocumentForm } from "./workspace/ReaderCreateDocumentForm";
@@ -90,6 +92,7 @@ import { formatPasskeyError, getPasskeyAssertion, supportsPasskeys } from "./lib
 import {
   AUTH_UNAUTHORIZED_EVENT,
   ConflictError,
+  DocumentLockedError,
   getDataGateway,
   type AuthCaptchaChallenge,
   type AuthCaptchaRefreshInput,
@@ -103,6 +106,7 @@ import {
   type CreateNodeResult,
   type DocumentAttachment,
   type DocumentFormat,
+  type DocumentLock,
   type ImportWorkspaceDocumentsInput,
   type ImportWorkspaceDocumentsResult,
   type OnlyOfficeEditConfig,
@@ -1002,6 +1006,7 @@ export default function App() {
     DEFAULT_AUTH_LOGIN_OPTIONS
   );
   const activeUser = authSession.user;
+  const activeUserId = activeUser?.id;
   // 工作区状态层：统一管理空间/目录树/文档加载，减少 App 根组件职责。
   const {
     activeSpaceId,
@@ -1017,6 +1022,7 @@ export default function App() {
     activeDocumentSourceFileName,
     activeDocumentContentVersion,
     activeDocId,
+    lockedDocumentId,
     content,
     baseVersion,
     lastSavedContent,
@@ -1030,6 +1036,7 @@ export default function App() {
     moveNode,
     reloadTree,
     openDocument,
+    setLockedDocumentId,
     setActiveDocumentFormat,
     setContent,
     setBaseVersion,
@@ -1048,6 +1055,22 @@ export default function App() {
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("loading");
   // 页头状态文案。
   const [statusMessage, setStatusMessage] = useState("初始化中...");
+  const documentLockTargetId = lockedDocumentId ?? activeDocId;
+  const [documentLockState, setDocumentLockState] = useState<{ documentId: string; userId: string; lock: DocumentLock } | null>(null);
+  const documentLock = documentLockState?.documentId === documentLockTargetId && documentLockState.userId === activeUserId
+    ? documentLockState.lock
+    : null;
+  const [documentLockSettingsId, setDocumentLockSettingsId] = useState<string | null>(null);
+  const lockedDocumentTitle = useMemo(() => {
+    if (!lockedDocumentId) return undefined;
+    const stack = [...workspaceTree];
+    while (stack.length) {
+      const node = stack.pop();
+      if (node?.documentId === lockedDocumentId) return node.title;
+      if (node) stack.push(...node.children);
+    }
+    return undefined;
+  }, [lockedDocumentId, workspaceTree]);
   // 当前可用主题列表：统一从数据层读取（local/http 均走 DataGateway）。
   const [previewThemes, setPreviewThemes] = useState([DEFAULT_PREVIEW_THEME_TEMPLATE]);
   // 主题资源加载态：用于首次进入编辑器时展示全屏 loading。
@@ -1132,6 +1155,7 @@ export default function App() {
   const [readerEditorExit, setReaderEditorExit] = useState<"save" | "close" | null>(null);
   // ONLYOFFICE 回写后延迟刷新文档元信息，避免与服务端 callback 写回竞争。
   const onlyOfficeMetadataRefreshTimerRef = useRef<number | null>(null);
+  const onlyOfficeDirtyDocumentIdRef = useRef<string | null>(null);
   // 追踪最新编辑内容：供异步保存回调判断“请求期间是否发生继续编辑”。
   const latestContentRef = useRef(content);
   // CodeMirror 实例引用：供顶部语法工具栏直接分发编辑命令。
@@ -1332,6 +1356,17 @@ export default function App() {
     }
     return false;
   }, [activeDocId, workspaceTree]);
+
+  useEffect(() => {
+    if (!activeUserId || !isEditorRoute || !documentLockTargetId) return;
+    let cancelled = false;
+    void dataGateway.document.getDocumentLock(documentLockTargetId).then((lock) => {
+      if (!cancelled) setDocumentLockState({ documentId: documentLockTargetId, userId: activeUserId, lock });
+    }).catch(() => {
+      if (!cancelled) setDocumentLockState(null);
+    });
+    return () => { cancelled = true; };
+  }, [activeUserId, dataGateway.document, documentLockTargetId, isEditorRoute]);
 
   // 启动时先校验会话，避免未登录就触发工作区加载请求。
   useEffect(() => {
@@ -2167,7 +2202,7 @@ export default function App() {
   }, [activeUser, dataGateway]);
 
   useEffect(() => {
-    if (!activeUser || !isEditorRoute || !activeDocId || !isActiveOfficeDocument) {
+    if (!activeUser || !isEditorRoute || !activeDocId || !isActiveOfficeDocument || lockedDocumentId) {
       startTransition(() => {
         setOnlyOfficeEditConfig(null);
         setIsOnlyOfficeEditConfigLoading(false);
@@ -2198,6 +2233,11 @@ export default function App() {
         if (cancelled) {
           return;
         }
+        if (error instanceof DocumentLockedError) {
+          setLockedDocumentId(error.documentId);
+          setSaveStatus("error");
+          return;
+        }
         const message = `获取 ONLYOFFICE 编辑配置失败：${formatError(error)}`;
         startTransition(() => {
           setOnlyOfficeEditConfig(null);
@@ -2225,7 +2265,9 @@ export default function App() {
     dataGateway.document,
     isActiveOfficeDocument,
     isEditorRoute,
-    onlyOfficeEditConfigReloadSignal
+    lockedDocumentId,
+    onlyOfficeEditConfigReloadSignal,
+    setLockedDocumentId
   ]);
 
   const extensions = useMemo(
@@ -2596,24 +2638,30 @@ export default function App() {
       setSaveStatus("loading");
       setStatusMessage("切换文档中...");
       setIsSpacePreviewOpen(false);
+      const syncRoute = (resolvedDocId: string) => {
+        const resolvedPath = activeSpaceId ? buildEditorRoutePath(activeSpaceId, resolvedDocId) : null;
+        if (resolvedPath && location.pathname !== resolvedPath) {
+          const query = new URLSearchParams();
+          if (editorEntry === "home" || isSpaceDocumentView) query.set("from", editorEntry ?? "");
+          if (focusEditor) query.set("compose", "1");
+          navigate({ pathname: resolvedPath, search: query.toString() });
+        } else if (pendingRouteDocumentIDRef.current?.docId === resolvedDocId) {
+          pendingRouteDocumentIDRef.current = null;
+        }
+      };
       try {
         const result = await openDocument(docId);
         setSaveStatus("ready");
         setStatusMessage(`已切换文档 v${result.version}`);
-        if (activeSpaceId) {
-          const resultPath = buildEditorRoutePath(activeSpaceId, result.id);
-          if (location.pathname !== resultPath) {
-            const query = new URLSearchParams();
-            if (editorEntry === "home" || isSpaceDocumentView) query.set("from", editorEntry ?? "");
-            if (focusEditor) query.set("compose", "1");
-            navigate({ pathname: resultPath, search: query.toString() });
-          } else if (pendingRouteDocumentIDRef.current?.docId === result.id) {
-            pendingRouteDocumentIDRef.current = null;
-          }
-        }
+        syncRoute(result.id);
       } catch (error) {
         pendingRouteDocumentIDRef.current = null;
         setSaveStatus("error");
+        if (error instanceof DocumentLockedError) {
+          setStatusMessage("文档已锁定");
+          syncRoute(error.documentId);
+          return;
+        }
         setStatusMessage(`切换文档失败：${formatError(error)}`);
         throw error;
       }
@@ -2638,6 +2686,13 @@ export default function App() {
 
     const syncWorkspaceByRoute = async () => {
       try {
+        if (lockedDocumentId && (!routeDocId || routeDocId === lockedDocumentId) &&
+          (!routeSpaceId || routeSpaceId === activeSpaceId)) return;
+        if (lockedDocumentId && routeDocId === activeDocId && routeSpaceId === activeSpaceId) {
+          setLockedDocumentId(null);
+          setSaveStatus("ready");
+          return;
+        }
         const pendingRouteDocument = pendingRouteDocumentIDRef.current;
         if (pendingRouteDocument) {
           const pendingElapsed = Date.now() - pendingRouteDocument.startedAt;
@@ -2709,6 +2764,11 @@ export default function App() {
         if (cancelled) {
           return;
         }
+        if (error instanceof DocumentLockedError) {
+          setSaveStatus("error");
+          setStatusMessage("文档已锁定");
+          return;
+        }
         const message = formatError(error);
         setSaveStatus("error");
         setStatusMessage(`加载失败：${message}`);
@@ -2733,13 +2793,15 @@ export default function App() {
     bootstrapWorkspace,
     isAuthChecking,
     isEditorRoute,
+    lockedDocumentId,
     location.pathname,
     navigate,
     location.search,
     routeDocExistsInTree,
     routeDocId,
     routeSpaceId,
-    editorAccessRetryCount
+    editorAccessRetryCount,
+    setLockedDocumentId
   ]);
 
   // 路由同步过程中若文档已就绪但仍停留在 loading，主动回收为 ready，避免自动保存被阻塞。
@@ -3137,6 +3199,10 @@ export default function App() {
           setStatusMessage(
             `检测到冲突：当前基线 v${baseline.version}，最新版本 v${error.latestDocument.version}`
           );
+        } else if (error instanceof DocumentLockedError) {
+          setLockedDocumentId(error.documentId);
+          setSaveStatus("error");
+          setStatusMessage("文档已锁定，请解锁后继续保存");
         } else {
           setSaveStatus("error");
           setStatusMessage(`保存失败：${formatError(error)}`);
@@ -3151,13 +3217,64 @@ export default function App() {
   }, [
     activeDocId, dataGateway.document, isTextEditor, readerEditorParentOrigin, setActiveDocumentContentVersion, setActiveDocumentFormat,
     setActiveDocumentSourceFileName, setActiveDocumentSourceMimeType, setActiveDocumentThemeId,
-    setActiveDocumentTitle, setBaseVersion, setContent, setLastSavedAt, setLastSavedContent
+    setActiveDocumentTitle, setBaseVersion, setContent, setLastSavedAt, setLastSavedContent, setLockedDocumentId
+  ]);
+
+  const reenterUnlockedDocument = useCallback(async (docId: string) => {
+    if (activeDocId === docId && content !== lastSavedContent) {
+      // 密码校验期间保留本页未提交的 Markdown 草稿。
+      setLockedDocumentId(null);
+      setStatusMessage("文档已解锁 · 有未保存的修改");
+    } else {
+      const document = await openDocument(docId);
+      setStatusMessage(`已加载文档 v${document.version}`);
+    }
+    setSaveStatus("ready");
+    if (activeSpaceId) {
+      const targetPath = buildEditorRoutePath(activeSpaceId, docId);
+      if (location.pathname !== targetPath) {
+        navigate({ pathname: targetPath, search: location.search }, { replace: true });
+      }
+    }
+  }, [activeDocId, activeSpaceId, content, lastSavedContent, location.pathname, location.search, navigate, openDocument, setLockedDocumentId]);
+
+  const handleUnlockDocument = useCallback(async (password: string) => {
+    if (!lockedDocumentId) return;
+    await dataGateway.document.unlockDocument(lockedDocumentId, password);
+    await reenterUnlockedDocument(lockedDocumentId);
+  }, [dataGateway.document, lockedDocumentId, reenterUnlockedDocument]);
+
+  const handleUpdateDocumentLock = useCallback(async (password: string | null) => {
+    if (!documentLockTargetId || !activeUserId) return;
+    if (!lockedDocumentId && onlyOfficeDirtyDocumentIdRef.current === documentLockTargetId) {
+      throw new Error("请先在 Office 编辑器中保存修改，再更新文档锁。");
+    }
+    if (!lockedDocumentId && isTextEditor && !(await saveMarkdownDocument())) {
+      throw new Error("当前修改尚未保存，请保存后再修改文档锁。");
+    }
+    const updated = await dataGateway.document.updateDocumentLock(documentLockTargetId, password);
+    setDocumentLockState({ documentId: documentLockTargetId, userId: activeUserId, lock: updated });
+    if (readerEditorParentOrigin) readerEditorHasSavedRef.current = true;
+    if (updated.locked) {
+      setLockedDocumentId(documentLockTargetId);
+      setSaveStatus("error");
+      setStatusMessage("文档已锁定");
+      toast.success("文档密码已保存");
+    } else {
+      toast.success("文档密码已移除");
+      if (lockedDocumentId === documentLockTargetId) {
+        await reenterUnlockedDocument(documentLockTargetId);
+      }
+    }
+  }, [
+    activeUserId, dataGateway.document, documentLockTargetId, isTextEditor, lockedDocumentId, readerEditorParentOrigin,
+    reenterUnlockedDocument, saveMarkdownDocument, setLockedDocumentId
   ]);
 
   // 阅读页内嵌与独立工作台共用自动保存，返回预览期间由退出流程处理保存。
   useEffect(() => {
     if (
-      readerEditorExit || !activeDocId || !isTextEditor || activeDocumentFormat !== "markdown" ||
+      readerEditorExit || lockedDocumentId || !activeDocId || !isTextEditor || activeDocumentFormat !== "markdown" ||
       content === lastSavedContent || saveStatus === "loading" ||
       saveStatus === "saving" || saveStatus === "conflict" || (readerEditorParentOrigin && saveStatus === "error")
     ) return;
@@ -3166,7 +3283,7 @@ export default function App() {
       if (!readerEditorClosingRef.current) void saveMarkdownDocument();
     }, AUTO_SAVE_DEBOUNCE_MS);
     return () => window.clearTimeout(timer);
-  }, [activeDocId, activeDocumentFormat, content, isTextEditor, lastSavedContent, readerEditorExit, readerEditorParentOrigin, saveMarkdownDocument, saveStatus]);
+  }, [activeDocId, activeDocumentFormat, content, isTextEditor, lastSavedContent, lockedDocumentId, readerEditorExit, readerEditorParentOrigin, saveMarkdownDocument, saveStatus]);
 
   async function handleSaveReaderDocument() {
     if (!readerEditorParentOrigin || readerEditorClosingRef.current || saveStatus === "loading" || saveStatus === "conflict") return;
@@ -3319,9 +3436,11 @@ export default function App() {
     (state: OnlyOfficeEditorPaneState) => {
       switch (state.status) {
         case "ready":
+          if (onlyOfficeDirtyDocumentIdRef.current === activeDocId) onlyOfficeDirtyDocumentIdRef.current = null;
           setSaveStatus("saved");
           break;
         case "dirty":
+          onlyOfficeDirtyDocumentIdRef.current = activeDocId;
           setSaveStatus("ready");
           break;
         case "opening":
@@ -3693,6 +3812,34 @@ export default function App() {
     return <WorkspaceHome gateway={dataGateway.workspace} />;
   }
 
+  const documentLockSettings = documentLockSettingsId && documentLockSettingsId === documentLockTargetId &&
+    documentLock?.canManage ? (
+      <DocumentLockSettings
+        title={lockedDocumentId ? lockedDocumentTitle : activeDocumentTitle}
+        locked={documentLock.locked}
+        onClose={() => setDocumentLockSettingsId(null)}
+        onUpdate={handleUpdateDocumentLock}
+      />
+    ) : null;
+
+  if (isEditorRoute && lockedDocumentId) {
+    return (
+      <>
+        <Toaster />
+        {confirmDialog}
+        <DocumentUnlockPanel
+          key={lockedDocumentId}
+          title={lockedDocumentTitle}
+          onUnlock={handleUnlockDocument}
+          backLabel={readerEditorParentOrigin ? "返回阅读" : "返回首页"}
+          onBack={readerEditorParentOrigin ? () => { void handleCloseReaderEditor(); } : backToHomepage}
+          onManage={documentLock?.canManage ? () => setDocumentLockSettingsId(lockedDocumentId) : undefined}
+        />
+        {documentLockSettings}
+      </>
+    );
+  }
+
   // 编辑器首次资源加载：先展示全屏 loading，待核心资源就绪后再渲染完整编辑器布局。
   if (shouldShowEditorLoadingPage) {
     return (
@@ -3965,6 +4112,11 @@ export default function App() {
             </>
           ) : null}
           {/* 历史版本入口：仅打开受控弹窗，列表数据延后到弹窗内部加载。 */}
+          {documentLock?.canManage && (
+            <EditorToolbarButton label="文档锁设置" onClick={() => setDocumentLockSettingsId(activeDocId)}>
+              <LockKeyhole size={15} />
+            </EditorToolbarButton>
+          )}
           {!isActiveImage && (
             <DocumentRevisionHistoryTrigger
               disabled={!isRevisionHistoryAvailable}
@@ -3993,6 +4145,7 @@ export default function App() {
       {customPreviewStyleText ? (
         <style id="plaindoc-preview-custom-style">{customPreviewStyleText}</style>
       ) : null}
+      {documentLockSettings}
       <DocumentRevisionHistoryDialog
         open={isRevisionHistoryDialogOpen}
         documentId={activeDocId}

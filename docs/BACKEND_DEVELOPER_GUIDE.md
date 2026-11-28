@@ -350,6 +350,14 @@
 19. `POST /api/spaces/:spaceId/imports`
 20. `GET /api/docs/:docId/imported-original`
 
+#### 文档查看密码
+
+1. `GET /api/docs/:docId/lock` 返回 `locked` 与 `canManage`。拥有写权限的文档创建者可用 `PUT /api/docs/:docId/lock` 设置或更换查看密码。历史文档没有创建者时，由拥有写权限的空间拥有者管理。请求体为 `{"password":"..."}`，传入 `{"password":null}` 移除密码。密码长度为 6 至 72 个 UTF-8 字节。
+2. `POST /api/docs/:docId/unlock` 接收 `{"password":"..."}`。阅读页和分享页提供同源解锁表单。服务先校验现有文档或分享权限，再校验查看密码。验证成功颁发有效期一小时的 HttpOnly Cookie，并绑定当前查看者、文档及密码代次。更换或移除密码之后，旧的解锁状态失效。
+3. 迁移 0045 为 SQLite、MySQL 和 PostgreSQL 创建 `document_passwords`。数据库保存 bcrypt 哈希和随机代次。部署实例使用同一 `JWT_SECRET` 验证解锁令牌。正文、历史版本、文件、应用托管的本地资源和 ONLYOFFICE 配置读取都遵循查看密码。锁定阅读页只返回解锁表单，启用禁止缓存策略。
+4. 已上锁文档暂时退出检索和站点地图。Bleve 候选在发回标题与摘要之前按数据库中的当前锁状态过滤。设置或移除密码时，同一事务会入队索引同步。空间内仍有上锁文档时，整空间导出与已有导出包的下载均暂停。
+5. 本地原始资源地址有上锁文档引用时，须通过其中一个关联文档的普通读权限与查看密码检查。另一篇文档引用同一个原始地址时，该地址仍受保护，按文档授权的附件入口可以继续读取自己有权访问的文件。已下载的副本和第三方公开资源由各自存储位置控制。
+
 工作区文件与文件夹导入：
 
 1. 使用现有工作区导入权限与 `multipart/form-data` 入口。可选字段 `folderManifest` 包含 `paths`（按顺序对应 `files`）与 `directories`（浏览器可提供的目录路径）。所有路径都包含同一个上传根目录，服务端校验路径与目标目录。省略 `folderManifest` 时使用原有单文件和压缩包导入流程。

@@ -29,6 +29,7 @@ export interface WorkspaceState {
   canCreateWorkspaceNodes: boolean;
   workspaceTree: TreeNode[];
   activeDocId: string | null;
+  lockedDocumentId: string | null;
   activeDocumentFormat: DocumentFormat;
   activeDocumentCopyDenied: boolean;
   activeDocumentIsPlainText: boolean;
@@ -102,6 +103,7 @@ export interface WorkspaceActions {
 
 // 工作区状态写入器：供保存链路复用，避免上层重复定义状态。
 export interface WorkspaceSetters {
+  setLockedDocumentId: Dispatch<SetStateAction<string | null>>;
   setActiveSpaceName: Dispatch<SetStateAction<string>>;
   setActiveDocumentFormat: Dispatch<SetStateAction<DocumentFormat>>;
   setActiveDocumentTitle: Dispatch<SetStateAction<string>>;

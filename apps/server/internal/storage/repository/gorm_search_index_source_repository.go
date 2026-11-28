@@ -135,7 +135,9 @@ func (r *gormSearchIndexSourceRepository) baseActiveDocumentsQuery(ctx context.C
 		Where(qualifiedColumn("s", models.SpaceColumns.DeletedAt)+" IS NULL").
 		Where(qualifiedColumn("d", models.DocumentColumns.Status)+" = ?", models.EntityStatusActive).
 		Where(qualifiedColumn("d", models.DocumentColumns.DeletedAt) + " IS NULL")
-	return filterSearchDocumentFormats(excludeHiddenWorkspaceNodes(query, "n"), "d", true)
+	query = excludeHiddenWorkspaceNodes(query, "n")
+	query = excludePasswordProtectedDocuments(query, "d")
+	return filterSearchDocumentFormats(query, "d", true)
 }
 
 func filterSearchDocumentFormats(query *gorm.DB, alias string, includeRenderedOffice bool) *gorm.DB {

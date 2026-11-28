@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/lifei6671/plaindoc/apps/server/internal/storage/models"
 	"github.com/lifei6671/plaindoc/apps/server/internal/storage/repository"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -122,7 +123,7 @@ func TestSearchProviders_RecheckCurrentReadAccess(t *testing.T) {
 		t.Fatalf("bleve upsert failed: %v", err)
 	}
 
-	// Leave the index unchanged while changing visibility, status and the document ACL.
+	// Leave the index unchanged while changing visibility, status, document ACL and password.
 	for _, statement := range []string{
 		`INSERT INTO space_admin_scopes(space_id, user_id) VALUES ('space-member', 'scoped-admin')`,
 		`INSERT INTO document_permissions(document_id, user_id, access_denied) VALUES
@@ -137,6 +138,11 @@ func TestSearchProviders_RecheckCurrentReadAccess(t *testing.T) {
 			t.Fatalf("prepare current access policy: %v", err)
 		}
 	}
+	if err := repository.NewGormDocumentPasswordRepository(db).Set(ctx, &models.DocumentPassword{
+		DocumentID: "doc-authenticated-authenticated", PasswordHash: "fixture-hash", Generation: "01k00000000000000000000001",
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	visibility := repository.NewGormSearchVisibilityRepository(db)
 	for _, provider := range []Provider{NewDatabaseProvider(db), bleve} {
@@ -144,14 +150,14 @@ func TestSearchProviders_RecheckCurrentReadAccess(t *testing.T) {
 			cases := []visibilityMatrixCase{
 				{name: "anonymous", expectedDoc: []string{"doc-public-member"}},
 				{name: "outsider", actorUserID: "outsider", expectedDoc: []string{
-					"doc-authenticated-authenticated", "doc-public-member",
+					"doc-public-member",
 				}},
 				{name: "scoped admin", actorUserID: "scoped-admin", expectedDoc: []string{
-					"doc-authenticated-public", "doc-authenticated-authenticated", "doc-public-member",
+					"doc-authenticated-public", "doc-public-member",
 					"doc-member-public", "doc-member-authenticated",
 				}},
 				{name: "owner", actorUserID: "owner-member", expectedDoc: []string{
-					"doc-authenticated-public", "doc-authenticated-authenticated", "doc-public-member",
+					"doc-authenticated-public", "doc-public-member",
 					"doc-member-public", "doc-member-authenticated", "doc-member-member",
 				}},
 			}
@@ -473,7 +479,7 @@ CREATE TABLE document_permissions (
 		return err
 	}
 
-	return nil
+	return db.AutoMigrate(&models.DocumentPassword{})
 }
 
 func seedVisibilityMatrixTestData(t *testing.T, db *gorm.DB) {

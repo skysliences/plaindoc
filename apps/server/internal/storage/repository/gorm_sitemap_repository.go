@@ -62,7 +62,8 @@ func (r *gormSitemapRepository) ListPublicDocuments(
 		Where(qualifiedColumn(documentAlias, models.DocumentColumns.Status)+" = ?", models.EntityStatusActive).
 		Where(qualifiedColumn(documentAlias, models.DocumentColumns.DeletedAt)+" IS NULL").
 		Where(qualifiedColumn(documentAlias, models.DocumentColumns.Format)+" = ?", models.DocumentFormatMarkdown)
-	if err := excludeHiddenWorkspaceNodes(query, nodeAlias).
+	query = excludeHiddenWorkspaceNodes(query, nodeAlias)
+	if err := excludePasswordProtectedDocuments(query, documentAlias).
 		Order(qualifiedColumn(spaceAlias, models.SpaceColumns.SpaceID) + " ASC, " + qualifiedColumn(documentAlias, models.DocumentColumns.DocumentID) + " ASC").
 		Find(&rows).Error; err != nil {
 		return nil, err

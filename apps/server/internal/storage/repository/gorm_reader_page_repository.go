@@ -231,8 +231,10 @@ func (r *gormReaderPageRepository) ListTreeNodesBySpaceID(
 			"n."+models.NodeColumns.Sort+" AS sort",
 			"d."+models.DocumentColumns.Visibility+" AS document_visibility",
 			"d."+models.DocumentColumns.Format+" AS document_format",
+			"CASE WHEN "+qualifiedColumn("dp", models.DocumentPasswordColumns.DocumentID)+" IS NULL THEN 0 ELSE 1 END AS password_protected",
 		).
 		Joins("LEFT JOIN "+tableName(models.Document{})+" AS d ON d."+models.DocumentColumns.NodeID+" = n."+models.NodeColumns.NodeID).
+		Joins("LEFT JOIN "+tableWithAlias(models.DocumentPassword{}, "dp")+" ON "+qualifiedColumn("dp", models.DocumentPasswordColumns.DocumentID)+" = "+qualifiedColumn("d", models.DocumentColumns.DocumentID)).
 		Where("n."+models.NodeColumns.SpaceID+" = ?", normalizedSpaceID).
 		Where(r.db.WithContext(ctx).Where(qualifiedColumn("d", models.DocumentColumns.DocumentID) + " IS NULL").Or(activeDocument)).
 		Order("CASE WHEN n." + models.NodeColumns.ParentNodeID + " IS NULL THEN 0 ELSE 1 END ASC").
@@ -254,6 +256,7 @@ func (r *gormReaderPageRepository) ListTreeNodesBySpaceID(
 			DocumentVisibility: trimReaderOptionalString(row.DocumentVisibility),
 			DocumentFormat:     normalizeOptionalDocumentFormat(row.DocumentFormat),
 			ImportedFileKind:   row.ImportedFileKind,
+			PasswordProtected:  row.PasswordProtected,
 		})
 	}
 	return result, nil

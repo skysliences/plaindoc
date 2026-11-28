@@ -29,6 +29,7 @@ import (
 type readerPageHandler struct {
 	activityRepo                 repository.AuditLogRepository
 	authService                  *service.AuthService
+	documentPasswords            *service.DocumentPasswordService
 	readerPageService            *service.ReaderPageService
 	dispatcher                   *pool.Dispatcher
 	renderCache                  *rendercache.Cache
@@ -87,11 +88,6 @@ type readerPageOfficeRenderingState struct {
 	IndependentRenderEnabled            bool `json:"independentRenderEnabled"`
 	FallbackToOnlyOfficeOnRenderFailure bool `json:"fallbackToOnlyOfficeOnRenderFailure"`
 }
-
-const (
-	readerPublicBrowserMaxAgeSeconds = 60
-	readerPublicBrowserSWRSeconds    = 120
-)
 
 // NewReaderPageHandler 创建阅读页 SSR 处理器。
 func NewReaderPageHandler(
@@ -320,6 +316,16 @@ func (h *readerPageHandler) Page(c *gin.Context) {
 		c.Redirect(http.StatusSeeOther, targetPath)
 		return
 	}
+	if _, err := h.authorizeDocumentPassword(c, viewModel.Document.ID, viewer.UserID); err != nil {
+		if errors.Is(err, service.ErrDocumentPasswordRequired) {
+			manageURL := h.documentPasswordManagementURL(c, spaceID, viewModel.Document.ID, viewer.UserID)
+			renderReaderDocumentUnlock(c, http.StatusOK, readerDocumentPath(spaceID, documentID)+"/unlock", manageURL, "")
+		} else {
+			h.logError("reader document password check failed", err, "document_id", viewModel.Document.ID)
+			h.renderFriendlyErrorPage(c, http.StatusInternalServerError, "加载失败", "暂时无法校验文档访问权限，请稍后再试。")
+		}
+		return
+	}
 
 	payload := readerPagePayload{
 		CopyDenied:            viewModel.CopyDenied,
@@ -387,6 +393,11 @@ func (h *readerPageHandler) GetOnlyOfficeViewConfig(c *gin.Context) {
 		return
 	}
 
+	lockGeneration, err := h.authorizeDocumentPassword(c, viewModel.Document.ID, viewer.UserID)
+	if err != nil {
+		writeReaderDocumentPasswordError(c, err)
+		return
+	}
 	configPayload, err := buildOnlyOfficeViewConfig(
 		c.Request.Context(),
 		h.onlyOfficeConfigService,
@@ -397,6 +408,7 @@ func (h *readerPageHandler) GetOnlyOfficeViewConfig(c *gin.Context) {
 		viewer.UserID,
 		viewer.Name,
 		false,
+		lockGeneration,
 	)
 	if err != nil {
 		h.logError("reader onlyoffice view config resolve failed", err, "space_id", spaceID, "document_id", documentID)
@@ -462,11 +474,17 @@ func (h *readerPageHandler) CreateOfficeSourceAccessLink(c *gin.Context) {
 		writeDocumentExportForbidden(c)
 		return
 	}
+	lockGeneration, err := h.authorizeDocumentPassword(c, viewModel.Document.ID, viewer.UserID)
+	if err != nil {
+		writeReaderDocumentPasswordError(c, err)
+		return
+	}
 	downloadURL, fileName, expiresAt, err := buildOfficeSourceAccessLink(
 		h.onlyOfficeTokenService,
 		viewModel.Document,
 		viewer.UserID,
 		false,
+		lockGeneration,
 	)
 	if err != nil {
 		h.logError("reader office source access link resolve failed", err, "space_id", spaceID, "document_id", documentID)
@@ -502,7 +520,7 @@ func (h *readerPageHandler) renderReaderPayload(
 	if payload.Access == nil && models.IsOfficeDocumentFormat(payload.Document.Format) {
 		h.prepareOfficeReaderPayload(c.Request.Context(), &payload)
 	}
-	applyReaderBrowserCacheHeaders(c, statusCode, payload, cacheable)
+	applyReaderBrowserCacheHeaders(c)
 
 	if h.dispatcher != nil {
 		renderPayload := payload
@@ -579,50 +597,12 @@ func (h *readerPageHandler) renderReaderPayload(
 	c.Data(statusCode, "text/html; charset=utf-8", []byte(buildReaderFallbackHTML(payload)))
 }
 
-func applyReaderBrowserCacheHeaders(
-	c *gin.Context,
-	statusCode int,
-	payload readerPagePayload,
-	cacheable bool,
-) {
+func applyReaderBrowserCacheHeaders(c *gin.Context) {
 	appendVaryHeader(c, "Authorization")
 	appendVaryHeader(c, "Cookie")
-	if isReaderBrowserCacheEligible(statusCode, payload, cacheable) {
-		c.Header(
-			"Cache-Control",
-			fmt.Sprintf(
-				"public, max-age=%d, stale-while-revalidate=%d",
-				readerPublicBrowserMaxAgeSeconds,
-				readerPublicBrowserSWRSeconds,
-			),
-		)
-		return
-	}
+	// Only reuse rendered HTML inside the server. Every browser request must recheck
+	// the document's current password, including requests for previously public pages.
 	c.Header("Cache-Control", "private, no-store, max-age=0")
-}
-
-func isReaderBrowserCacheEligible(
-	statusCode int,
-	payload readerPagePayload,
-	cacheable bool,
-) bool {
-	if !cacheable || statusCode != http.StatusOK {
-		return false
-	}
-	if payload.Viewer.Authenticated {
-		return false
-	}
-	if payload.Access != nil && strings.TrimSpace(payload.Access.Code) != "" {
-		return false
-	}
-	if strings.TrimSpace(payload.Document.ID) == "" {
-		return false
-	}
-	// 仅公开文档允许浏览器短缓存，降低权限变更后的可见性残留风险。
-	if payload.Document.Visibility != models.VisibilityPublic {
-		return false
-	}
-	return true
 }
 
 func (h *readerPageHandler) renderReaderPayloadByDispatcher(
@@ -1054,7 +1034,11 @@ func renderFallbackSpaceDirectory(nodes []service.ReaderTreeNodeViewModel) strin
 		if node.ImportedFileKind == models.ImportedFileKindUnsupported {
 			items.WriteString(`<li><details><summary>` + title + `</summary><p>文件无法打开</p>`)
 			if node.ImportedOriginalDownloadURL != "" {
-				items.WriteString(`<a href="` + template.HTMLEscapeString(node.ImportedOriginalDownloadURL) + `" download>下载原文件</a>`)
+				attributes := ""
+				if strings.HasPrefix(node.ImportedOriginalDownloadURL, "/api/") {
+					attributes = " download"
+				}
+				items.WriteString(`<a href="` + template.HTMLEscapeString(node.ImportedOriginalDownloadURL) + `"` + attributes + `>下载原文件</a>`)
 			}
 			items.WriteString(`</details></li>`)
 			continue

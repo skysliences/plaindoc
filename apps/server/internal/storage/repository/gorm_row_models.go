@@ -368,6 +368,7 @@ type readerPageDocumentRowDB struct {
 
 type readerPageTreeNodeRowDB struct {
 	ImportedFileKind   models.ImportedFileKind `gorm:"column:imported_file_kind"`
+	PasswordProtected  bool                    `gorm:"column:password_protected"`
 	NodeID             string                  `gorm:"column:node_id"`
 	DocumentID         *string                 `gorm:"column:document_id"`
 	ReaderSlug         *string                 `gorm:"column:reader_slug"`

@@ -180,6 +180,18 @@ export interface Document {
   visibility?: Visibility;
 }
 
+export interface DocumentLock {
+  locked: boolean;
+  canManage: boolean;
+}
+
+export class DocumentLockedError extends Error {
+  constructor(readonly documentId: string, message: string) {
+    super(message);
+    this.name = "DocumentLockedError";
+  }
+}
+
 export type DocumentRevisionFormat = "markdown" | "docx" | "xlsx" | "pdf";
 
 export interface DocumentRevisionEditorUser {
@@ -483,6 +495,9 @@ export interface WorkspaceGateway {
 export interface DocumentGateway {
   reportCopy?(docId: string): Promise<void>;
   getDocument(docId: string): Promise<Document>;
+  getDocumentLock(docId: string): Promise<DocumentLock>;
+  updateDocumentLock(docId: string, password: string | null): Promise<DocumentLock>;
+  unlockDocument(docId: string, password: string): Promise<void>;
   saveDocument(input: SaveDocumentInput): Promise<SaveDocumentResult>;
   getOnlyOfficeEditConfig(docId: string): Promise<OnlyOfficeEditConfig>;
   updateDocumentIdentifier(docId: string, identifier: string | null): Promise<UpdateDocumentIdentifierResult>;

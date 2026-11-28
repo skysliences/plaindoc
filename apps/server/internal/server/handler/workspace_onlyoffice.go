@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -96,6 +97,13 @@ func (h *workspaceHandler) GetOnlyOfficeEditConfig(c *gin.Context) {
 
 	contentVersion := normalizeWorkspaceContentVersion(document.ContentVersion, document.Version)
 	actorUserID := strings.TrimSpace(session.User.ID)
+	lockGeneration, err := h.documentPasswords.AuthorizedGeneration(
+		c.Request.Context(), documentID, actorUserID, documentUnlockGrant(c, documentID),
+	)
+	if err != nil {
+		writeDocumentPasswordError(c, err)
+		return
+	}
 	copyAllowed, err := h.visibilityService.DocumentCopyAllowed(c.Request.Context(), documentID, actorUserID)
 	if err != nil {
 		response.InternalError(c)
@@ -110,6 +118,7 @@ func (h *workspaceHandler) GetOnlyOfficeEditConfig(c *gin.Context) {
 		DocumentID:     document.DocumentID,
 		ContentVersion: contentVersion,
 		ActorUserID:    actorUserID,
+		LockGeneration: lockGeneration,
 		Purpose:        service.OnlyOfficeDocumentTokenPurposeSource,
 	})
 	if err != nil {
@@ -121,6 +130,7 @@ func (h *workspaceHandler) GetOnlyOfficeEditConfig(c *gin.Context) {
 		DocumentID:     document.DocumentID,
 		ContentVersion: contentVersion,
 		ActorUserID:    actorUserID,
+		LockGeneration: lockGeneration,
 		Purpose:        service.OnlyOfficeDocumentTokenPurposeCallback,
 	})
 	if err != nil {
@@ -150,7 +160,7 @@ func (h *workspaceHandler) GetOnlyOfficeEditConfig(c *gin.Context) {
 			"title":       fileName,
 			"url":         sourceURL,
 			"fileType":    officeDocumentFileExtension(document.Format),
-			"key":         buildOnlyOfficeDocumentKey(document.DocumentID, contentVersion),
+			"key":         buildOnlyOfficeDocumentKeyForLock(document.DocumentID, contentVersion, lockGeneration),
 			"permissions": map[string]any{"edit": true, "download": exportAllowed, "print": exportAllowed, "copy": copyAllowed},
 		},
 		"editorConfig": map[string]any{
@@ -184,6 +194,7 @@ func (h *workspaceHandler) GetOnlyOfficeEditConfig(c *gin.Context) {
 
 // ServeOnlyOfficeSourceDocument 提供 ONLYOFFICE Document Server 拉取的正文文件。
 func (h *workspaceHandler) ServeOnlyOfficeSourceDocument(c *gin.Context) {
+	c.Header("Cache-Control", "private, no-store")
 	if h == nil || h.workspaceRepo == nil || h.documentAttachmentRepo == nil || h.onlyOfficeTokenService == nil {
 		c.Status(http.StatusInternalServerError)
 		return
@@ -200,6 +211,11 @@ func (h *workspaceHandler) ServeOnlyOfficeSourceDocument(c *gin.Context) {
 
 	documentID := strings.TrimSpace(c.Param("docId"))
 	if documentID == "" || documentID != claims.DocumentID {
+		c.Status(http.StatusForbidden)
+		return
+	}
+	currentGeneration, err := h.documentPasswords.Generation(c.Request.Context(), documentID)
+	if err != nil || currentGeneration != claims.LockGeneration {
 		c.Status(http.StatusForbidden)
 		return
 	}
@@ -309,6 +325,11 @@ func (h *workspaceHandler) HandleOnlyOfficeCallback(c *gin.Context) {
 		return
 	}
 
+	currentGeneration, err := h.documentPasswords.Generation(c.Request.Context(), documentID)
+	if err != nil || currentGeneration != claims.LockGeneration {
+		writeOnlyOfficeCallbackResult(c, 1)
+		return
+	}
 	current, err := h.workspaceRepo.GetDocumentByDocumentID(c.Request.Context(), documentID)
 	if err != nil || current == nil || !models.IsOfficeDocumentFormat(current.Format) {
 		writeOnlyOfficeCallbackResult(c, 0)
@@ -321,7 +342,7 @@ func (h *workspaceHandler) HandleOnlyOfficeCallback(c *gin.Context) {
 		return
 	}
 	if rawKey := strings.TrimSpace(req.Key); rawKey != "" &&
-		!matchesOnlyOfficeDocumentKey(rawKey, current.DocumentID, currentContentVersion) {
+		!matchesOnlyOfficeDocumentKeyForLock(rawKey, current.DocumentID, currentContentVersion, currentGeneration) {
 		writeOnlyOfficeCallbackResult(c, 0)
 		return
 	}
@@ -623,6 +644,23 @@ func buildOnlyOfficeDocumentKey(documentID string, contentVersion int) string {
 		normalizedContentVersion = 1
 	}
 	return fmt.Sprintf("%s-v%d", normalizedDocumentID, normalizedContentVersion)
+}
+
+func buildOnlyOfficeDocumentKeyForLock(documentID string, contentVersion int, generation string) string {
+	key := buildOnlyOfficeDocumentKey(documentID, contentVersion)
+	if generation == "" {
+		return key
+	}
+	// ONLYOFFICE must not reuse a cached editing session from a different lock generation.
+	hash := sha256.Sum256([]byte(key + ":" + generation))
+	return fmt.Sprintf("locked-%x", hash)
+}
+
+func matchesOnlyOfficeDocumentKeyForLock(rawKey string, documentID string, contentVersion int, generation string) bool {
+	if generation == "" {
+		return matchesOnlyOfficeDocumentKey(rawKey, documentID, contentVersion)
+	}
+	return rawKey == buildOnlyOfficeDocumentKeyForLock(documentID, contentVersion, generation)
 }
 
 func matchesOnlyOfficeDocumentKey(rawKey string, documentID string, contentVersion int) bool {

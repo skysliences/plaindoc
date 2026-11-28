@@ -40,6 +40,7 @@ func (r *gormDocumentImageAssetRepository) ListForAdmin(
 		Joins("JOIN " + tableName(models.Node{}) + " AS n ON n." + models.NodeColumns.NodeID + " = d." + models.DocumentColumns.NodeID).
 		Joins("JOIN " + tableName(models.Space{}) + " AS s ON s." + models.SpaceColumns.SpaceID + " = n." + models.NodeColumns.SpaceID).
 		Joins("JOIN " + tableName(models.User{}) + " AS uo ON uo." + models.UserColumns.UserID + " = s." + models.SpaceColumns.OwnerUserID)
+	baseQuery = excludePasswordProtectedDocuments(baseQuery, "d")
 
 	if params.RestrictToScopes {
 		actorUserID := strings.TrimSpace(params.ActorUserID)

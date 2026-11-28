@@ -39,6 +39,7 @@ func buildOnlyOfficeViewConfig(
 	actorUserID string,
 	actorDisplayName string,
 	shared bool,
+	lockGeneration string,
 ) (onlyOfficeDocumentConfigResponse, error) {
 	if onlyOfficeConfigService == nil || onlyOfficeTokenService == nil {
 		return onlyOfficeDocumentConfigResponse{}, errors.New("onlyoffice view config dependencies are nil")
@@ -71,6 +72,7 @@ func buildOnlyOfficeViewConfig(
 		ContentVersion: contentVersion,
 		ActorUserID:    normalizedActorUserID,
 		Shared:         shared,
+		LockGeneration: lockGeneration,
 		Purpose:        service.OnlyOfficeDocumentTokenPurposeSource,
 	})
 	if err != nil {
@@ -97,7 +99,7 @@ func buildOnlyOfficeViewConfig(
 			"title":    fileName,
 			"url":      sourceURL,
 			"fileType": officeDocumentFileExtension(documentFormat),
-			"key":      buildOnlyOfficeDocumentKey(strings.TrimSpace(document.ID), contentVersion),
+			"key":      buildOnlyOfficeDocumentKeyForLock(strings.TrimSpace(document.ID), contentVersion, lockGeneration),
 			"permissions": map[string]any{
 				"edit":     false,
 				"copy":     copyAllowed,
@@ -137,6 +139,7 @@ func buildOfficeSourceAccessLink(
 	document service.ReaderDocumentViewModel,
 	actorUserID string,
 	shared bool,
+	lockGeneration string,
 ) (string, string, time.Time, error) {
 	if onlyOfficeTokenService == nil {
 		return "", "", time.Time{}, errors.New("onlyoffice token service is nil")
@@ -157,6 +160,7 @@ func buildOfficeSourceAccessLink(
 		ContentVersion: contentVersion,
 		ActorUserID:    strings.TrimSpace(actorUserID),
 		Shared:         shared,
+		LockGeneration: lockGeneration,
 		Purpose:        service.OnlyOfficeDocumentTokenPurposeDownload,
 	})
 	if err != nil {

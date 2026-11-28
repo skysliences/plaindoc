@@ -229,6 +229,7 @@ func TestMigrateUpAndDown_SQLite(t *testing.T) {
 		"themes",
 		"document_templates",
 		"documents",
+		"document_passwords",
 		"document_revisions",
 		"document_file_revisions",
 		"admin_space_transfer_jobs",

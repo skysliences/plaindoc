@@ -135,6 +135,7 @@ func newRouter(
 	spaceRepo := repository.NewGormSpaceRepository(db, searchIndexJobRepo)
 	spaceCategoryRepo := repository.NewGormSpaceCategoryRepository(db)
 	documentRepo := repository.NewGormDocumentRepository(db, searchIndexJobRepo)
+	documentPasswordRepo := repository.NewGormDocumentPasswordRepository(db, searchIndexJobRepo)
 	documentShareRepo := repository.NewGormDocumentShareRepository(db)
 	documentAttachmentRepo := repository.NewGormDocumentAttachmentRepository(db)
 	documentImageAssetRepo := repository.NewGormDocumentImageAssetRepository(db)
@@ -209,6 +210,7 @@ func newRouter(
 	homeSearchService := service.NewHomeSearchService(searchQueryService, db)
 	// 可见性服务为“空间/文档可访问性”提供统一判定，避免 handler 里散落权限逻辑。
 	visibilityService := service.NewVisibilityService(spaceRepo, documentRepo, documentPermissionRepo, adminAccessService)
+	documentPasswords := service.NewDocumentPasswordService(documentPasswordRepo, visibilityService, cfg.JWT.Secret)
 	// 阅读页服务：聚合空间树与文档正文，供 SSR worker 渲染。
 	readerPageService := service.NewReaderPageService(db, visibilityService, documentAttachmentRepo)
 	// 阅读页 SSR 渲染缓存：仅缓存 Node 渲染结果，不缓存鉴权流程。
@@ -310,12 +312,16 @@ func newRouter(
 		searchIndexService,
 	)
 	workspaceHandler.SetCollaborationService(collaborationService)
+	documentPasswordHandler := handler.NewDocumentPasswordHandler(authService, documentPasswords, readerRenderCache)
+	workspaceHandler.SetDocumentPasswords(documentPasswords)
+	readerPageHandler.SetDocumentPasswords(documentPasswords)
 	workspaceDocumentShareHandler := handler.NewWorkspaceDocumentShareHandler(workspaceHandler, documentShareService)
 	documentSharePageHandler := handler.NewDocumentSharePageHandler(
 		documentShareService,
 		documentShareAccessTokenService,
 		readerPageHandler,
 	)
+	imageHostingHandler.SetDocumentPasswords(documentPasswords, documentSharePageHandler.CanReadLockedAsset)
 
 	// ---- SSR 页面与静态资源路由（不走 /api）----
 	// 模板静态资源（CSS/字体/图片）统一挂在 /assets。
@@ -344,12 +350,15 @@ func newRouter(
 	router.GET("/s/:spaceId/:docKey", documentSharePageHandler.Page)
 	// 分享密码校验接口：验证成功后写入免密 Cookie。
 	router.POST("/s/:spaceId/:docKey/verify", documentSharePageHandler.Verify)
+	router.POST("/s/:spaceId/:docKey/unlock", documentSharePageHandler.UnlockDocument)
 	// 空间阅读入口：自动跳转到首篇可读文档。
 	router.GET("/r/:spaceId", readerPageHandler.Space)
 	// 文档阅读页：优先走 SSR worker 渲染，失败时降级 HTML 壳页。
 	router.GET("/r/:spaceId/:docId", readerPageHandler.Page)
+	router.GET("/r/:spaceId/:docId/unlock", readerPageHandler.OpenImportedOriginal)
+	router.POST("/r/:spaceId/:docId/unlock", readerPageHandler.UnlockDocument)
 	// 文档附件预览页：页面内部按 purpose=preview 动态获取可访问链接。
-	router.GET("/preview/docs/:docId/attachments/:attachmentId", workspaceHandler.DocumentAttachmentPreviewPage)
+	router.GET("/preview/docs/:docId/attachments/:attachmentId", documentPasswordHandler.RequireUnlocked, workspaceHandler.DocumentAttachmentPreviewPage)
 	// 分享态附件预览页：页面内部按分享 access-link 获取可访问链接。
 	router.GET("/preview/shares/:spaceId/:docKey/attachments/:attachmentId", documentSharePageHandler.AttachmentPreviewPage)
 	// 页面层登出入口：与 SSR 页面交互保持一致。
@@ -513,11 +522,14 @@ func newRouter(
 		// 更新空间可见性（public/authenticated/member）。
 		api.PUT("/spaces/:spaceId/visibility", accessHandler.UpdateSpaceVisibility)
 		// 读取文档正文。
-		api.GET("/docs/:docId", accessHandler.GetDocument)
-		api.GET("/docs/:docId/imported-image", workspaceHandler.ServeImportedImage)
-		api.GET("/docs/:docId/imported-original", workspaceHandler.ServeImportedOriginal)
+		api.GET("/docs/:docId/lock", documentPasswordHandler.Status)
+		api.PUT("/docs/:docId/lock", documentPasswordHandler.Set)
+		api.POST("/docs/:docId/unlock", documentPasswordHandler.Unlock)
+		api.GET("/docs/:docId", documentPasswordHandler.RequireUnlocked, accessHandler.GetDocument)
+		api.GET("/docs/:docId/imported-image", documentPasswordHandler.RequireUnlocked, workspaceHandler.ServeImportedImage)
+		api.GET("/docs/:docId/imported-original", documentPasswordHandler.RequireUnlocked, workspaceHandler.ServeImportedOriginal)
 		api.GET("/shares/:spaceId/:docKey/imported-image", documentSharePageHandler.ImportedImageHandler(workspaceHandler))
-		api.POST("/docs/:docId/copy-events", accessHandler.ReportDocumentCopy)
+		api.POST("/docs/:docId/copy-events", documentPasswordHandler.RequireUnlocked, accessHandler.ReportDocumentCopy)
 		api.POST("/shares/:spaceId/:docKey/copy-events", documentSharePageHandler.ReportDocumentCopy)
 		// 阅读页 Office 文档只读配置。
 		api.GET("/reader/spaces/:spaceId/docs/:docId/onlyoffice/view-config", readerPageHandler.GetOnlyOfficeViewConfig)
@@ -526,13 +538,13 @@ func newRouter(
 		api.GET("/reader/spaces/:spaceId/docs/:docId/export-access", readerPageHandler.CheckDocumentExportAccess)
 		api.POST("/reader/spaces/:spaceId/docs/:docId/export-access", readerPageHandler.CheckDocumentExportAccess)
 		// 生成 ONLYOFFICE 编辑配置。
-		api.GET("/docs/:docId/onlyoffice/edit-config", workspaceHandler.GetOnlyOfficeEditConfig)
+		api.GET("/docs/:docId/onlyoffice/edit-config", documentPasswordHandler.RequireUnlocked, workspaceHandler.GetOnlyOfficeEditConfig)
 		// ONLYOFFICE Document Server 拉取正文文件。
 		api.GET("/docs/:docId/onlyoffice/source", workspaceHandler.ServeOnlyOfficeSourceDocument)
 		// ONLYOFFICE 保存回调。
 		api.POST("/docs/:docId/onlyoffice/callback", workspaceHandler.HandleOnlyOfficeCallback)
 		// 更新文档阅读标识（slug）。
-		api.PATCH("/docs/:docId/identifier", workspaceHandler.UpdateDocumentIdentifier)
+		api.PATCH("/docs/:docId/identifier", documentPasswordHandler.RequireUnlocked, workspaceHandler.UpdateDocumentIdentifier)
 		// 获取文档分享配置。
 		api.GET("/docs/:docId/share", workspaceDocumentShareHandler.GetDocumentShare)
 		// 创建或更新文档分享配置。
@@ -540,34 +552,36 @@ func newRouter(
 		// 取消文档分享。
 		api.DELETE("/docs/:docId/share", workspaceDocumentShareHandler.DeleteDocumentShare)
 		// 保存文档（包含版本冲突检测链路）。
-		api.PUT("/docs/:docId", workspaceHandler.SaveDocument)
+		api.PUT("/docs/:docId", documentPasswordHandler.RequireUnlocked, workspaceHandler.SaveDocument)
 		// 外链图片转存（编辑器粘贴链路前端失败时的服务端兜底）。
-		api.POST("/docs/:docId/remote-images/localize", workspaceHandler.LocalizeDocumentRemoteImages)
+		api.POST("/docs/:docId/remote-images/localize", documentPasswordHandler.RequireUnlocked, workspaceHandler.LocalizeDocumentRemoteImages)
 		// 获取文档历史修订列表。
-		api.GET("/docs/:docId/revisions", workspaceHandler.ListRevisions)
+		api.GET("/docs/:docId/revisions", documentPasswordHandler.RequireUnlocked, workspaceHandler.ListRevisions)
 		// 获取单个文档历史版本详情（Markdown 正文或 Office 文件版本元数据）。
-		api.GET("/docs/:docId/revisions/:revisionId", workspaceHandler.GetRevisionDetail)
+		api.GET("/docs/:docId/revisions/:revisionId", documentPasswordHandler.RequireUnlocked, workspaceHandler.GetRevisionDetail)
 		// 恢复到指定文档历史版本。
-		api.POST("/docs/:docId/revisions/:revisionId/restore", workspaceHandler.RestoreRevision)
+		api.POST("/docs/:docId/revisions/:revisionId/restore", documentPasswordHandler.RequireUnlocked, workspaceHandler.RestoreRevision)
 		// 文档附件列表。
-		api.GET("/docs/:docId/attachments", workspaceHandler.ListDocumentAttachments)
+		api.GET("/docs/:docId/attachments", documentPasswordHandler.RequireUnlocked, workspaceHandler.ListDocumentAttachments)
 		// 上传文档附件（支持 local/cloudflare-r2/aliyun-oss provider）。
-		api.POST("/docs/:docId/attachments", workspaceHandler.UploadDocumentAttachment)
+		api.POST("/docs/:docId/attachments", documentPasswordHandler.RequireUnlocked, workspaceHandler.UploadDocumentAttachment)
 		// 删除文档附件：
 		// physicalDelete=false => 逻辑删除；physicalDelete=true => 删除文件并硬删除记录。
-		api.DELETE("/docs/:docId/attachments/:attachmentId", workspaceHandler.DeleteDocumentAttachment)
+		api.DELETE("/docs/:docId/attachments/:attachmentId", documentPasswordHandler.RequireUnlocked, workspaceHandler.DeleteDocumentAttachment)
 		// 创建文档附件访问链接（下载/预览）。
 		api.POST(
 			"/docs/:docId/attachments/:attachmentId/access-link",
+			documentPasswordHandler.RequireUnlocked,
 			workspaceHandler.CreateDocumentAttachmentAccessLink,
 		)
 		// 文档附件直接下载入口（适配无脚本场景，如导出 PDF 内的静态链接）。
 		api.GET(
 			"/docs/:docId/attachments/:attachmentId/download",
+			documentPasswordHandler.RequireUnlocked,
 			workspaceHandler.RedirectDocumentAttachmentDownload,
 		)
 		// 更新文档可见性。
-		api.PUT("/docs/:docId/visibility", accessHandler.UpdateDocumentVisibility)
+		api.PUT("/docs/:docId/visibility", documentPasswordHandler.RequireUnlocked, accessHandler.UpdateDocumentVisibility)
 		// 使用签名链接下载或预览文档附件。
 		api.GET("/attachment-downloads/:token", workspaceHandler.ServeDocumentAttachmentByToken)
 		// 分享态附件访问链接（下载/预览）。
@@ -626,6 +640,7 @@ func newRouter(
 		adminSpaceExportOptions := []service.AdminSpaceExportServiceOption{
 			service.WithAdminSpaceExportRepositories(spaceRepo, workspaceRepo),
 			service.WithAdminSpaceExportDocumentDenialChecker(visibilityService.DocumentExportDenialsByViewer),
+			service.WithAdminSpaceExportLockedDocumentChecker(documentPasswordRepo.LockedDocumentIDsBySpace),
 			service.WithAdminSpaceExportAttachmentReader(documentAttachmentRepo),
 			service.WithAdminSpaceExportImageHostingService(imageHostingService),
 			service.WithAdminSpaceExportOfficeHTMLRenderer(officeHTMLRenderService),
@@ -1264,7 +1279,7 @@ func newRouter(
 		// 获取前台可用主题列表（通常仅返回已启用主题）。
 		api.GET("/themes", themeHandler.List)
 		// 为指定文档设置主题。
-		api.PUT("/docs/:docId/theme", workspaceHandler.RequireDocumentWrite, documentThemeHandler.UpdateTheme)
+		api.PUT("/docs/:docId/theme", documentPasswordHandler.RequireUnlocked, workspaceHandler.RequireDocumentWrite, documentThemeHandler.UpdateTheme)
 	}
 
 	// 统一未知路由错误协议，避免返回 HTML 默认页导致前端网关解析不一致。

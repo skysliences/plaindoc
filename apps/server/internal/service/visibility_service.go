@@ -450,6 +450,10 @@ func (s *VisibilityService) authorizeDocumentWrite(ctx context.Context, document
 	if document.Document.ImportedFileKind == models.ImportedFileKindUnsupported {
 		return ErrDocumentNotFound
 	}
+	return s.authorizeDocumentWriteAccess(ctx, document, userID)
+}
+
+func (s *VisibilityService) authorizeDocumentWriteAccess(ctx context.Context, document *repository.DocumentAccessInfo, userID string) error {
 	if userID == document.SpaceOwnerUserID {
 		return nil
 	}

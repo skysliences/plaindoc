@@ -33,6 +33,7 @@ type OnlyOfficeDocumentTokenClaims struct {
 	DocumentID     string                         `json:"documentId"`
 	ContentVersion int                            `json:"contentVersion"`
 	ActorUserID    string                         `json:"actorUserId,omitempty"`
+	LockGeneration string                         `json:"lockGeneration,omitempty"`
 	Shared         bool                           `json:"shared,omitempty"`
 	Purpose        OnlyOfficeDocumentTokenPurpose `json:"purpose"`
 	IssuedAtUnix   int64                          `json:"iat"`
@@ -44,6 +45,7 @@ type IssueOnlyOfficeDocumentTokenInput struct {
 	DocumentID     string
 	ContentVersion int
 	ActorUserID    string
+	LockGeneration string
 	Shared         bool
 	Purpose        OnlyOfficeDocumentTokenPurpose
 	TTL            time.Duration
@@ -94,12 +96,16 @@ func (s *OnlyOfficeDocumentTokenService) Issue(
 	if ttl <= 0 {
 		ttl = s.defaultTTL
 	}
+	if input.LockGeneration != "" && purpose != OnlyOfficeDocumentTokenPurposeCallback && ttl > DocumentUnlockCookieTTL {
+		ttl = DocumentUnlockCookieTTL
+	}
 	now := s.nowFn().UTC()
 	expiresAt := now.Add(ttl)
 	claims := OnlyOfficeDocumentTokenClaims{
 		DocumentID:     documentID,
 		ContentVersion: input.ContentVersion,
 		ActorUserID:    actorUserID,
+		LockGeneration: input.LockGeneration,
 		Shared:         input.Shared,
 		Purpose:        purpose,
 		IssuedAtUnix:   now.Unix(),

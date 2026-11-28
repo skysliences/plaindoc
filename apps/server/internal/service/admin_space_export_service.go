@@ -198,6 +198,13 @@ func WithAdminSpaceExportDocumentDenialChecker(check func(context.Context, strin
 	}
 }
 
+// WithAdminSpaceExportLockedDocumentChecker checks the current locks before making a whole-space export available.
+func WithAdminSpaceExportLockedDocumentChecker(check func(context.Context, string) (map[string]bool, error)) AdminSpaceExportServiceOption {
+	return func(s *AdminSpaceExportService) {
+		s.lockedDocumentsBySpace = check
+	}
+}
+
 // WithAdminSpaceExportRepositories 注入导出所需的空间与工作区读取仓储。
 func WithAdminSpaceExportRepositories(
 	spaceReader adminSpaceExportSpaceReader,
@@ -304,20 +311,21 @@ func NewAdminSpaceExportJobStore() *AdminSpaceExportJobStore {
 
 // AdminSpaceExportService 封装空间导出任务入口。
 type AdminSpaceExportService struct {
-	adminAccessService    *AdminAccessService
-	store                 *AdminSpaceExportJobStore
-	spaceReader           adminSpaceExportSpaceReader
-	workspaceReader       adminSpaceExportWorkspaceReader
-	attachmentReader      adminSpaceExportAttachmentReader
-	blobReader            adminSpaceExportBlobContentReader
-	officeHTMLRenderer    adminSpaceExportOfficeHTMLRenderer
-	readerHTMLRenderer    adminSpaceExportReaderHTMLRenderer
-	auditRecorder         adminAuditRecorder
-	transferJobRepo       repository.AdminSpaceTransferJobRepository
-	exportDir             string
-	nowFn                 func() time.Time
-	canExportSpace        func(context.Context, string, string) (bool, error)
-	documentExportDenials func(context.Context, string, string) (map[string]bool, error)
+	adminAccessService     *AdminAccessService
+	store                  *AdminSpaceExportJobStore
+	spaceReader            adminSpaceExportSpaceReader
+	workspaceReader        adminSpaceExportWorkspaceReader
+	attachmentReader       adminSpaceExportAttachmentReader
+	blobReader             adminSpaceExportBlobContentReader
+	officeHTMLRenderer     adminSpaceExportOfficeHTMLRenderer
+	readerHTMLRenderer     adminSpaceExportReaderHTMLRenderer
+	auditRecorder          adminAuditRecorder
+	transferJobRepo        repository.AdminSpaceTransferJobRepository
+	exportDir              string
+	nowFn                  func() time.Time
+	canExportSpace         func(context.Context, string, string) (bool, error)
+	documentExportDenials  func(context.Context, string, string) (map[string]bool, error)
+	lockedDocumentsBySpace func(context.Context, string) (map[string]bool, error)
 }
 
 // NewAdminSpaceExportService 创建空间导出服务。
@@ -464,8 +472,21 @@ func (s *AdminSpaceExportService) CanExportSpace(ctx context.Context, actorUserI
 		check = s.defaultCanExportSpace
 	}
 	allowed, err := check(ctx, actorUserID, spaceID)
-	if err != nil || !allowed || s.documentExportDenials == nil {
+	if err != nil || !allowed {
 		return allowed, err
+	}
+	return s.canExportDocuments(ctx, spaceID, actorUserID)
+}
+
+func (s *AdminSpaceExportService) canExportDocuments(ctx context.Context, spaceID, actorUserID string) (bool, error) {
+	if s.lockedDocumentsBySpace != nil {
+		lockedDocuments, err := s.lockedDocumentsBySpace(ctx, spaceID)
+		if err != nil || len(lockedDocuments) != 0 {
+			return false, err
+		}
+	}
+	if s.documentExportDenials == nil {
+		return true, nil
 	}
 	denials, err := s.documentExportDenials(ctx, spaceID, actorUserID)
 	return len(denials) == 0 && err == nil, err
@@ -580,14 +601,11 @@ func (s *AdminSpaceExportService) requireDocumentDownloadPermission(ctx context.
 	if job.ActorUserID != actorUserID {
 		return errcode.ErrAdminSpaceExportDownloadForbidden
 	}
-	if s.documentExportDenials == nil {
-		return nil
-	}
-	denials, err := s.documentExportDenials(ctx, job.SpaceID, actorUserID)
+	allowed, err := s.canExportDocuments(ctx, job.SpaceID, actorUserID)
 	if err != nil {
 		return err
 	}
-	if len(denials) > 0 {
+	if !allowed {
 		return errcode.ErrAdminSpaceExportDownloadForbidden
 	}
 	return nil
@@ -794,6 +812,17 @@ func (s *AdminSpaceExportService) runAdminSpaceExportJob(ctx context.Context, jo
 		s.store.Fail(jobID, "zip", err.Error(), failedAt)
 		s.persistExportTransferJobFailed(ctx, jobID, "zip", err.Error(), failedAt)
 		_ = s.recordExportAudit(ctx, job, adminSpaceExportAuditFailed, "zip", err.Error(), "", 0)
+		return
+	}
+	allowed, err := s.canExportDocuments(ctx, job.SpaceID, job.ActorUserID)
+	if err != nil || !allowed {
+		// Permissions can change while the worker builds the archive.
+		_ = os.Remove(filePath)
+		failedAt := s.now()
+		message := "导出权限已失效"
+		s.store.Fail(jobID, "permission", message, failedAt)
+		s.persistExportTransferJobFailed(ctx, jobID, "permission", message, failedAt)
+		_ = s.recordExportAudit(ctx, job, adminSpaceExportAuditFailed, "permission", message, "", 0)
 		return
 	}
 

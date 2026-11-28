@@ -2499,6 +2499,7 @@ export const READER_ASYNC_ENHANCEMENT_SCRIPT = `(() => {
             if (downloadAction instanceof HTMLAnchorElement) {
               const url = unsupportedFileButton.getAttribute("data-reader-original-download");
               downloadAction.hidden = !url;
+              downloadAction.toggleAttribute("download", !!url && url.startsWith("/api/"));
               if (url) downloadAction.setAttribute("href", url);
               else downloadAction.removeAttribute("href");
             }

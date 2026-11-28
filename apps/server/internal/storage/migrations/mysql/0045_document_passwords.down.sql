@@ -1,0 +1,3 @@
+DROP TABLE IF EXISTS document_passwords;
+DROP INDEX idx_document_attachments_provider_object_key ON document_attachments;
+DROP INDEX idx_file_blobs_provider_object_key ON file_blobs;

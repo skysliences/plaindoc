@@ -329,6 +329,7 @@ func (r *gormSearchVisibilityRepository) baseVisibleDocumentsQuery(
 		}
 	}
 	query = excludeHiddenWorkspaceNodes(query, "n")
+	query = excludePasswordProtectedDocuments(query, "d")
 	if canViewAllDocuments && strings.TrimSpace(actorUserID) != "" {
 		return query
 	}

@@ -78,6 +78,8 @@ import {
   type Document,
   type DocumentAttachment,
   type DocumentAttachmentAccessLink,
+  type DocumentLock,
+  DocumentLockedError,
   type DocumentShareConfig,
   type DocumentGateway,
   type DocumentTemplateDetail,
@@ -125,6 +127,7 @@ const JSON_RESULT_SUCCESS_CODE = 0;
 const JSON_RESULT_UNAUTHORIZED_CODE = 1001;
 const JSON_RESULT_CONFIG_VERSION_CONFLICT_CODE = 4002;
 const JSON_RESULT_DOCUMENT_VERSION_CONFLICT_CODE = 4010;
+const JSON_RESULT_DOCUMENT_LOCKED_CODE = 4033;
 
 interface HttpAuthSession extends AuthSession {
   refreshToken?: string;
@@ -143,6 +146,17 @@ class HttpRequestError extends Error {
     this.body = body;
     this.code = code;
     this.data = data;
+  }
+}
+
+async function withDocumentAccess<T>(docId: string, result: Promise<T>): Promise<T> {
+  try {
+    return await result;
+  } catch (error) {
+    if (error instanceof HttpRequestError && error.code === JSON_RESULT_DOCUMENT_LOCKED_CODE) {
+      throw new DocumentLockedError(docId, error.message);
+    }
+    throw error;
   }
 }
 
@@ -1068,23 +1082,38 @@ export function createHttpAdapter(options: HttpAdapterOptions): DataGateway {
       await request(`/docs/${encodeURIComponent(docId)}/copy-events`, { method: "POST" });
     },
     async getDocument(docId: string) {
-      const result = await request<Document>(`/docs/${docId}`);
+      const result = await withDocumentAccess(docId, request<Document>(`/docs/${encodeURIComponent(docId)}`));
       return result.importedImageUrl
         ? { ...result, importedImageUrl: resolveBackendPublicUrl(result.importedImageUrl, options.baseUrl) }
         : result;
     },
+    async getDocumentLock(docId) {
+      return request<DocumentLock>(`/docs/${encodeURIComponent(docId)}/lock`);
+    },
+    async updateDocumentLock(docId, password) {
+      return request<DocumentLock>(`/docs/${encodeURIComponent(docId)}/lock`, {
+        method: "PUT",
+        body: JSON.stringify({ password })
+      });
+    },
+    async unlockDocument(docId, password) {
+      await request(`/docs/${encodeURIComponent(docId)}/unlock`, {
+        method: "POST",
+        body: JSON.stringify({ password })
+      });
+    },
     async saveDocument(input: SaveDocumentInput) {
-      return request<SaveDocumentResult>(`/docs/${input.docId}`, {
+      return withDocumentAccess(input.docId, request<SaveDocumentResult>(`/docs/${encodeURIComponent(input.docId)}`, {
         method: "PUT",
         body: JSON.stringify(input)
-      });
+      }));
     },
     async getOnlyOfficeEditConfig(docId: string) {
       const documentID = docId.trim();
       if (!documentID) {
         throw new Error("文档 ID 不能为空");
       }
-      return request<OnlyOfficeEditConfig>(`/docs/${encodeURIComponent(documentID)}/onlyoffice/edit-config`);
+      return withDocumentAccess(documentID, request<OnlyOfficeEditConfig>(`/docs/${encodeURIComponent(documentID)}/onlyoffice/edit-config`));
     },
     async updateDocumentIdentifier(docId: string, identifier: string | null) {
       const documentID = docId.trim();

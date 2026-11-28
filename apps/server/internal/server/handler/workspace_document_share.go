@@ -253,6 +253,10 @@ func (h *workspaceDocumentShareHandler) writeWorkspacePermissionError(c *gin.Con
 }
 
 func writeMappedDocumentShareError(c *gin.Context, err error) bool {
+	if errors.Is(err, service.ErrDocumentPasswordRequired) {
+		writeReaderDocumentPasswordError(c, err)
+		return true
+	}
 	return response.WriteMappedError(
 		c,
 		err,

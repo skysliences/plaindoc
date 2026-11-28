@@ -66,6 +66,7 @@ func (r *gormHomeSearchRepository) ListActiveDocumentMetadataByDocumentIDs(
 		Where(qualifiedColumn(spaceAlias, models.SpaceColumns.BannedAt) + " IS NULL").
 		Where(qualifiedColumn(spaceAlias, models.SpaceColumns.DeletedAt) + " IS NULL")
 	query = excludeHiddenWorkspaceNodes(query, nodeAlias)
+	query = excludePasswordProtectedDocuments(query, documentAlias)
 	if err := filterSearchDocumentFormats(query, documentAlias, true).Find(&rows).Error; err != nil {
 		return nil, err
 	}
