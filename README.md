@@ -22,6 +22,8 @@ bugodoc 是面向中小团队的开源知识库和文档协作平台。团队可
 
 ## 快速启动
 
+每次向 `master` 推送提交，GitHub Actions 会自动生成版本标签、更新说明和 Linux amd64 安装包。 [下载发布包](https://github.com/skysliences/Bugodoc/releases) · [自动发布说明](./docs/BACKEND_DEVELOPER_GUIDE.md#github-actions-自动发布)
+
 ### Docker Compose
 
 从本仓库构建，需安装 Docker Engine 和 Docker Compose。在仓库根目录执行以下命令。

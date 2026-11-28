@@ -216,12 +216,12 @@ package: build check-web-build check-web-ssr
 		build-metadata.txt \
 		apps/web/dist \
 		apps/web/dist-ssr
-	sha256sum \
-		"$(SERVER_BINARY_PATH)" \
-		"$(RELEASE_DIR)/bugodoc-server-linux-amd64-$(VERSION).tar.gz" \
-		"$(RELEASE_DIR)/bugodoc-web-$(VERSION).tar.gz" \
-		"$(RELEASE_DIR)/build-metadata-$(VERSION).txt" \
-		> "$(RELEASE_DIR)/checksums-$(VERSION).txt"
+	cd "$(RELEASE_DIR)" && sha256sum \
+		"$(SERVER_BINARY)" \
+		"bugodoc-server-linux-amd64-$(VERSION).tar.gz" \
+		"bugodoc-web-$(VERSION).tar.gz" \
+		"build-metadata-$(VERSION).txt" \
+		> "checksums-$(VERSION).txt"
 	@echo "release artifacts generated under $(RELEASE_DIR)"
 
 clean-release:

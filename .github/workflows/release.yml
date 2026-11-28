@@ -2,28 +2,40 @@ name: Release
 
 on:
   push:
+    branches:
+      - master
     tags:
       - "*"
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
+# Serialize attempts for the same release without dropping pending runs for other commits.
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ github.ref_type == 'tag' && github.ref || github.sha }}
   cancel-in-progress: false
 
 jobs:
   build_and_release:
-    name: Build Backend + Frontend and Create Release
+    name: Build and publish release
+    if: github.ref_type == 'tag' || github.ref_name == 'master'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.build_meta.outputs.version }}
+      publish_docker: ${{ steps.build_meta.outputs.publish_docker }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -37,121 +49,101 @@ jobs:
           go-version-file: apps/server/go.mod
           cache-dependency-path: apps/server/go.sum
 
-      - name: Resolve build metadata
+      - name: Resolve release version
         id: build_meta
+        env:
+          PUBLISH_DOCKER: ${{ secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != '' }}
         run: |
           set -euo pipefail
-          build_version=""
-          if [ "${GITHUB_REF_TYPE:-}" = "tag" ] && [ -n "${GITHUB_REF_NAME:-}" ]; then
-            build_version="${GITHUB_REF_NAME}"
+          commit="$(git rev-parse --verify HEAD)"
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
+            version="$GITHUB_REF_NAME"
           else
-            build_version="$(git tag --points-at HEAD | head -n1)"
+            commit_date="$(git show -s --format=%cs "$commit")"
+            version="v${commit_date//-/.}-${commit:0:12}"
           fi
-          if [ -z "$build_version" ]; then
-            echo "No git tag found for current commit; cannot resolve release version." >&2
+          if [[ ! "$version" =~ ^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$ ]]; then
+            printf 'Invalid release version: %s\n' "$version" >&2
             exit 1
           fi
-          build_commit="$(git rev-parse --verify HEAD)"
-          build_time_utc="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-          build_go_version="$(cd apps/server && go env GOVERSION)"
-          echo "version=$build_version" >> "$GITHUB_OUTPUT"
-          echo "commit=$build_commit" >> "$GITHUB_OUTPUT"
-          echo "time_utc=$build_time_utc" >> "$GITHUB_OUTPUT"
-          echo "go_version=$build_go_version" >> "$GITHUB_OUTPUT"
+          if existing_commit="$(git rev-parse --verify -q "refs/tags/${version}^{commit}")" &&
+             [[ "$existing_commit" != "$commit" ]]; then
+            printf 'Release tag %s already points to a different commit.\n' "$version" >&2
+            exit 1
+          fi
+          printf 'version=%s\ncommit=%s\npublish_docker=%s\n' \
+            "$version" "$commit" "$PUBLISH_DOCKER" >> "$GITHUB_OUTPUT"
 
       - name: Install frontend dependencies
         run: npm ci
 
-      - name: Build frontend (dist + dist-ssr)
+      - name: Build and package frontend and backend
         env:
+          VERSION: ${{ steps.build_meta.outputs.version }}
           VITE_DATA_DRIVER: http
           VITE_API_BASE_URL: /api
-          VITE_BUILD_VERSION: ${{ steps.build_meta.outputs.version }}
-        run: npm run web:build
+        run: make package VERSION="$VERSION"
 
-      - name: Build backend binary
+      - name: Publish tag and GitHub Release
         env:
-          BUILD_VERSION: ${{ steps.build_meta.outputs.version }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          VERSION: ${{ steps.build_meta.outputs.version }}
           BUILD_COMMIT: ${{ steps.build_meta.outputs.commit }}
-          BUILD_TIME_UTC: ${{ steps.build_meta.outputs.time_utc }}
-          BUILD_GO_VERSION: ${{ steps.build_meta.outputs.go_version }}
         run: |
           set -euo pipefail
-          mkdir -p release
-          pushd apps/server >/dev/null
-          go mod download
-          LDFLAGS="-X github.com/lifei6671/plaindoc/apps/server/internal/buildinfo.Version=${BUILD_VERSION}"
-          LDFLAGS="${LDFLAGS} -X github.com/lifei6671/plaindoc/apps/server/internal/buildinfo.CommitSHA=${BUILD_COMMIT}"
-          LDFLAGS="${LDFLAGS} -X github.com/lifei6671/plaindoc/apps/server/internal/buildinfo.BuildTimeUTC=${BUILD_TIME_UTC}"
-          LDFLAGS="${LDFLAGS} -X github.com/lifei6671/plaindoc/apps/server/internal/buildinfo.GoVersion=${BUILD_GO_VERSION}"
-          # github.com/chai2010/webp requires CGO; CGO_ENABLED=0 will fail with undefined webp symbols.
-          CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "$LDFLAGS" -o ../../release/bugodoc-server-linux-amd64 ./cmd/server
-          popd >/dev/null
 
-      - name: Package release artifacts
-        env:
-          BUILD_VERSION: ${{ steps.build_meta.outputs.version }}
-          BUILD_COMMIT: ${{ steps.build_meta.outputs.commit }}
-          BUILD_TIME_UTC: ${{ steps.build_meta.outputs.time_utc }}
-          BUILD_GO_VERSION: ${{ steps.build_meta.outputs.go_version }}
-        run: |
-          set -euo pipefail
-          printf "version=%s\ncommit_sha=%s\nbuild_time_utc=%s\ngo_version=%s\n" \
-            "$BUILD_VERSION" \
-            "$BUILD_COMMIT" \
-            "$BUILD_TIME_UTC" \
-            "$BUILD_GO_VERSION" \
-            > "release/build-metadata-${GITHUB_REF_NAME}.txt"
-          tar -C apps/web -czf "release/bugodoc-web-${GITHUB_REF_NAME}.tar.gz" dist dist-ssr
-          mkdir -p "release/bugodoc-bundle/apps/web"
-          cp "release/bugodoc-server-linux-amd64" "release/bugodoc-bundle/bugodoc-server-linux-amd64"
-          cp "release/build-metadata-${GITHUB_REF_NAME}.txt" "release/bugodoc-bundle/build-metadata.txt"
-          cp -R "apps/web/dist" "release/bugodoc-bundle/apps/web/"
-          cp -R "apps/web/dist-ssr" "release/bugodoc-bundle/apps/web/"
-          tar -czf "release/bugodoc-server-linux-amd64-${GITHUB_REF_NAME}.tar.gz" \
-            -C release/bugodoc-bundle \
-            bugodoc-server-linux-amd64 \
-            build-metadata.txt \
-            apps/web/dist \
-            apps/web/dist-ssr
-          sha256sum \
-            "release/bugodoc-server-linux-amd64" \
-            "release/bugodoc-server-linux-amd64-${GITHUB_REF_NAME}.tar.gz" \
-            "release/bugodoc-web-${GITHUB_REF_NAME}.tar.gz" \
-            "release/build-metadata-${GITHUB_REF_NAME}.txt" \
-            > "release/checksums-${GITHUB_REF_NAME}.txt"
+          if [[ "$GITHUB_REF_TYPE" != tag ]]; then
+            if ! git show-ref --verify --quiet "refs/tags/$VERSION"; then
+              git tag -- "$VERSION" "$BUILD_COMMIT"
+            fi
+            GIT_TERMINAL_PROMPT=0 git -c credential.helper='!gh auth git-credential' \
+              push origin "refs/tags/$VERSION:refs/tags/$VERSION"
+          fi
 
-      - name: Publish GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.ref_name }}
-          generate_release_notes: true
-          files: |
-            release/bugodoc-server-linux-amd64
-            release/bugodoc-server-linux-amd64-${{ github.ref_name }}.tar.gz
-            release/bugodoc-web-${{ github.ref_name }}.tar.gz
-            release/build-metadata-${{ github.ref_name }}.txt
-            release/checksums-${{ github.ref_name }}.txt
+          if is_draft="$(gh release view "$VERSION" --json isDraft --jq .isDraft)"; then
+            if [[ "$is_draft" == false ]]; then
+              printf 'Release %s is already published.\n' "$VERSION"
+              exit 0
+            fi
+          else
+            bash scripts/release-notes.sh "$BUILD_COMMIT" "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" "$PUSH_BEFORE" \
+              > release/release-notes.md
+            gh release create "$VERSION" --verify-tag --draft --title "$VERSION" \
+              --notes-file release/release-notes.md
+          fi
+
+          gh release upload "$VERSION" --clobber \
+            release/bugodoc-server-linux-amd64 \
+            "release/bugodoc-server-linux-amd64-$VERSION.tar.gz" \
+            "release/bugodoc-web-$VERSION.tar.gz" \
+            "release/build-metadata-$VERSION.txt" \
+            "release/checksums-$VERSION.txt"
+
+          latest=false
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
+            latest=true
+          elif [[ "$GITHUB_REF_NAME" == "$DEFAULT_BRANCH" ]]; then
+            branch_tip="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/$DEFAULT_BRANCH" --jq .object.sha)"
+            if [[ "$branch_tip" == "$BUILD_COMMIT" ]]; then
+              latest=true
+            fi
+          fi
+          gh release edit "$VERSION" --verify-tag --draft=false --latest="$latest"
 
   docker_publish:
-    name: Build and Push Docker Image
+    name: Build and push Docker image
     runs-on: ubuntu-latest
     needs: build_and_release
+    if: needs.build_and_release.outputs.publish_docker == 'true'
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Validate DockerHub secrets
-        env:
-          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          if [ -z "${DOCKERHUB_USERNAME:-}" ] || [ -z "${DOCKERHUB_TOKEN:-}" ]; then
-            echo "DOCKERHUB_USERNAME or DOCKERHUB_TOKEN is not configured."
-            exit 1
-          fi
+        with:
+          persist-credentials: false
 
       - name: Resolve image name
         id: image
@@ -160,11 +152,8 @@ jobs:
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
         run: |
           set -euo pipefail
-          repo="${DOCKERHUB_REPOSITORY:-}"
-          if [ -z "$repo" ]; then
-            repo="${DOCKERHUB_USERNAME}/plaindoc"
-          fi
-          echo "name=$repo" >> "$GITHUB_OUTPUT"
+          repo="${DOCKERHUB_REPOSITORY:-$DOCKERHUB_USERNAME/plaindoc}"
+          printf 'name=%s\n' "$repo" >> "$GITHUB_OUTPUT"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -182,8 +171,8 @@ jobs:
           images: ${{ steps.image.outputs.name }}
           labels: org.opencontainers.image.title=bugodoc
           tags: |
-            type=ref,event=tag
-            type=raw,value=latest,enable=${{ startsWith(github.ref_name, 'v') }}
+            type=raw,value=${{ needs.build_and_release.outputs.version }}
+            type=raw,value=latest,enable=${{ github.ref_type == 'tag' && startsWith(github.ref_name, 'v') }}
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v6
@@ -195,6 +184,6 @@ jobs:
           build-args: |
             VITE_DATA_DRIVER=http
             VITE_API_BASE_URL=/api
-            VITE_BUILD_VERSION=${{ github.ref_name }}
+            VITE_BUILD_VERSION=${{ needs.build_and_release.outputs.version }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

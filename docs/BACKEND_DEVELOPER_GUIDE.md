@@ -600,6 +600,16 @@ ONLYOFFICE 一等文档规则：
 3. `release/bugodoc-web-<version>.tar.gz`
 4. `release/checksums-<version>.txt`
 
+### GitHub Actions 自动发布
+
+向 `master` 推送提交时会触发 Release 工作流。手动推送标签，或在 Actions 中选择 `master` 运行 Release，也可以发起打包。
+
+自动标签使用 `vYYYY.MM.DD-<12 位提交 SHA>`，同一提交重跑沿用同一标签。构建成功后，工作流创建标签并发布 GitHub Release。附件包含 Linux amd64 后端、前后端整合包、前端及 SSR 压缩包、构建信息和 SHA-256 校验文件。在下载目录使用 `sha256sum -c checksums-<version>.txt` 校验文件。
+
+发布说明逐条列出当前提交与前一个祖先标签之间的 Git 提交。首次发布优先使用本次推送前的提交作为基准，缺少基准时列出最近 50 条，并附上完整历史链接。构建失败时可在 Actions 中重跑。已发布的同名 Release 会被复用。
+
+配置 `DOCKERHUB_USERNAME` 与 `DOCKERHUB_TOKEN` 后，工作流还会推送对应版本的 Docker 镜像。可用 `DOCKERHUB_REPOSITORY` 指定镜像仓库。手动推送以 `v` 开头的标签时，同时更新镜像的 `latest`。
+
 Docker 镜像内的可执行文件为 `/app/bugodoc-server`。从旧版升级时可沿用 `DB_DSN`、Compose 数据卷和空间交换包。Go 模块路径继续使用 `github.com/lifei6671/plaindoc/apps/server`。
 
 ---
