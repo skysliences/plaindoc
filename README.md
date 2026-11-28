@@ -1,548 +1,74 @@
 # bugodoc
 
-一套面向中小团队的轻量级文档管理系统。  
-如果你熟悉 MinDoc，bugodoc 的目标是提供现代的编辑体验和易于维护的部署方式。
+<img src="./apps/server/internal/server/view/static/favicon.png" width="160" alt="BUGO">
 
-开箱即可获得：
+bugodoc 是面向中小团队的开源知识库和文档协作平台。团队可以在同一个空间里编写 Markdown、管理 Office 文件、检索有权访问的文档和分享内容。
 
-- Go 后端（Gin + GORM）
-- React 前端编辑器（Vite + CodeMirror）
-- 首页/分类页 SSR
-- 空间阅读页 SSR（对 SEO 友好）
-- 后台管理（用户、空间、文档、主题、系统配置、审计）
+本项目基于 Minho 的 PlainDoc 二次开发，保留原项目的版权声明，并沿用 MIT 许可证。 [上游 PlainDoc](https://github.com/lifei6671/plaindoc) · [许可证](./LICENSE)
 
-| 页面       | 截图                                           |
-|-----------------------|----------------------------------------------|
-| 后台概览页    | ![](./docs/images/admin_index.png)           |
-| 后台个人信息页  | ![](./docs/images/admin_profile.png)         |
-| 后台用户管理页面 | ![](./docs/images/admin_users.png)           |
-| 空间管理     | ![](./docs/images/admin_spaces.png)          |
-| 新建空间     | ![](./docs/images/admin_spaces_new.png)      |
-| 空间分类     | ![](./docs/images/admin_spaces_category.png) |
-| 空间成员     | ![](./docs/images/admin_spaces_member.png)   |
-| 文档管理     | ![](./docs/images/admin_documents.png)       |
-| 附件管理     | ![](./docs/images/admin_attachments.png)     |
-| 图片管理     | ![](./docs/images/admin_images.png)          |
-| 主题管理     | ![](./docs/images/admin_themes.png)          |
-| 审计日志     | ![](./docs/images/admin_audits.png)          |
-| 文档编辑  | ![](./docs/images/admin_editor.png)|
-|首页|![](./docs/images/home_index.png)|
-|文档阅读| ![](./docs/images/home_reader.png)|
+## 功能
 
+| 功能 | 说明 |
+| --- | --- |
+| 空间与目录 | 按空间、分类和多级文件夹组织文档。目录栏支持拖动调整宽度。 |
+| Markdown 编辑 | 在阅读页进入编辑，支持实时分栏预览、自动保存、历史版本与恢复。支持 Mermaid、公式和代码高亮。 |
+| Office 文件 | 配置 ONLYOFFICE Docs 后可在线编辑 Word（DOCX）和 Excel（XLSX），以及阅读、批注 PDF。支持将 CSV 导入为可编辑的 Excel 工作簿。 |
+| 文件导入与导出 | 支持文件夹、ZIP 导入和目录解压。无法预览的文件保留原件，可按权限下载。Markdown 文档可导出 Markdown 或 PDF，空间可导出 EPUB 或 `.plaindoc` 交换包。 |
+| 权限与分享 | 空间按角色协作，可为成员单独配置文档的查看、编辑、复制和导出权限。独立文档分享链接支持密码与有效期。 |
+| 全文搜索 | 跨空间检索标题和正文，结果按当前用户的文档权限过滤。可配置内置 Bleve 索引。 |
+| 登录与安全 | 支持本地账号和 LDAP。密码登录需要验证器动态码，本地账号可绑定 Passkey 后直接登录。管理员可配置登录 IP 白名单及重置二次验证。 |
+| 管理与审计 | 后台管理用户、空间、文档、资源和分享，支持审计日志及每篇文档的打开、查看、编辑、下载统计。 |
 
----
+单篇文档的独立查看密码目前待合入主分支。
 
-## 产品定位
+## 快速启动
 
-bugodoc 是一个覆盖文档编辑、阅读和管理的团队文档平台。
+### Docker Compose
 
-我们希望它帮助团队实现三件事：
-
-- 用 Markdown 快速搭建团队知识库/技术文档库
-- 提供“编辑、阅读、管理”一体化能力，而不是单纯编辑器
-- 以最低维护成本长期运行（单体部署、权限治理、可观测）
-
-适用场景：
-
-- 团队内部知识沉淀
-- 技术文档中心
-- 小中型项目文档门户
-- 运维手册/流程文档管理
-
----
-
-## 核心功能与亮点
-
-### 功能
-
-- 空间与文档树：支持空间、目录、文档的层级组织
-- Markdown 编辑：左树 + 中间编辑 + 右侧预览的工作台体验
-- 阅读系统：独立阅读页（`/r/:spaceId/:docId`），适合分享与访问
-- 权限模型：`owner / collaborator / reader` 多角色访问控制
-- 版本能力：文档版本号、冲突检测、修订记录
-- 图片链路：上传、鉴权、静态回源、Markdown 直接渲染
-- 后台治理：用户、空间、文档、主题、系统配置、审计管理
-
-### 亮点
-
-- 轻量但完整：一套系统同时覆盖编辑、阅读、权限与后台治理
-- 单体部署体验：Go 主服务 + Node SSR Worker 子进程，无需独立 Node SSR 服务
-- 渲染一致性：阅读 SSR 与编辑器预览复用同一套 Markdown 渲染链路
-- 双 SSR 架构：
-  - 首页/分类页：Go 模板 SSR
-  - 阅读页：React SSR（由 Go 调度 Worker）
-- 开发和生产都顺手：前端统一走后端 API 模式（`http`），联调与生产一致
-- 工程化可维护：统一响应协议、错误码体系、Docker + Compose 开箱部署
-
----
-
-## 1. 项目现状（截至 2026-02-23）
-
-已落地核心能力：
-
-- 文档编辑器（左侧文档树 + 中间编辑 + 右侧预览）
-- 空间与文档权限模型（`owner / collaborator / reader`）
-- 图片上传与本地静态回源（`/uploads/*`）
-- 首页与分类页 SSR（`/`、`/explore/:categoryId`）
-- 空间阅读页 SSR（`/r/:spaceId`、`/r/:spaceId/:docId`）
-- 阅读页友好错误页与登录重定向
-- 后台管理台与空间治理能力
-- 编辑与协作工作台：
-  - 左侧文档树 + 中间编辑 + 右侧预览的一体化工作台
-  - 文档版本号、冲突检测、修订记录
-  - Markdown 模板能力，可在后台自定义模板场景和模板内容
-- 阅读与分享体验：
-  - 独立阅读页 SSR，适合知识门户、SEO 收录与外部访问
-  - 单页分享能力，支持阅读密码、过期时间与分享链路访问控制
-  - 阅读页友好错误页、登录重定向与 Office 文档源文件下载
-- Office 文档支持：
-  - 可配置 ONLYOFFICE，实现 Word / Excel 在线编辑
-  - DOCX / XLSX 支持独立阅读页、本地 HTML 渲染与回退阅读方案
-- 附件与图片体系：
-  - 编辑文档时可上传附件，阅读页支持下载鉴权与预览分流
-  - 后台可管理附件资源、图片资源与引用状态
-  - 对未引用图片可执行自动清理，降低存储冗余
-- 搜索与平台能力：
-  - 基于 Golang 内置 Bleve 的全文索引，支持自定义词典
-  - 支持对接邮箱，可用于找回密码等系统通知场景
-  - 后台内置用户、空间、文档、主题、系统配置与审计治理能力
-
-参考：
-
-- `docs/DAILY_PROGRESS_2026-02-23.md`
-- `docs/HOMEPAGE_SSR_IMPLEMENTATION_PHASES.md`
-- `docs/SPACE_READER_SSR_SUBPROCESS_IMPLEMENTATION_PHASES.md`
-
----
-
-## 2. 技术栈
-
-### 后端（`apps/server`）
-
-- Go `1.26`
-- Gin `1.11`
-- GORM `1.31`
-- 数据库驱动：SQLite / MySQL / PostgreSQL
-- 默认 SQLite 驱动：`modernc.org/sqlite`
-
-### 前端（`apps/web`）
-
-- React `19`
-- Vite `7`
-- TypeScript `5.9`
-- CodeMirror `6`
-- React Markdown + remark/rehype 渲染链
-- Mermaid / KaTeX / 语法高亮
-
-### SSR
-
-- 首页/分类页：Go `html/template`
-- 阅读页：Go 通过 `stdin/stdout` 调用 Node SSR Worker（非独立 Node 服务）
-
----
-
-## 3. 仓库结构
-
-```text
-.
-├── apps
-│   ├── server                    # Go 服务端
-│   └── web                       # React 前端
-├── docs                          # 方案、里程碑、日报、踩坑记录
-├── Dockerfile                    # 多阶段构建镜像（web + ssr worker + go）
-├── docker-compose.yml            # 单容器部署（含 SSR Worker）
-└── README.md
-```
-
----
-
-## 4. 运行方式
-
-从 PlainDoc 升级时，可沿用原有部署目录、数据库和 Docker 卷。DockerHub 镜像仍使用 `lifei6671/plaindoc`，已有空间交换包继续使用 `.plaindoc` 扩展名。
-
-### 4.1 方式 A：Docker Compose（推荐）
-
-要求：
-
-- Docker Engine + Docker Compose v2
-
-在仓库根目录执行：
+从本仓库构建，需安装 Docker Engine 和 Docker Compose。在仓库根目录执行以下命令。
 
 ```bash
-docker compose build
-docker compose up -d
+git clone https://github.com/skysliences/Bugodoc.git
+cd Bugodoc
+docker compose up -d --build
 ```
 
-访问地址：
-
-- `http://localhost:8080`
-
-常用命令：
+服务运行在 `8080` 端口，管理后台入口为 `/admin`。新数据库会创建初始管理员，首次密码登录需绑定动态验证码验证器。 [打开首页](http://localhost:8080/) · [初始管理员配置](./apps/server/internal/storage/migrations/sqlite/0008_seed_default_admin_account.up.sql)
 
 ```bash
 docker compose logs -f plaindoc
-docker compose up -d --build
-docker compose down
-docker compose down -v
+curl -fsS http://localhost:8080/api/healthz
 ```
 
-默认持久化卷：
+健康检查成功时，响应中的 `code` 为 `0`。默认使用 SQLite，数据卷 `plaindoc_data` 和 `plaindoc_uploads` 分别保存数据库和上传文件。
 
-- `plaindoc_data` -> `/app/data`（SQLite 数据）
-- `plaindoc_uploads` -> `/app/uploads`（上传文件）
+新部署时，在 Compose 服务配置中设置独立且长期保管的 `JWT_SECRET`，并将 `WEB_ORIGIN` 设为浏览器访问的站点来源。升级时保留原有密钥和数据卷，可继续验证已绑定的动态验证码及 Passkey。需要启用 Passkey 时，把 `AUTH_PASSKEY_ORIGIN` 设为站点的完整 HTTPS 来源。 [部署配置](./docs/BACKEND_DEVELOPER_GUIDE.md#5-配置系统来源默认值消费点)
 
----
+### 本地开发
 
-### 4.2 方式 B：本地开发（前后端分开启动）
-
-前置要求：
-
-- Node.js `>= 20`（当前 Docker 使用 Node 24）
-- npm
-- Go `1.26+`
-
-### 1) 安装前端依赖
+需要 Go 1.26 或更高版本。Node.js 推荐使用 24，与项目容器和持续集成一致。
 
 ```bash
-npm install
+make install
 ```
 
-### 2) 启动后端
+分别在两个终端运行 `make server-dev` 和 `make web-dev`。开发前端运行在 `3001`，后端运行在 `8080`。 [打开开发前端](http://localhost:3001/)
+
+需要完整的阅读页服务端渲染时，构建前端和 SSR Worker 后，以 `make server-dev-ssr` 替换后端启动命令。
 
 ```bash
-cd apps/server
-cp .env.example .env
-go mod tidy
-go run ./cmd/server
+make web-build
+make server-dev-ssr
 ```
 
-默认后端地址：`http://localhost:8080`
+## 项目架构
 
-### 3) 启动前端开发服务
+- `apps/server` 使用 Go、Gin 和 GORM，支持 SQLite、MySQL 与 PostgreSQL。首页和分类页使用 Go 模板渲染。
+- `apps/web` 使用 React、TypeScript、Vite 和 CodeMirror。阅读页由 Go 服务管理的 Node Worker 执行 React SSR。
+- ONLYOFFICE Docs 是可选的独立服务。部署并接入后，可在浏览器中编辑 Office 文档。 [ONLYOFFICE 接入说明](./docs/ONLYOFFICE_INTEGRATION_TECHNICAL_PLAN.md)
 
-```bash
-# 回到仓库根目录
-npm run web:dev
-```
+## 文档
 
-默认前端地址：`http://localhost:3001`
-
-> 提示：开发时建议通过 Vite 反向代理访问后端，不要直接在浏览器跨端口访问 `/api`。
-
----
-
-## 5. 构建与发布
-
-### 5.1 本地构建
-
-```bash
-npm run web:build
-```
-
-等价于执行：
-
-- `build:client` -> `apps/web/dist`
-- `build:ssr-worker` -> `apps/web/dist-ssr`
-
-### 后端测试
-
-```bash
-cd apps/server
-go test ./...
-```
-
-### Docker 镜像（本地手动构建）
-
-```bash
-docker build -t bugodoc:latest .
-docker run --rm -p 8080:8080 bugodoc:latest
-```
-
-### 5.2 GitHub Release 产物说明
-
-当你推送 tag 后，`Release` 工作流会上传以下文件：
-
-- `bugodoc-server-linux-amd64`：Linux amd64 的后端可执行文件（Go 编译产物）。
-- `bugodoc-server-linux-amd64-<tag>.tar.gz`：一体化部署压缩包，包含后端可执行文件、`apps/web/dist` 和 `apps/web/dist-ssr`。
-- `bugodoc-web-<tag>.tar.gz`：前端发布产物压缩包，包含 `dist`（前端静态资源）和 `dist-ssr`（阅读页 SSR Worker 产物）。
-- `checksums-<tag>.txt`：上述产物的 SHA256 校验清单。
-
-现有部署脚本若引用 `plaindoc-server-linux-amd64` 可执行文件或旧名前缀的压缩包，升级时请按新文件名调整。
-
-### 5.3 使用 Release 产物部署（Linux 裸机/云主机）
-
-**默认账号**： admin@iminho.me 
-**默认密码**：123456
-
-1. 下载对应 tag 的 `bugodoc-server-linux-amd64-<tag>.tar.gz` 和 `checksums-<tag>.txt`。
-   如需单独更新前端，也可下载 `bugodoc-web-<tag>.tar.gz`。
-2. 校验文件完整性：
-
-```bash
-sha256sum -c checksums-<tag>.txt
-```
-
-3. 解压到部署目录：
-
-```bash
-mkdir -p /opt/plaindoc/apps/web
-tar -xzf bugodoc-server-linux-amd64-<tag>.tar.gz -C /opt/plaindoc
-chmod +x /opt/plaindoc/bugodoc-server-linux-amd64
-```
-
-4. 配置并启动（示例）：
-
-```bash
-export APP_ENV=production
-export APP_ADDR=:8080
-export WEB_ORIGIN=http://your-domain-or-ip:8080
-export WEB_DIST_DIR=/opt/plaindoc/apps/web/dist
-export DB_DRIVER=sqlite
-export DB_DSN='file:/opt/plaindoc/data/plaindoc.db?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)'
-export SSR_WORKER_ENABLED=true
-export SSR_WORKER_EXEC=node
-export SSR_WORKER_ENTRY=/opt/plaindoc/apps/web/dist-ssr/worker-entry.js
-
-/opt/plaindoc/bugodoc-server-linux-amd64
-```
-
-提示：阅读页 SSR 依赖 Node 子进程。若服务器未安装 Node，请先安装 Node，或临时设置 `SSR_WORKER_ENABLED=false`。
-
-### 5.4 DockerHub 部署（推荐）
-
-说明：工作流会始终推送 `<tag>` 镜像标签；当 Git tag 以 `v` 开头时，额外推送 `latest`。
-
-拉取镜像：
-
-```bash
-docker pull lifei6671/plaindoc:latest
-```
-
-直接运行：
-
-```bash
-docker run -d \
-  --name plaindoc \
-  -p 8080:8080 \
-  -e APP_ENV=production \
-  -e WEB_ORIGIN=http://localhost:8080 \
-  -e DB_DRIVER=sqlite \
-  -e DB_DSN='file:/app/data/plaindoc.db?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)' \
-  -v plaindoc_data:/app/data \
-  -v plaindoc_uploads:/app/uploads \
-  --restart unless-stopped \
-  lifei6671/plaindoc:latest
-```
-
-### 5.5 Docker Compose（使用 DockerHub 镜像）
-
-如果不想本地 build，可使用以下 compose：
-
-```yaml
-services:
-  plaindoc:
-    image: lifei6671/plaindoc:latest
-    container_name: plaindoc
-    ports:
-      - "8080:8080"
-    environment:
-      APP_ENV: "production"
-      APP_ADDR: ":8080"
-      WEB_ORIGIN: "http://localhost:8080"
-      WEB_DIST_DIR: "/app/apps/web/dist"
-      DB_DRIVER: "sqlite"
-      DB_DSN: "file:/app/data/plaindoc.db?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"
-      DB_AUTO_MIGRATE: "true"
-      SSR_WORKER_ENABLED: "true"
-      SSR_WORKER_EXEC: "node"
-      SSR_WORKER_ENTRY: "/app/apps/web/dist-ssr/worker-entry.js"
-    volumes:
-      - plaindoc_data:/app/data
-      - plaindoc_uploads:/app/uploads
-    restart: unless-stopped
-
-volumes:
-  plaindoc_data:
-  plaindoc_uploads:
-```
-
-启动：
-
-```bash
-docker compose up -d
-```
-
----
-
-## 6. 路由与页面结构
-
-### 页面路由（非 `/api`）
-
-- `/`：首页 SSR
-- `/explore/:categoryId`：分类页 SSR
-- `/r/:spaceId`：空间阅读入口（跳转首篇可读文档）
-- `/r/:spaceId/:docId`：阅读页 SSR（Go -> Node Worker）
-- `/login`、`/register`、`/editor/*`、`/admin/*`：Web SPA（生产由 Go 托管 `WEB_DIST_DIR`）
-- `/uploads/*path`：本地上传文件公开访问
-
-### API 入口
-
-- `/api/healthz`
-- `/api/auth/*`
-- `/api/spaces/*`、`/api/nodes/*`、`/api/docs/*`
-- `/api/admin/*`
-- `/api/uploads/images`
-
-完整注册点见：`apps/server/internal/server/router.go`
-
----
-
-## 7. SSR 架构说明
-
-### 7.1 首页/分类页 SSR
-
-- 由 Go 模板直接渲染
-- 模板静态资源走 `/assets/*`
-
-### 7.2 阅读页 SSR（子进程模式）
-
-流程：
-
-1. 浏览器请求 `/r/:spaceId/:docId`
-2. Go 侧聚合阅读数据并鉴权
-3. Go 通过 JSONL 协议把 payload 发给 Node Worker
-4. Node Worker 返回 HTML/head/metrics
-5. Go 输出完整页面
-
-关键配置（服务端）：
-
-- `SSR_WORKER_ENABLED`
-- `SSR_WORKER_EXEC`
-- `SSR_WORKER_ENTRY`
-- `SSR_WORKER_COUNT`
-- `SSR_RENDER_TIMEOUT`
-- `SSR_WORKER_START_TIMEOUT`
-- `SSR_WORKER_MAX_PAYLOAD_BYTES`
-- `SSR_PROTOCOL_VERSION`
-
-当 Worker 不可用时，阅读页会降级到基础 HTML 兜底，而不是直接雪崩 500。
-
----
-
-## 8. 统一响应协议（JsonResult）
-
-后端 API 统一返回结构：
-
-```json
-{
-  "code": 0,
-  "message": "success",
-  "requestId": "xxxx",
-  "data": {}
-}
-```
-
-说明：
-
-- 业务成功：`code = 0`
-- 业务失败：`code != 0`（例如 `3001 ROUTE_NOT_FOUND`）
-- 当前错误 HTTP 状态会收敛（认证类为 403，其它多为 200），前端应优先按 `code` 处理
-
-定义见：
-
-- `apps/server/internal/server/response/error.go`
-- `apps/server/internal/server/response/error_codes.go`
-
----
-
-## 9. 配置说明
-
-### 后端环境变量
-
-样例文件：`apps/server/.env.example`
-
-常用项：
-
-- `APP_ENV`、`APP_ADDR`
-- `WEB_ORIGIN`（CORS）
-- `WEB_DIST_DIR`（生产托管 SPA 的 dist 目录）
-- `DB_DRIVER`、`DB_DSN`、`DB_AUTO_MIGRATE`
-- `JWT_*`
-- `SSR_WORKER_*`
-
-`.env` 加载顺序（启动时自动读取）：
-
-1. `.env`
-2. `apps/server/.env`
-3. `cmd/server/.env`
-4. `apps/server/cmd/server/.env`
-
-且系统环境变量优先级更高，不会被 `.env` 覆盖。
-
-### 前端环境变量
-
-样例文件：`apps/web/.env.example`
-
-核心项：
-
-- `VITE_API_BASE_URL`
-- `VITE_DEV_PROXY_TARGET`
-
----
-
-## 10. 常见问题
-
-### 1) 阅读页返回 “route not found” 或图片不显示
-
-- 检查是否走了正确路径：
-  - 阅读：`/r/...`
-  - 图片：`/uploads/...`
-- 开发模式确认 Vite 代理是否开启（`/r`、`/uploads`、`/api`）
-
-### 2) SSR Worker 启动失败
-
-- 检查 `SSR_WORKER_ENTRY` 是否存在
-- 检查 Node 可执行文件是否在 PATH（`SSR_WORKER_EXEC`）
-- 检查协议版本是否一致（`SSR_PROTOCOL_VERSION`）
-
-### 3) 修改了 `.env` 但配置未生效
-
-- 重启服务
-- 查看 `server starting` 日志中的配置摘要
-
-### 4) 阅读页样式与编辑预览不一致
-
-- 当前实现已把预览样式统一注入阅读 SSR
-- 如出现差异，优先检查 `apps/web/src/ssr/render-space-reader.tsx` 与 `apps/web/src/styles.css`
-
----
-
-## 11. 文档索引（docs）
-
-当前主文档（建议优先阅读）：
-
-1. `docs/README.md`（docs 导航总入口）
-2. `docs/FRONTEND_DEVELOPER_GUIDE.md`
-3. `docs/BACKEND_DEVELOPER_GUIDE.md`
-4. `docs/ENGINEERING_STANDARDS.md`
-
-历史方案与阶段文档（用于追溯决策与实施细节）：
-
-1. `docs/BACKEND_IMPLEMENTATION_PHASES.md`
-2. `docs/HOMEPAGE_SSR_IMPLEMENTATION_PHASES.md`
-3. `docs/SPACE_READER_SSR_SUBPROCESS_TECHNICAL_PROPOSAL.md`
-4. `docs/SPACE_READER_SSR_SUBPROCESS_IMPLEMENTATION_PHASES.md`
-5. `docs/ADMIN_CONSOLE_IMPLEMENTATION_PHASES.md`
-6. `docs/ADMIN_CONSOLE_RELEASE_CHECKLIST.md`
-7. `docs/SPACE_CATEGORY_REFACTOR_NOTES.md`
-8. `docs/ADMIN_SPACE_CREATE_WITH_COVER_IMPLEMENTATION_PHASES.md`
-9. `docs/DAILY_PROGRESS_2026-02-22.md`
-10. `docs/DAILY_PROGRESS_2026-02-23.md`
-11. `docs/ai-handoff-pitfalls.md`
-12. `docs/backend-ai-handoff.md`
-
----
-
-## 12. License
-
-本项目使用仓库根目录 `LICENSE`。
+- [文档导航](./docs/README.md)
+- [前端开发指南](./docs/FRONTEND_DEVELOPER_GUIDE.md)
+- [后端开发指南](./docs/BACKEND_DEVELOPER_GUIDE.md)
